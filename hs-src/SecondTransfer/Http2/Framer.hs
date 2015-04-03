@@ -235,11 +235,11 @@ inputGatherer pull_action session_input = do
                                 return ()
 
                         -- And send the frame down to the session
-                        liftIO $ sendFrametoSession session_input frame
+                        liftIO $ sendFrameToSession session_input frame
 
 
                     Right a_frame   -> do 
-                        liftIO $ sendFrametoSession session_input a_frame
+                        liftIO $ sendFrameToSession session_input a_frame
 
                 -- tail recursion: go again...
                 consume 
