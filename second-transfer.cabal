@@ -142,3 +142,4 @@ Test-Suite compiling-ok
   build-depends   : base >=4.7 && < 4.8,
                     second-transfer,
                     conduit >= 1.2.4
+  ghc-options     : -threaded
