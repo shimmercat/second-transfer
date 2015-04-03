@@ -1,4 +1,5 @@
 {-# LANGUAGE ForeignFunctionInterface, OverloadedStrings,  DeriveDataTypeable #-}
+{-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.OpenSSL_TLS(
     tlsServeWithALPN
     ,tlsServeWithALPNAndFinishOnRequest
@@ -32,7 +33,7 @@ import           SecondTransfer.MainLoop.PushPullType
            
 
 
--- |Exception inheriting from `IO_Problem`. This is thrown by the 
+-- | Exception inheriting from `IOProblem`. This is thrown by the 
 -- OpenSSL subsystem to signal that the connection was broken or that 
 -- otherwise there was a problem at the SSL layer. 
 data TLSLayerGenericProblem = TLSLayerGenericProblem String
@@ -40,9 +41,9 @@ data TLSLayerGenericProblem = TLSLayerGenericProblem String
 
 
 instance Exception TLSLayerGenericProblem where 
-    toException = toException . IO_Problem 
+    toException = toException . IOProblem 
     fromException x = do 
-        IO_Problem a <- fromException x 
+        IOProblem a <- fromException x 
         cast a
 
 

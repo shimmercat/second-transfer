@@ -1,10 +1,11 @@
 {-# LANGUAGE DeriveDataTypeable, ExistentialQuantification #-}
+{-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
 	PushAction
 	,PullAction
 	,Attendant
     ,CloseAction
-    ,IO_Problem(..)
+    ,IOProblem(..)
     ,GenericIOProblem(..)
 	) where 
 
@@ -16,7 +17,7 @@ import qualified Data.ByteString              as B
 import qualified Data.ByteString.Lazy         as LB
 
 -- | Callback type to push data to a channel. Part of this 
---   interface is the abstract exception type IO_Problem. Throw an 
+--   interface is the abstract exception type IOProblem. Throw an 
 --   instance of it to notify the session that the connection has 
 --   been broken. 
 type PushAction  = LB.ByteString -> IO ()
@@ -47,24 +48,24 @@ type Attendant = PushAction -> PullAction -> CloseAction -> IO ()
 
 -- | Throw exceptions derived from this (e.g, `GenericIOProblem` below)
 --   to have the HTTP/2 session to terminate gracefully. 
-data IO_Problem = forall e . Exception e => IO_Problem e 
+data IOProblem = forall e . Exception e => IOProblem e 
 	deriving Typeable
 
 
-instance  Show IO_Problem where
-	show (IO_Problem e) = show e 
+instance  Show IOProblem where
+	show (IOProblem e) = show e 
 
-instance Exception IO_Problem 
+instance Exception IOProblem 
 
 -- | A concrete case of the above exception. Throw one of this
 --   if you don't want to implement your own type. Capture one 
---   `IO_Problem` otherwise. 
+--   `IOProblem` otherwise. 
 data GenericIOProblem = GenericIOProblem
 	deriving (Show, Typeable)
 
 
 instance Exception GenericIOProblem where 
-	toException = toException . IO_Problem
+	toException = toException . IOProblem
 	fromException x = do 
-		IO_Problem a <- fromException x 
+		IOProblem a <- fromException x 
 		cast a

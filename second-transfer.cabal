@@ -26,7 +26,7 @@ author      :              Alcides Viamontes Esquivel
 
 maintainer  :              alcidesv@zunzun.se
 
-copyright   :              Copyright 2015, Zunzun AB.          
+copyright   :              Copyright 2015, Alcides Viamontes Esquivel          
 
 category    :              Network
 
@@ -124,11 +124,11 @@ library
 
   c-sources: cbits/tlsinc.c
 
-  cc-options: -fPIC -pthread -g -O0
+  -- cc-options: -fPIC -pthread -g -O0
 
   -- cc-options: -g3 -O0
 
-  ghc-options: -threaded -eventlog -rtsopts
+  ghc-options:
 
   extra-libraries: ssl crypto
 

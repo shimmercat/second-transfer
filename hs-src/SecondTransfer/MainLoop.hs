@@ -4,6 +4,8 @@ module SecondTransfer.MainLoop (
 	,PullAction
 	,PushAction
 	,CloseAction
+	,IOProblem
+	,GenericIOProblem
 	-- * High level OpenSSL functions. 
 	-- 
 	-- | Use these functions to create your TLS-compliant 
@@ -17,6 +19,8 @@ module SecondTransfer.MainLoop (
 
 
 import           SecondTransfer.MainLoop.PushPullType   (Attendant, PullAction,
-                                                         PushAction, CloseAction)
+                                                         PushAction, CloseAction,
+                                                         IOProblem, GenericIOProblem
+                                                         )
 
 import           SecondTransfer.MainLoop.OpenSSL_TLS
