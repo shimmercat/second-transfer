@@ -5,7 +5,7 @@
             , MultiParamTypeClasses
             #-}
 
-module Rede.SpdyProtocol.TrivialTestWorker(
+module SecondTransfer.SpdyProtocol.TrivialTestWorker(
     trivialWorker
     ,fsWorker
     ,FsWorkerServicePocket
@@ -28,15 +28,15 @@ import           Control.Concurrent.MVar
    
 
 
-import           Rede.MainLoop.ConfigHelp
-import           Rede.MainLoop.Tokens       (StreamInputToken       (..)
+import           SecondTransfer.MainLoop.ConfigHelp
+import           SecondTransfer.MainLoop.Tokens       (StreamInputToken       (..)
                                              ,StreamOutputAction    (..)
                                              ,StreamWorker
                                              ,UnpackedNameValueList (..)
                                              ,StreamWorkerClass     (..)
                                              
                                              ,getHeader)
-import           Rede.SimpleHTTP1Response   (shortResponse)
+import           SecondTransfer.SimpleHTTP1Response   (shortResponse)
 
 
 

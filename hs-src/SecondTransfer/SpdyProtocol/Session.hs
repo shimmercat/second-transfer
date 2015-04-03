@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleContexts, Rank2Types #-}
-module Rede.SpdyProtocol.Session(
+module SecondTransfer.SpdyProtocol.Session(
     -- trivialSession
     basicSession
     -- ,showHeadersIfPresent
@@ -31,17 +31,17 @@ import qualified Data.HashTable.IO          as H
 import qualified Data.Dequeue               as D
 
 
-import           Rede.SpdyProtocol.Framing.AnyFrame
-import           Rede.SpdyProtocol.Framing.Frame
-import           Rede.SpdyProtocol.Framing.Ping
-import           Rede.SpdyProtocol.Framing.DataFrame
-import           Rede.SpdyProtocol.Framing.RstStream
-import           Rede.SpdyProtocol.Framing.WindowUpdate
-import           Rede.MainLoop.StreamPlug
-import           Rede.SpdyProtocol.Framing.KeyValueBlock
-import qualified Rede.SpdyProtocol.Framing.Settings      as SeF
-import           Rede.SpdyProtocol.Streams.State 
-import           Rede.MainLoop.Tokens
+import           SecondTransfer.SpdyProtocol.Framing.AnyFrame
+import           SecondTransfer.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.Ping
+import           SecondTransfer.SpdyProtocol.Framing.DataFrame
+import           SecondTransfer.SpdyProtocol.Framing.RstStream
+import           SecondTransfer.SpdyProtocol.Framing.WindowUpdate
+import           SecondTransfer.MainLoop.StreamPlug
+import           SecondTransfer.SpdyProtocol.Framing.KeyValueBlock
+import qualified SecondTransfer.SpdyProtocol.Framing.Settings      as SeF
+import           SecondTransfer.SpdyProtocol.Streams.State 
+import           SecondTransfer.MainLoop.Tokens
 
 
 -- TODO: Move to constants?

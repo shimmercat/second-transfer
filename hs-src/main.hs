@@ -4,12 +4,12 @@
 
 import qualified Network.Connection  as N
 import           Options.Applicative
-import qualified Rede.TLSConnect as SP
-import           Rede.Utils      (strToInt)
+import qualified SecondTransfer.TLSConnect as SP
+import           SecondTransfer.Utils      (strToInt)
 
 import           System.X509         (getSystemCertificateStore)
-import           Rede.Subprograms.BasicPing(basicPingProgram)
-import           Rede.Subprograms.BasicConnect(basicConnectProgram)
+import           SecondTransfer.Subprograms.BasicPing(basicPingProgram)
+import           SecondTransfer.Subprograms.BasicConnect(basicConnectProgram)
 
 
 data CmdConfig = CmdConfig

@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
-module Rede.HarFiles.DnsMasq (
+module SecondTransfer.HarFiles.DnsMasq (
     dnsMasqFileContents
     ,dnsMasqFileContentsToIp
     ) where 

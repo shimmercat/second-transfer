@@ -3,7 +3,7 @@
  #-}
 
 
-module Rede.MainLoop.Conduit ( 
+module SecondTransfer.MainLoop.Conduit ( 
   activateSessionManager
   ,FramesInterface(..)
   ) where 
@@ -18,8 +18,8 @@ import qualified Data.Conduit.List            as CL
 import qualified Data.ByteString              as B
 import qualified Data.ByteString.Lazy         as LB
 
-import           Rede.MainLoop.Framer(Framer)
-import           Rede.MainLoop.PushPullType
+import           SecondTransfer.MainLoop.Framer(Framer)
+import           SecondTransfer.MainLoop.PushPullType
 
 
 --  Generalized Session type....

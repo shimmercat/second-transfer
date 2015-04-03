@@ -1,6 +1,6 @@
 {-# LANGUAGE FunctionalDependencies, FlexibleInstances  #-} 
 -- Contains adapter helpers to stream workers
-module Rede.MainLoop.StreamPlug(
+module SecondTransfer.MainLoop.StreamPlug(
     UnpackedNameValueList
     ,StreamInputToken
     ,StreamOutputAction
@@ -13,7 +13,7 @@ module Rede.MainLoop.StreamPlug(
 
 
 
-import Rede.MainLoop.Tokens
+import SecondTransfer.MainLoop.Tokens
 
 type StreamId = Int
 

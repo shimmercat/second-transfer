@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Rede.Workers.ResponseFragments (
+module SecondTransfer.Workers.ResponseFragments (
     RequestMethod(..)
 
     ,simpleResponse
@@ -15,7 +15,7 @@ import qualified Data.Map                     as DM
 
 import qualified Data.ByteString              as B
 import           Data.ByteString.Char8        (pack)
-import           Rede.MainLoop.CoherentWorker
+import           SecondTransfer.MainLoop.CoherentWorker
 
 
 -- TODO: Add the others....

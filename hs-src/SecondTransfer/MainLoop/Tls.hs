@@ -1,6 +1,6 @@
 -- TLS is small hell to setup, let's do it here ...
 {-# LANGUAGE StandaloneDeriving, FlexibleInstances, DeriveDataTypeable #-}
-module Rede.MainLoop.Tls(readyTCPSocket
+module SecondTransfer.MainLoop.Tls(readyTCPSocket
     , tcpServe
     , enchantSocket
     , buildContextParams
@@ -27,8 +27,8 @@ import           Data.ByteString.Char8(pack, unpack)
 import           Data.List   (find)
 
 
-import Rede.MainLoop.ConfigHelp(configDir)
-import Rede.MainLoop.PushPullType
+import SecondTransfer.MainLoop.ConfigHelp(configDir)
+import SecondTransfer.MainLoop.PushPullType
 
 
 data CouldNotDecideProtocol = CouldNotDecideProtocol

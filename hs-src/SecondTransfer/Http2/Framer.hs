@@ -2,7 +2,8 @@
 -- and two keep track of flow-control quotas. 
 {-# LANGUAGE OverloadedStrings, StandaloneDeriving, FlexibleInstances, 
              DeriveDataTypeable, TemplateHaskell #-}
-module Rede.Http2.Framer (
+{-# OPTIONS_HADDOCK hide #-}
+module SecondTransfer.Http2.Framer (
     wrapSession,
 
     -- Not needed anywhere, but supress the warning about unneeded symbol
@@ -31,12 +32,12 @@ import qualified Network.HTTP2                as NH2
 
 import qualified Data.HashTable.IO            as H
 
-import           Rede.Http2.Session
-import           Rede.MainLoop.CoherentWorker (CoherentWorker)
-import qualified Rede.MainLoop.Framer         as F
-import           Rede.MainLoop.PushPullType   (Attendant, PullAction,
+import           SecondTransfer.Http2.Session
+import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker)
+import qualified SecondTransfer.MainLoop.Framer         as F
+import           SecondTransfer.MainLoop.PushPullType   (Attendant, PullAction,
                                                PushAction, CloseAction)
-import           Rede.Utils                   (Word24, word24ToInt)
+import           SecondTransfer.Utils                   (Word24, word24ToInt)
 
 
 http2PrefixLength :: Int

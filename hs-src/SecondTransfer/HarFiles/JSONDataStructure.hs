@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, DeriveDataTypeable #-}
-module Rede.HarFiles.JSONDataStructure where 
+module SecondTransfer.HarFiles.JSONDataStructure where 
 
 
 import           Control.Applicative
@@ -21,8 +21,8 @@ import qualified Data.ByteString.Lazy           as LB
 
 import           Network.URI
 
--- import           Rede.Utils                     (neutralizeUrl)
-import           Rede.Utils.PrintfArgByteString ()
+-- import           SecondTransfer.Utils                     (neutralizeUrl)
+import           SecondTransfer.Utils.PrintfArgByteString ()
 
 -- import           Debug.Trace                    (trace)
 

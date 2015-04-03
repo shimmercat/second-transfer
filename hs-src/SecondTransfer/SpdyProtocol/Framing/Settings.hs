@@ -1,5 +1,5 @@
 {-# LANGUAGE StandaloneDeriving, FlexibleInstances, MultiParamTypeClasses, FunctionalDependencies #-}
-module Rede.SpdyProtocol.Framing.Settings (
+module SecondTransfer.SpdyProtocol.Framing.Settings (
      getSettingsFrame
      ,getDefaultWindowSize
 
@@ -13,11 +13,11 @@ module Rede.SpdyProtocol.Framing.Settings (
 
 import           Data.Word                       (Word32)
 import           Data.List                       (find)
-import           Rede.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.Frame
 import           Control.Monad
 import           Data.Binary                     (Binary, Get, get, getWord8,
                                                   put, putWord8)
-import           Rede.Utils
+import           SecondTransfer.Utils
 import           Data.Binary.Get                 (getWord32be)
 import           Data.Binary.Put                 (putWord32be)
 import           Data.BitSet.Generic             (delete, insert, member)

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 
-module Rede.SimpleHTTP1Response(exampleHTTP11Response, exampleHTTP20Response, shortResponse) where
+module SecondTransfer.SimpleHTTP1Response(exampleHTTP11Response, exampleHTTP20Response, shortResponse) where
 
 import qualified Data.ByteString as B 
 

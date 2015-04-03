@@ -1,6 +1,6 @@
 {-# LANGUAGE DefaultSignatures, DeriveGeneric, TypeOperators, FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
-module Rede.SpdyProtocol.Framing.AnyFrame(
+module SecondTransfer.SpdyProtocol.Framing.AnyFrame(
    readControlFrame
   ,perfunctoryClassify
   ,readFrame
@@ -33,22 +33,22 @@ import qualified Data.ByteString.Lazy as LB
 import qualified Data.Conduit                 as C
 import           Data.Conduit
 import qualified Data.Conduit.List            as CL
-import Rede.MainLoop.Conduit(FramesInterface(..))
+import SecondTransfer.MainLoop.Conduit(FramesInterface(..))
 import           Data.Binary.Put              (runPut)
 
-import           Rede.SpdyProtocol.Framing.Frame
-import           Rede.SpdyProtocol.Framing.Ping         (PingFrame(..))
-import           Rede.SpdyProtocol.Framing.RstStream    (RstStreamFrame(..))
-import           Rede.SpdyProtocol.Framing.Settings     (SettingsFrame(..))
-import           Rede.SpdyProtocol.Framing.DataFrame    (DataFrame(..))
-import           Rede.SpdyProtocol.Framing.WindowUpdate (WindowUpdateFrame(..))
-import           Rede.SpdyProtocol.Framing.SynReply     (SynReplyFrame(..))
-import           Rede.SpdyProtocol.Framing.SynStream    (SynStreamFrame(..))
-import           Rede.SpdyProtocol.Framing.Headers      (HeadersFrame(..))
-import           Rede.SpdyProtocol.Framing.GoAway       (GoAwayFrame(..))
-import           Rede.MainLoop.Conduit()
+import           SecondTransfer.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.Ping         (PingFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.RstStream    (RstStreamFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.Settings     (SettingsFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.DataFrame    (DataFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.WindowUpdate (WindowUpdateFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.SynReply     (SynReplyFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.SynStream    (SynStreamFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.Headers      (HeadersFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.GoAway       (GoAwayFrame(..))
+import           SecondTransfer.MainLoop.Conduit()
 
-import           Rede.Utils              ( getWord24be )
+import           SecondTransfer.Utils              ( getWord24be )
 
 
 data AnyFrame = 

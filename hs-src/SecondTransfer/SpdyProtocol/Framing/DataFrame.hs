@@ -1,7 +1,7 @@
 {-# LANGUAGE StandaloneDeriving, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, GADTs #-}
 
 
-module Rede.SpdyProtocol.Framing.DataFrame(
+module SecondTransfer.SpdyProtocol.Framing.DataFrame(
 	DataFrame(..)
 	,DataFrameValidFlags(..)
 	) where 
@@ -15,11 +15,11 @@ import           Data.Binary.Get                 (getByteString, getWord32be)
 import           Data.Binary.Put                 (putByteString, putWord32be)
 import           Data.BitSet.Generic             (delete, insert, member)
 import qualified Data.ByteString                 as B
-import           Rede.SpdyProtocol.Framing.Frame (FlagsBitSet,
+import           SecondTransfer.SpdyProtocol.Framing.Frame (FlagsBitSet,
                                                   HasFrameFlags (..),
                                                   HasStreamId   (..),
                                                   bitsetToWord8, word8ToBitset)
-import           Rede.Utils                      (getWord24be, putWord24be)
+import           SecondTransfer.Utils                      (getWord24be, putWord24be)
 
 
 

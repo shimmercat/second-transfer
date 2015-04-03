@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 
-module Rede.SpdyProtocol.Framing.KeyValueBlock(
+module SecondTransfer.SpdyProtocol.Framing.KeyValueBlock(
     UnpackedNameValueList(..)
     ,CompressedKeyValueBlock(..)
     ,CompressedHeadersOnFrame(..)
@@ -11,7 +11,7 @@ module Rede.SpdyProtocol.Framing.KeyValueBlock(
 
 import qualified Data.ByteString                as BS
 
-import Rede.MainLoop.Tokens                     (
+import SecondTransfer.MainLoop.Tokens                     (
                                                 UnpackedNameValueList(..) )
                                                 -- ,packHeaderTuples
                                                 -- ,unpackHeaderTuples )

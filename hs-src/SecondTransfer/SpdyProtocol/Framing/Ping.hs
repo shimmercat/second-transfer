@@ -1,14 +1,14 @@
 
 {-# LANGUAGE FlexibleInstances #-}
 
-module Rede.SpdyProtocol.Framing.Ping(
+module SecondTransfer.SpdyProtocol.Framing.Ping(
 	 PingFrame(..)
 	, pingFrame
     , getPingFrame) where 
 
 import           Data.Binary            (Binary, Get, get, put)
 import           Data.BitSet.Generic    (empty)
-import           Rede.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.Frame
 import           Data.Binary.Get        (getWord32be)
 import           Data.Binary.Put        (putWord32be)
 import           Data.Default

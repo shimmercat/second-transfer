@@ -1,10 +1,10 @@
 {-# LANGUAGE ForeignFunctionInterface, OverloadedStrings,  DeriveDataTypeable #-}
-module Rede.MainLoop.OpenSSL_TLS(
+module SecondTransfer.MainLoop.OpenSSL_TLS(
     tlsServeWithALPN
     ,tlsServeWithALPNAndFinishOnRequest
     -- ,tlsServeWithALPNOnce
 
-    ,ConnectionIOError(..)
+    ,TLSLayerGenericProblem(..)
     ,FinishRequest(..)
     ) where 
 
@@ -28,13 +28,22 @@ import qualified Data.ByteString.Unsafe     as BU
 
 import           System.Log.Logger
 
-import           Rede.MainLoop.PushPullType
+import           SecondTransfer.MainLoop.PushPullType
            
 
 
-
-data ConnectionIOError = ConnectionIOError String
+-- |Exception inheriting from `IO_Problem`. This is thrown by the 
+-- OpenSSL subsystem to signal that the connection was broken or that 
+-- otherwise there was a problem at the SSL layer. 
+data TLSLayerGenericProblem = TLSLayerGenericProblem String
     deriving (Show, Typeable)
+
+
+instance Exception TLSLayerGenericProblem where 
+    toException = toException . IO_Problem 
+    fromException x = do 
+        IO_Problem a <- fromException x 
+        cast a
 
 
 data InterruptibleEither a b = 
@@ -43,10 +52,10 @@ data InterruptibleEither a b =
     |Interrupted
 
 
+-- | Singleton type. Used in conjunction with an `MVar`. If the MVar is full, 
+--   the fuction `tlsServeWithALPNAndFinishOnRequest` knows that it should finish
+--   at its earliest convenience and call the `CloseAction` for any open sessions.
 data FinishRequest = FinishRequest
-
-
-instance Exception ConnectionIOError
 
 
 -- These names are absolutely improper....
@@ -116,11 +125,16 @@ protocolsToWire protocols =
         ) protocols
 
 
-tlsServeWithALPN :: FilePath 
-                 -> FilePath 
-                 -> String 
-                 -> [(String, Attendant)]
-                 -> Int 
+-- | Simple function to open 
+tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the server is going to use to identify itself.
+                                            --   Bear in mind that multiple domains can be served from the same HTTP/2 
+                                            --   TLS socket, so please create the HTTP/2 certificate accordingly.
+                 -> FilePath                -- ^ Path to the key of your certificate. 
+                 -> String                  -- ^ Name of the network interface where you want to start your server
+                 -> [(String, Attendant)]   -- ^ List of protocol names and the corresponding `Attendant` to use for 
+                                            --   each. This way you can serve both HTTP\/1.1 over TLS and HTTP\/2 in the
+                                            --   same socket.
+                 -> Int                     -- ^ Port to open to listen for connections. 
                  -> IO ()
 tlsServeWithALPN certificate_filename key_filename interface_name attendants interface_port = do 
 
@@ -138,7 +152,7 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
         if connection_ptr == nullPtr 
           then 
-            throwIO $ ConnectionIOError "Could not create listening end"
+            throwIO $ TLSLayerGenericProblem "Could not create listening end"
           else 
             return ()
 
@@ -170,14 +184,14 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                             result <- sendData wired_ptr pchar (fromIntegral len)
                             case result of  
                                 r | r == allOk           -> return ()
-                                  | r == badHappened     -> throwIO $ ConnectionIOError "Could not send data"
+                                  | r == badHappened     -> throwIO $ TLSLayerGenericProblem "Could not send data"
                         pullAction = do 
                             allocaBytes useBufferSize $ \ pcharbuffer -> 
                                 alloca $ \ data_recvd_ptr -> do 
                                     result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
                                     recvd_bytes <- case result of 
                                         r | r == allOk       -> peek data_recvd_ptr
-                                          | r == badHappened -> throwIO $ ConnectionIOError "Could not receive data"
+                                          | r == badHappened -> throwIO $ TLSLayerGenericProblem "Could not receive data"
 
                                     B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
 
@@ -206,21 +220,23 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                             E.catch 
                                 (session_attendant pushAction pullAction closeAction)
                                 ((\ e -> do 
-                                    errorM "OpenSSL" " ** Session ended by ConnectionIOError (well handled)"
+                                    errorM "OpenSSL" " ** Session ended by TLSLayerGenericProblem (well handled)"
                                     throwIO e
-                                )::ConnectionIOError -> IO () )
+                                )::TLSLayerGenericProblem -> IO () )
 
 
                         Nothing ->
                             return ()
 
 
+-- | Interruptible version of `tlsServeWithALPN`. Use the extra argument to notify 
+--   the server of finishing. 
 tlsServeWithALPNAndFinishOnRequest :: FilePath 
-                 -> FilePath 
-                 -> String 
-                 -> [(String, Attendant)]
-                 -> Int 
-                 -> MVar FinishRequest
+                 -> FilePath              -- ^ Same as for `tlsServeWithALPN`             
+                 -> String                -- ^ Same as for `tlsServeWithALPN`
+                 -> [(String, Attendant)] -- ^ Same as for `tlsServeWithALPN`
+                 -> Int                   -- ^ Same as for `tlsServeWithALPN`
+                 -> MVar FinishRequest    -- ^ Finish request
                  -> IO ()
 tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_name attendants interface_port finish_request = do 
 
@@ -278,14 +294,14 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
                                 result <- sendData wired_ptr pchar (fromIntegral len)
                                 case result of  
                                     r | r == allOk           -> return ()
-                                      | r == badHappened     -> throwIO $ ConnectionIOError "Could not send data"
+                                      | r == badHappened     -> throwIO $ TLSLayerGenericProblem "Could not send data"
                             pullAction = do 
                                 allocaBytes useBufferSize $ \ pcharbuffer -> 
                                     alloca $ \ data_recvd_ptr -> do 
                                         result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
                                         recvd_bytes <- case result of 
                                             r | r == allOk       -> peek data_recvd_ptr
-                                              | r == badHappened -> throwIO $ ConnectionIOError "Could not receive data"
+                                              | r == badHappened -> throwIO $ TLSLayerGenericProblem "Could not receive data"
 
                                         B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
                             closeAction = do

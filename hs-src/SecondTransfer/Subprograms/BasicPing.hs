@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Rede.Subprograms.BasicPing(
+module SecondTransfer.Subprograms.BasicPing(
     basicPingProgram
     ) where
 
@@ -8,10 +8,10 @@ module Rede.Subprograms.BasicPing(
 import qualified Data.ByteString           as B
 import           Pipes
 import qualified Pipes.Core                as PC
-import           Rede.SpdyProtocol.Framing.AnyFrame
-import           Rede.SpdyProtocol.Framing.Ping
-import           Rede.MainLoop.Pipes
-import           Rede.Utils
+import           SecondTransfer.SpdyProtocol.Framing.AnyFrame
+import           SecondTransfer.SpdyProtocol.Framing.Ping
+import           SecondTransfer.MainLoop.Pipes
+import           SecondTransfer.Utils
 import qualified System.Clock              as SC
 import           Control.Concurrent(threadDelay, killThread)
 import qualified Pipes.Concurrent          as PC 

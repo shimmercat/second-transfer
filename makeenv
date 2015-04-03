@@ -1,0 +1,9 @@
+export PATH=/home/alcides/.cabal/bin:/usr/local/haskell/ghc-7.8.3-x86_64/bin/:$PATH
+THIS_DIR=$(dirname `readlink -f ${BASH_SOURCE[0]}`)
+export KEL_DATA_DIR=$THIS_DIR/kel-data-dir/
+# This must go away....
+export MIMIC_DATA_DIR=$THIS_DIR/mimic-here/
+# Need to be sure I can access the right openssl library
+export LD_LIBRARY_PATH=/opt/openssl-1.0.2/lib:$LD_LIBRARY_PATH
+export PATH=$THIS_DIR/.cabal-sandbox/bin:$PATH
+export PATH=/opt/openssl-1.0.2/bin:$PATH

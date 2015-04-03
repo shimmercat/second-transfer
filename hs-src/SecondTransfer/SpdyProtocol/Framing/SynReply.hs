@@ -1,6 +1,6 @@
 {-# LANGUAGE StandaloneDeriving, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, GADTs #-}
 
-module Rede.SpdyProtocol.Framing.SynReply(
+module SecondTransfer.SpdyProtocol.Framing.SynReply(
 	SynReplyValidFlags(..)
 	,SynReplyFrame(..)
 	) where 
@@ -17,8 +17,8 @@ import           Data.BitSet.Generic                     (delete, insert,
 import qualified Data.ByteString                         as BS
 import           Data.Default
 import           Data.Word
-import           Rede.SpdyProtocol.Framing.Frame
-import           Rede.SpdyProtocol.Framing.KeyValueBlock (CompressedKeyValueBlock (..)
+import           SecondTransfer.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.KeyValueBlock (CompressedKeyValueBlock (..)
                                                           ,CompressedHeadersOnFrame (..) )
 
 

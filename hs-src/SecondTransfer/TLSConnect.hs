@@ -3,7 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Rede.TLSConnect (
+module SecondTransfer.TLSConnect (
     makeTLSParamsForSpdy
     ) where
 
@@ -17,7 +17,7 @@ import           Control.Monad (forM_)
 import qualified Network.TLS                as TLS
 import qualified Network.TLS.Extra          as TLS
 
-import Rede.Constants
+import SecondTransfer.Constants
 
 
 -- | Create a final TLS 'ClientParams' according to the destination and the

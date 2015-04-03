@@ -31,9 +31,9 @@ import           System.Log.Logger
 
 -- Imports from other parts of the program
 
-import           Rede.MainLoop.ConfigHelp  (mimicDataDir)
-import           Rede.Research.Main        (research)
-import           Rede.MainLoop.OpenSSL_TLS (ConnectionIOError(..))
+import           SecondTransfer.MainLoop.ConfigHelp  (mimicDataDir)
+import           SecondTransfer.Research.Main        (research)
+import           SecondTransfer.MainLoop.OpenSSL_TLS (ConnectionIOError(..))
 
 
 

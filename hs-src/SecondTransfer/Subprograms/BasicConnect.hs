@@ -1,8 +1,8 @@
-module Rede.Subprograms.BasicConnect(basicConnectProgram) where 
+module SecondTransfer.Subprograms.BasicConnect(basicConnectProgram) where 
 
 
 import qualified  System.Clock as SC
-import Rede.Utils
+import SecondTransfer.Utils
 import Network.Simple.TCP (connect)
 
 

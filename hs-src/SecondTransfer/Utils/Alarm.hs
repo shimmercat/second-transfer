@@ -1,4 +1,4 @@
-module Rede.Utils.Alarm 
+module SecondTransfer.Utils.Alarm 
     (
         newAlarm,
         cancelAlarm,

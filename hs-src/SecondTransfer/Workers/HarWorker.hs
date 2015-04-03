@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, DeriveDataTypeable, FlexibleInstances, MultiParamTypeClasses #-}
 
-module Rede.Workers.HarWorker(
+module SecondTransfer.Workers.HarWorker(
     harCoherentWorker
 
     ) where 
@@ -23,19 +23,19 @@ import qualified Network.URI                  as U
 -- import           Text.Printf
 
 
-import           Rede.HarFiles.ServedEntry
-import           Rede.MainLoop.CoherentWorker (CoherentWorker, PrincipalStream,
+import           SecondTransfer.HarFiles.ServedEntry
+import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker, PrincipalStream,
                                                getHeaderFromFlatList)
--- import           Rede.MainLoop.StreamWorker   (send404)
-import           Rede.MainLoop.Tokens         (
+-- import           SecondTransfer.MainLoop.StreamWorker   (send404)
+import           SecondTransfer.MainLoop.Tokens         (
                                                -- StreamInputToken (..),
                                                -- StreamOutputAction (..),
                                                -- StreamWorker,
                                                UnpackedNameValueList (..),
                                                -- getHeader
                                                )
-import           Rede.Utils                   (lowercaseText)
-import           Rede.Workers.VeryBasic       (bad404ResponseData,
+import           SecondTransfer.Utils                   (lowercaseText)
+import           SecondTransfer.Workers.VeryBasic       (bad404ResponseData,
                                                bad404ResponseHeaders)
 
 

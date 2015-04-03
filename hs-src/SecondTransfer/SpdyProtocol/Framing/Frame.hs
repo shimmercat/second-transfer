@@ -1,7 +1,7 @@
 
 {-# LANGUAGE StandaloneDeriving, MultiParamTypeClasses, FunctionalDependencies, GADTs #-}
 
-module Rede.SpdyProtocol.Framing.Frame(
+module SecondTransfer.SpdyProtocol.Framing.Frame(
      cfType
     ,cfLength
     ,cfFlags
@@ -32,7 +32,7 @@ import qualified Data.BitSet.Generic as GenericBitset
 -- import qualified Data.ByteString     as B
 -- import           Data.Monoid
 import           Data.Word
-import           Rede.Utils(getWord24be, putWord24be)
+import           SecondTransfer.Utils(getWord24be, putWord24be)
 
 
 type FlagsBitSet = GenericBitset.BitSet Word8

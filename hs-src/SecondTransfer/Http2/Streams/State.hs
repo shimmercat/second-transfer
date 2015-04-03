@@ -11,7 +11,7 @@ generic tokens present at Tokens.hs and the frames.
 
 -}
 
-module Rede.Http2.Streams.State(
+module SecondTransfer.Http2.Streams.State(
     initStreamState
     ,inputPlug
 
@@ -49,10 +49,10 @@ import           Control.Monad.Trans.Reader
 import qualified Network.HTTP2            as NH2
 import qualified Network.HPACK            as HP
 
--- import           Rede.MainLoop.StreamPlug (
+-- import           SecondTransfer.MainLoop.StreamPlug (
 --                                           StreamId (..), 
 --                                           -- StreamPlug (..)
 --                                           )
-import           Rede.MainLoop.CoherentWorker
+import           SecondTransfer.MainLoop.CoherentWorker
 
 

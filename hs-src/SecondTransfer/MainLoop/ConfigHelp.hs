@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, DeriveDataTypeable #-}
 
-module Rede.MainLoop.ConfigHelp(
+module SecondTransfer.MainLoop.ConfigHelp(
 	configDir
 	,mimicDataDir
 	,wwwDir
@@ -29,7 +29,7 @@ import           Data.Typeable
 import           Data.Aeson.Types      ()
 import qualified Data.ByteString       as B
 
-import           Rede.Utils            (stripString)
+import           SecondTransfer.Utils            (stripString)
 
 
 data BadAesonFile = BadAesonFile B.ByteString

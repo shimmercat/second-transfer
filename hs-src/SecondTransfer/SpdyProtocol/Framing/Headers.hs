@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 
-module Rede.SpdyProtocol.Framing.Headers(
+module SecondTransfer.SpdyProtocol.Framing.Headers(
 	HeadersValidFlags(..)
 	,HeadersFrame(..)
 	) where 
@@ -9,10 +9,10 @@ module Rede.SpdyProtocol.Framing.Headers(
 
 import           Data.Word
 import           Data.Binary                    (Binary, Get, get, put)
-import           Rede.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.Frame
 import           Data.Binary.Get                (getWord32be, getByteString)
 import           Data.Binary.Put                (putWord32be, putByteString)
-import           Rede.SpdyProtocol.Framing.KeyValueBlock (CompressedKeyValueBlock(..), CompressedHeadersOnFrame(..))
+import           SecondTransfer.SpdyProtocol.Framing.KeyValueBlock (CompressedKeyValueBlock(..), CompressedHeadersOnFrame(..))
 import qualified Data.ByteString as BS
 import           Data.Default
 

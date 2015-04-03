@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Rede.Constants(
+module SecondTransfer.Constants(
 	whichSPDY,
 	whichHTTP,
 	spdyDataFrameMaxLength

@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Rede.MainLoop.Pipes (
+module SecondTransfer.MainLoop.Pipes (
     showFrames
     ,inputToFrames
     ,framesToOutput
@@ -12,10 +12,10 @@ import qualified Data.ByteString                         as B
 import qualified Data.ByteString.Lazy                    as LB
 import           Pipes
 import qualified Pipes.Core                              as PC
-import           Rede.SpdyProtocol.Framing.ChunkProducer (chunkProducerHelper)
+import           SecondTransfer.SpdyProtocol.Framing.ChunkProducer (chunkProducerHelper)
 
 
-import           Rede.SpdyProtocol.Framing.AnyFrame      (AnyFrame (..),
+import           SecondTransfer.SpdyProtocol.Framing.AnyFrame      (AnyFrame (..),
                                                           perfunctoryClassify,
                                                           readFrame, writeFrame)
 

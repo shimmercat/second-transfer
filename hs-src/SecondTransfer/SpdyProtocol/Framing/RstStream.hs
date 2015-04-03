@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
-module Rede.SpdyProtocol.Framing.RstStream (
+module SecondTransfer.SpdyProtocol.Framing.RstStream (
 	getRstStreamFrame
 	,rstStreamFrame
 	,getFrameResetReason
@@ -10,7 +10,7 @@ module Rede.SpdyProtocol.Framing.RstStream (
 	) where 
 
 
-import Rede.SpdyProtocol.Framing.Frame
+import SecondTransfer.SpdyProtocol.Framing.Frame
 import Data.BitSet.Generic(empty)
 import           Data.Binary         (Binary,  get, put, Get)
 -- import           Data.Binary.Builder (Builder)

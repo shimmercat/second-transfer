@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Rede.Workers.VeryBasic(
+module SecondTransfer.Workers.VeryBasic(
     veryBasic
     ,bad404ResponseData
     ,bad404ResponseHeaders
@@ -13,7 +13,7 @@ import           Data.ByteString.Char8 (pack)
 
 
 
-import Rede.MainLoop.CoherentWorker
+import SecondTransfer.MainLoop.CoherentWorker
 
 
 trivialHeaders :: [(B.ByteString, B.ByteString)] 

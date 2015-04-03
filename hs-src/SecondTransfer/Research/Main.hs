@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Rede.Research.Main(research) where 
+module SecondTransfer.Research.Main(research) where 
 
 
 import           Control.Concurrent           (forkIO)
@@ -8,17 +8,17 @@ import           System.FilePath
 import qualified Data.ByteString              as B
 import           Data.ByteString.Char8        (pack)
 
-import           Rede.MainLoop.ConfigHelp     (getCertFilename,
+import           SecondTransfer.MainLoop.ConfigHelp     (getCertFilename,
                                                getMimicPostInterface,
                                                getMimicPostPort,
                                                configDir,
                                                getPrivkeyFilename)
-import           Rede.MainLoop.OpenSSL_TLS    (tlsServeWithALPN, FinishRequest(..))
-import           Rede.Research.ResearchWorker (runResearchWorker,
+import           SecondTransfer.MainLoop.OpenSSL_TLS    (tlsServeWithALPN, FinishRequest(..))
+import           SecondTransfer.Research.ResearchWorker (runResearchWorker,
                                                spawnHarServer)
 
-import           Rede.Http2.MakeAttendant     (http2Attendant)
-import           Rede.HarFiles.ServedEntry    (ResolveCenter)
+import           SecondTransfer.Http2.MakeAttendant     (http2Attendant)
+import           SecondTransfer.HarFiles.ServedEntry    (ResolveCenter)
 
 
 research :: FilePath -> IO ()

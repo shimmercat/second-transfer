@@ -9,7 +9,7 @@ generic tokens present at Tokens.hs and the frames.
 -}
 
 
-module Rede.SpdyProtocol.Streams.State(
+module SecondTransfer.SpdyProtocol.Streams.State(
     defaultStreamState
     ,initStreamState
     ,packSendHeaders
@@ -38,17 +38,17 @@ import           Control.Concurrent.MVar
 import qualified Data.HashTable.IO          as H
 
 
-import           Rede.MainLoop.StreamPlug
-import           Rede.MainLoop.Tokens
-import           Rede.SpdyProtocol.Framing.AnyFrame
-import           Rede.SpdyProtocol.Framing.Frame
-import           Rede.SpdyProtocol.Framing.KeyValueBlock
-import           Rede.SpdyProtocol.Framing.SynReply
-import           Rede.SpdyProtocol.Framing.Headers
-import qualified Rede.SpdyProtocol.Framing.SynStream     as SyS
-import           Rede.SpdyProtocol.Framing.DataFrame
-import qualified Rede.SpdyProtocol.Framing.DataFrame     as DF
-import           Rede.Constants(spdyDataFrameMaxLength)
+import           SecondTransfer.MainLoop.StreamPlug
+import           SecondTransfer.MainLoop.Tokens
+import           SecondTransfer.SpdyProtocol.Framing.AnyFrame
+import           SecondTransfer.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.KeyValueBlock
+import           SecondTransfer.SpdyProtocol.Framing.SynReply
+import           SecondTransfer.SpdyProtocol.Framing.Headers
+import qualified SecondTransfer.SpdyProtocol.Framing.SynStream     as SyS
+import           SecondTransfer.SpdyProtocol.Framing.DataFrame
+import qualified SecondTransfer.SpdyProtocol.Framing.DataFrame     as DF
+import           SecondTransfer.Constants(spdyDataFrameMaxLength)
 
 
 data StreamStage =

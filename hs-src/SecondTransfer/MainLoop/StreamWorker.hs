@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Rede.MainLoop.StreamWorker (
+module SecondTransfer.MainLoop.StreamWorker (
     send404
 
 	,StreamWorker
@@ -13,7 +13,7 @@ import           Data.ByteString.Char8 (pack)
 import           Data.Conduit
 
 
-import Rede.MainLoop.Tokens (
+import SecondTransfer.MainLoop.Tokens (
                              StreamOutputAction(..)
                              ,StreamInputToken
 							 ,StreamOutputAction

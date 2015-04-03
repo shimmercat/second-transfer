@@ -2,7 +2,8 @@
 -- so that they don't get mixed with header frames from other streams when 
 -- resources are being served concurrently.
 {-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell #-}
-module Rede.Http2.Session(
+{-# OPTIONS_HADDOCK hide #-}
+module SecondTransfer.Http2.Session(
     http2Session
     ,getFrameFromSession
     ,sendFrametoSession
@@ -19,11 +20,8 @@ import           Control.Monad                           (forever)
 import           Control.Concurrent                      (forkIO)
 import           Control.Concurrent.Chan
 import           Control.Monad.IO.Class                  (liftIO)
--- import           Control.Monad.Trans.Class               (lift)
--- import           Control.Monad.Trans.Writer
 import           Control.Monad.Trans.Reader
 
--- import           Text.Printf                             (printf)
 import           Data.Conduit
 import           Data.Conduit.List                       (foldMapM)
 import qualified Data.ByteString                         as B
@@ -32,25 +30,18 @@ import qualified Data.IntSet                             as NS
 import qualified Data.HashTable.IO          as H
 
 import           Control.Lens
--- import           Blaze.ByteString.Builder.ByteString (fromByteString)
--- import qualified Blaze.ByteString.Builder            as Bu
-
 
 -- No framing layer here... let's use Kazu's Yamamoto library
 import qualified Network.HTTP2            as NH2
 import qualified Network.HPACK            as HP
 
 -- Logging utilities
--- import           System.Log.Formatter
--- import           System.Log.Handler         (setFormatter)
--- import           System.Log.Handler.Simple
--- import           System.Log.Handler.Syslog
 import           System.Log.Logger
 
 -- Imports from other parts of the program
-import           Rede.MainLoop.CoherentWorker 
-import           Rede.MainLoop.Tokens
-import           Rede.Utils                             (unfoldChannelAndSource)
+import           SecondTransfer.MainLoop.CoherentWorker 
+import           SecondTransfer.MainLoop.Tokens
+import           SecondTransfer.Utils                             (unfoldChannelAndSource)
 
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to 
@@ -492,7 +483,7 @@ workerThread :: Request -> CoherentWorker -> WorkerMonad ()
 workerThread req coherent_worker =
   do
     headers_output <- view headersOutput
-    stream_id <- view streamId
+    stream_id      <- view streamId
     (headers, _, data_and_conclussion) <- liftIO $ coherent_worker req
 
     -- liftIO $ putStrLn $ "Num pushed streams: " ++ (show $ length pushed_streams)
@@ -506,13 +497,19 @@ workerThread req coherent_worker =
     is_stream_cancelled <- isStreamCancelled stream_id
     if not is_stream_cancelled
 
-      then 
+      then do
         -- I have a beautiful source that I can de-construct...
         -- TODO: Optionally pulling data out from a Conduit ....
         -- liftIO ( data_and_conclussion $$ (_sendDataOfStream stream_id) )
         -- 
         -- This threadlet should block here waiting for the headers to finish going
-        (transPipe liftIO data_and_conclussion) $$ (sendDataOfStream stream_id headers_sent)
+        (maybe_footers, _) <- runConduit $
+            (transPipe liftIO data_and_conclussion) 
+            `fuseBothMaybe` 
+            (sendDataOfStream stream_id headers_sent)
+        -- BIG TODO: Send the headers ... likely stream conclusion semantics 
+        -- will need to be changed. 
+        return ()
       else 
 
         return ()

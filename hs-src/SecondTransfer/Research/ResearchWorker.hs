@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
-module Rede.Research.ResearchWorker(
+module SecondTransfer.Research.ResearchWorker(
     runResearchWorker
     ,spawnHarServer
     ) where 
@@ -37,28 +37,28 @@ import qualified Network.URI                     as U
 import           System.Log.Logger
 import           Text.Printf                     (printf)
 
-import           Rede.Workers.ResponseFragments  (RequestMethod (..),
+import           SecondTransfer.Workers.ResponseFragments  (RequestMethod (..),
                                                   getMethodFromHeaders,
                                                   getUrlFromHeaders,
                                                   simpleResponse)
 
-import           Rede.HarFiles.DnsMasq           (dnsMasqFileContentsToIp)
--- import           Rede.HarFiles.JSONDataStructure (originUrl)
-import           Rede.HarFiles.ServedEntry       (BadHarFile (..),
+import           SecondTransfer.HarFiles.DnsMasq           (dnsMasqFileContentsToIp)
+-- import           SecondTransfer.HarFiles.JSONDataStructure (originUrl)
+import           SecondTransfer.HarFiles.ServedEntry       (BadHarFile (..),
                                                   ResolveCenter, allSeenHosts,
                                                   rcName, resolveCenterFromLazyByteString,
                                                   rcOriginalUrl
                                                   )
-import           Rede.Http2.MakeAttendant        (http2Attendant)
-import           Rede.MainLoop.CoherentWorker
-import           Rede.MainLoop.ConfigHelp        (configDir, getInterfaceName,
+import           SecondTransfer.Http2.MakeAttendant        (http2Attendant)
+import           SecondTransfer.MainLoop.CoherentWorker
+import           SecondTransfer.MainLoop.ConfigHelp        (configDir, getInterfaceName,
                                                   getMimicPort)
-import           Rede.MainLoop.OpenSSL_TLS       (FinishRequest (..), tlsServeWithALPNAndFinishOnRequest)
-import           Rede.Utils.ConcatConduit        (concatConduit)
-import           Rede.Utils.PrintfArgByteString  ()
-import           Rede.Utils                      (hashSafeFromUrl, SafeUrl, unSafeUrl)
-import           Rede.Utils.Alarm                
-import           Rede.Workers.HarWorker          (harCoherentWorker)
+import           SecondTransfer.MainLoop.OpenSSL_TLS       (FinishRequest (..), tlsServeWithALPNAndFinishOnRequest)
+import           SecondTransfer.Utils.ConcatConduit        (concatConduit)
+import           SecondTransfer.Utils.PrintfArgByteString  ()
+import           SecondTransfer.Utils                      (hashSafeFromUrl, SafeUrl, unSafeUrl)
+import           SecondTransfer.Utils.Alarm                
+import           SecondTransfer.Workers.HarWorker          (harCoherentWorker)
 
 
 type HashTable k v = H.CuckooHashTable k v

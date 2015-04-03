@@ -1,5 +1,5 @@
 {-# LANGUAGE StandaloneDeriving, FlexibleInstances, MultiParamTypeClasses, FunctionalDependencies #-}
-module Rede.SpdyProtocol.Framing.GoAway (
+module SecondTransfer.SpdyProtocol.Framing.GoAway (
 	GoAwayValidFlags(..)
 	,GoAwayFrame(..)
     ,GoAwayReason(..)
@@ -9,7 +9,7 @@ module Rede.SpdyProtocol.Framing.GoAway (
 
 import           Data.Word
 import           Data.Binary                    (Binary, Get, get, put)
-import           Rede.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.Frame
 import           Data.Binary.Get                (getWord32be)
 import           Data.Binary.Put                (putWord32be)
 import           Data.Default 

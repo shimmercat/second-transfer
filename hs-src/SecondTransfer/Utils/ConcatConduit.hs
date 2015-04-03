@@ -1,4 +1,4 @@
-module Rede.Utils.ConcatConduit(
+module SecondTransfer.Utils.ConcatConduit(
     concatConduit
     ) where 
 

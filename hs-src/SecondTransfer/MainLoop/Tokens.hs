@@ -1,8 +1,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FunctionalDependencies, FlexibleInstances  #-} 
+{-# OPTIONS_HADDOCK hide #-}
 
-module Rede.MainLoop.Tokens(
+module SecondTransfer.MainLoop.Tokens(
 	packHeaderTuples
 	,unpackHeaderTuples
     ,getHeader

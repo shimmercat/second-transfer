@@ -1,9 +1,9 @@
-module Rede.SpdyProtocol.Framing.ChunkProducer(chunkProducerHelper) where 
+module SecondTransfer.SpdyProtocol.Framing.ChunkProducer(chunkProducerHelper) where 
 
 
 import qualified Data.ByteString        as B
 import qualified Data.ByteString.Lazy   as LB
-import           Rede.SpdyProtocol.Framing.AnyFrame ( lengthFromPerfunct
+import           SecondTransfer.SpdyProtocol.Framing.AnyFrame ( lengthFromPerfunct
                                            , perfunctoryClassify )
 
 

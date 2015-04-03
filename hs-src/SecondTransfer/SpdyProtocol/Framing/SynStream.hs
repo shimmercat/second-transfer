@@ -1,7 +1,7 @@
 {-# LANGUAGE StandaloneDeriving, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, GADTs #-}
 
 
-module Rede.SpdyProtocol.Framing.SynStream(
+module SecondTransfer.SpdyProtocol.Framing.SynStream(
     SynStreamValidFlags(..)
     ,SynStreamFrame(..)
     ) where 
@@ -21,8 +21,8 @@ import           Data.Word
 import           Data.Default
 
 
-import           Rede.SpdyProtocol.Framing.Frame
-import           Rede.SpdyProtocol.Framing.KeyValueBlock (
+import           SecondTransfer.SpdyProtocol.Framing.Frame
+import           SecondTransfer.SpdyProtocol.Framing.KeyValueBlock (
 
               CompressedHeadersOnFrame (..) 
               ,CompressedKeyValueBlock (..)

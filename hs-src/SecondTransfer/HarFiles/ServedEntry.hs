@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, DeriveDataTypeable #-}
 
-module Rede.HarFiles.ServedEntry(
+module SecondTransfer.HarFiles.ServedEntry(
     sreStatus 
     ,sreHeaders
     ,sreContents
@@ -47,14 +47,14 @@ import qualified Data.Set               as S
 -- import qualified Data.ByteString.Base64 as B64
 
 
-import           Rede.Utils             (lowercaseText, hashFromUrl)
-import           Rede.MainLoop.Tokens   (
+import           SecondTransfer.Utils             (lowercaseText, hashFromUrl)
+import           SecondTransfer.MainLoop.Tokens   (
                                             UnpackedNameValueList(..)
                                             , getHeader
                                         )
 
 
-import Rede.HarFiles.JSONDataStructure 
+import SecondTransfer.HarFiles.JSONDataStructure 
 
 
 -- How do we identify resources that are being 

@@ -1,23 +1,23 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 
-import Rede.MainLoop.Tls(
+import SecondTransfer.MainLoop.Tls(
     tlsServeProtocols
     )
 
 
 import qualified Data.ByteString.Lazy         as BL
 
-import           Rede.SimpleHTTP1Response (exampleHTTP11Response)
+import           SecondTransfer.SimpleHTTP1Response (exampleHTTP11Response)
 
-import           Rede.MainLoop.PushPullType
-import           Rede.MainLoop.Conduit
-import           Rede.MainLoop.Tokens
-import           Rede.MainLoop.ConfigHelp (getServedPort, getInterfaceName)
+import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.MainLoop.Conduit
+import           SecondTransfer.MainLoop.Tokens
+import           SecondTransfer.MainLoop.ConfigHelp (getServedPort, getInterfaceName)
 
-import           Rede.SpdyProtocol.Session(basicSession)
-import           Rede.SpdyProtocol.TrivialTestWorker(FsWorkerServicePocket)
-import           Rede.SpdyProtocol.Framing.ChunkProducer(chunkProducerHelper)
+import           SecondTransfer.SpdyProtocol.Session(basicSession)
+import           SecondTransfer.SpdyProtocol.TrivialTestWorker(FsWorkerServicePocket)
+import           SecondTransfer.SpdyProtocol.Framing.ChunkProducer(chunkProducerHelper)
 
 
 main :: IO ()

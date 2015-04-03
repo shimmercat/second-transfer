@@ -1,4 +1,5 @@
-module Rede.MainLoop.Framer(
+{-# OPTIONS_HADDOCK hide #-}
+module SecondTransfer.MainLoop.Framer(
     readNextChunk
     ,readLength
 
