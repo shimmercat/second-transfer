@@ -16,15 +16,16 @@ module SecondTransfer(
     , PrincipalStream
     , PushedStreams
     , PushedStream
-    , DataAndConclussion
+    , DataAndConclusion
     , InputDataStream
     , FinalizationHeaders
     
-    -- * Basic utilities for TLS HTTP/2 servers
+    -- * Basic utilities for  HTTP/2 servers
     ,Attendant
     ,PullAction
     ,PushAction
     ,CloseAction
+    ,http2Attendant
     -- * High level OpenSSL functions. 
     -- 
     -- | Use these functions to create your TLS-compliant 
@@ -38,3 +39,4 @@ module SecondTransfer(
 
 import SecondTransfer.MainLoop.CoherentWorker 
 import SecondTransfer.MainLoop
+import SecondTransfer.Http2.MakeAttendant(http2Attendant)

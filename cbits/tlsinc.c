@@ -33,7 +33,7 @@ typedef struct {
     int protocol_list_length;
 } connection_t;
 
-// Simple structure representing a session here 
+// Simple structure representing a session here
 typedef struct {
     int socket;
     SSL *sslHandle;

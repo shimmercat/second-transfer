@@ -17,7 +17,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , PrincipalStream
     , PushedStreams
     , PushedStream
-    , DataAndConclussion
+    , DataAndConclusion
     , InputDataStream
     ) where 
 
@@ -55,13 +55,13 @@ type Footers = FinalizationHeaders
 -- | You use this type to answer a request. The `Headers` are thus response 
 --   headers and they should contain the :status pseudo-header. The `PushedStreams`
 --   is a list of pushed streams...(I don't thaink that I'm handling those yet)
-type PrincipalStream = (Headers, PushedStreams, DataAndConclussion)
+type PrincipalStream = (Headers, PushedStreams, DataAndConclusion)
 
 
 -- | A source-like conduit with the data returned in the response. The 
 --   return value of the conduit is a list of footers. For now that list can 
 --   be anything (even bottom), I'm not handling it just yet. 
-type DataAndConclussion = ConduitM () B.ByteString IO Footers
+type DataAndConclusion = ConduitM () B.ByteString IO Footers
 
 -- | Main type of this library. You implement one of these for your server.
 --   Basically this is a callback that the library calls as soon as it has
@@ -76,7 +76,7 @@ type PushedStreams = [ IO PushedStream ]
 -- | A pushed stream, represented by a list of request headers, 
 --   a list of response headers, and the usual response body  (which 
 --   may include final footers (not implemented yet)).
-type PushedStream = (Headers, Headers, DataAndConclussion)
+type PushedStream = (Headers, Headers, DataAndConclusion)
 
 -- | Gets a single header from the list
 getHeaderFromFlatList :: Headers -> B.ByteString -> Maybe B.ByteString

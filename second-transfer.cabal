@@ -2,44 +2,35 @@
 -- documentation-- see http://haskell.org/cabal/users-guide/
 
 -- The name of the package.
-name:                second-transfer
+name        :              second-transfer
 
 -- The package version.  See the Haskell package versioning policy (PVP) 
 -- for standards guiding when and how versions should be incremented.
 -- http://www.haskell.org/haskellwiki/Package_versioning_policy
--- PVP summary:      +-+------- breaking API changes
---                   | | +----- non-breaking API additions
---                   | | | +--- code changes with no API change
-version:             0.1.0.0
+-- PVP       summary:      +-+------- breaking API changes
+--                         | | +----- non-breaking API additions
+--                         | | | +--- code changes with no API change
+version     :              0.1.0.0
 
--- A short (one-line) description of the package.
-synopsis: Second Transfer HTTP/2 web server
+synopsis    :              Second Transfer HTTP/2 web server
 
--- A longer description of the package.
-description:  Second Transfer HTTP/2 web server
+description :              Second Transfer HTTP/2 web server
 
--- URL for the project homepage or repository.
-homepage:            www.zunzun.se
+homepage    :              www.zunzun.se
 
--- The license under which the package is released.
-license:             BSD3
+license     :              BSD3
 
--- The file containing the license text.
-license-file:        LICENSE
+license-file:              LICENSE
 
--- The package author(s).
-author:              Alcides Viamontes E
+author      :              Alcides Viamontes Esquivel
 
--- An email address to which users can send suggestions-- bug reports-- and 
--- patches.
-maintainer:          alcidesv@zunzun.se
+maintainer  :              alcidesv@zunzun.se
 
--- A copyright notice.
--- copyright:           
+copyright   :              Copyright 2015, Zunzun AB.          
 
-category:            Network
+category    :              Network
 
-build-type:          Simple
+build-type  :              Simple
 
 -- Extra files to be distributed with the package-- such as examples or a 
 -- README.
@@ -52,11 +43,13 @@ library
 
   exposed-modules:  SecondTransfer
                   , SecondTransfer.MainLoop
+                  , SecondTransfer.MainLoop.OpenSSL_TLS
                   , SecondTransfer.Http2
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType
                 , SecondTransfer.MainLoop.Tokens
+                , SecondTransfer.MainLoop.Framer
                 , SecondTransfer.Utils
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant
@@ -97,7 +90,7 @@ library
                  -- crypto-pubkey >= 0.2.7 && <0.3
                  -- asn1-types == 0.3.0
                  -- crypto-random == 0.0.8
-                 cryptohash >= 0.11,
+                 -- cryptohash >= 0.11,
                  -- streaming-commons >= 0.1 && < 0.2
                  conduit >= 1.2.4,
                  -- conduit-combinators >= 0.3.0 && < 0.4
@@ -137,7 +130,15 @@ library
 
   ghc-options: -threaded -eventlog -rtsopts
 
-  extra-libraries: ssl 
-                 -- crypto
+  extra-libraries: ssl crypto
 
   extra-lib-dirs: /opt/openssl-1.0.2/lib
+
+Test-Suite compiling-ok
+  type            : exitcode-stdio-1.0
+  main-is         : compiling_ok.hs
+  hs-source-dirs  : tests/tests-hs-src/
+  default-language: Haskell2010
+  build-depends   : base >=4.7 && < 4.8,
+                    second-transfer,
+                    conduit >= 1.2.4
