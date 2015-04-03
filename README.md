@@ -9,7 +9,7 @@ This is an early-stage and very experimental library to create HTTP/2 servers
 using Haskell. 
 
 To see the package docs, please check the Hackage page or 
-the file hs-src/Second-Transfer.hs.
+the file hs-src/SecondTransfer.hs.
 
 Building and installing
 -----------------------
