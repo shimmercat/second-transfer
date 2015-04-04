@@ -107,8 +107,8 @@ wrapSession coherent_worker push_action pull_action close_action = do
 
     -- We need some shared state 
     let framer_session_data = FramerSessionData {
-        _stream2flow = s2f
-        ,_stream2outputBytes = s2o 
+        _stream2flow          = s2f
+        ,_stream2outputBytes  = s2o 
         ,_defaultStreamWindow = default_stream_size_mvar
         ,_canOutput           = can_output 
         ,_noHeadersInChannel  = no_headers_in_channel
