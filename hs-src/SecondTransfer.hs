@@ -37,7 +37,7 @@ import SecondTransfer(
     , http2Attendant
     )
 
-import Data.Conduit
+import Data.Conduit(yield)
 
 
 saysHello :: 'DataAndConclusion'
@@ -70,16 +70,15 @@ main = do
             ("h2",    http2_attendant)   -- they may be slightly different, but for this 
                                          -- test it doesn't matter.
         ]
-        8000
+        8000                             -- Port to open
   where 
     http2_attendant = http2Attendant helloWorldWorker
 @
 
-`CoherentWorker` is the basic callback function that you need to implement. 
+`CoherentWorker` is the type of the basic callback function that you need to implement. 
 The callback is used to handle all requests to the server on a given negotiated ALPN 
 protocol. If you need routing functionality (and you most certainly will need it), you need
-to build that functionality yourself or use one of the many Haskell libraries to that
-end. 
+to build that functionality inside the callback. 
 
 The above program uses a test certificate by a fake certificate authority. The certificate
 is valid for the server name ("authority", in HTTP\/2 lingo) www.httpdos.com. So, in order
