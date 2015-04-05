@@ -1,6 +1,7 @@
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.Framer(
     readNextChunk
+    ,readNextChunkAndContinue
     ,readLength
 
 	,Framer
@@ -39,16 +40,16 @@ readNextChunk :: Monad m =>
 readNextChunk length_callback input_leftovers gen = do 
     let 
         maybe_length = length_callback input_leftovers
-        readUpTo lo the_length | (B.length lo) >= the_length = 
+        readUpTo_ lo the_length | (B.length lo) >= the_length = 
             return $ B.splitAt the_length lo
-        readUpTo lo the_length = do 
+        readUpTo_ lo the_length = do 
             frag <- lift gen 
-            readUpTo (lo `mappend` frag) the_length
+            readUpTo_ (lo `mappend` frag) the_length
 
     case maybe_length of 
         Just the_length -> do 
             -- Just need to read the rest .... 
-            (package_bytes, newnewleftovers) <- readUpTo input_leftovers the_length
+            (package_bytes, newnewleftovers) <- readUpTo_ input_leftovers the_length
             yield package_bytes 
             readNextChunk length_callback newnewleftovers gen 
 
@@ -59,20 +60,50 @@ readNextChunk length_callback input_leftovers gen = do
             readNextChunk length_callback new_leftovers gen
 
 
+-- 
+readNextChunkAndContinue :: Monad m =>
+    LengthCallback                         -- ^ How to know if we can split somewhere
+    -> B.ByteString                        -- ^ Input left-overs
+    -> m B.ByteString                      -- ^ Generator action
+    -> m (B.ByteString, B.ByteString)      -- ^ Packet bytes and left-overs.
+readNextChunkAndContinue length_callback input_leftovers gen = do 
+    let 
+        maybe_length = length_callback input_leftovers
+
+    case maybe_length of 
+
+        Just the_length -> do 
+            -- Just need to read the rest .... 
+            (package_bytes, newnewleftovers) <- readUpTo gen input_leftovers the_length
+            return (package_bytes, newnewleftovers)
+
+        Nothing -> do 
+            -- Read a bit more 
+            new_fragment <- gen 
+            let new_leftovers = input_leftovers `mappend` new_fragment
+            readNextChunkAndContinue length_callback new_leftovers gen
+
+
+readUpTo :: Monad m => m B.ByteString -> B.ByteString -> Int -> m (B.ByteString, B.ByteString)
+readUpTo _ lo the_length | (B.length lo) >= the_length = 
+    return $ B.splitAt the_length lo
+readUpTo gen lo the_length = do 
+    frag <- gen 
+    readUpTo gen (lo `mappend` frag) the_length
+
+
 -- Some protocols, e.g., http/2, have the client transmit a fixed-length
 -- prefix. This function reads both that prefix and returns whatever get's
 -- trapped up there.... 
 readLength :: MonadIO m => Int -> m B.ByteString -> m (B.ByteString, B.ByteString)
 readLength the_length gen = 
-    readUpTo mempty 
+    readUpTo_ mempty 
   where 
-    readUpTo lo  
+    readUpTo_ lo  
       | (B.length lo) >= the_length  = do
             -- liftIO $ putStrLn "Full read"
             return $ B.splitAt the_length lo
       | otherwise = do 
             -- liftIO $ putStrLn $ "fragment read " ++ (show lo) 
             frag <- gen 
-            readUpTo (lo `mappend` frag)
-
-  
+            readUpTo_ (lo `mappend` frag)
