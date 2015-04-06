@@ -16,10 +16,9 @@ Building and installing
 
 You need Haskell GHC compiler installed (version 7.8.3 at least). You also 
 need OpenSSL 1.0.2, since the ALPN feature and some very recent cypher-suites
-are needed by HTTP/2. In this source distribution, I have set them to live in the 
+are needed by HTTP/2. this source distribution will try to find them at  
 directory `/opt/openssl-1.0.2`, but you should be able to 
-alter the options using `cabal configure`. This package uses Haskell's foreign function 
-interface to interface with OpenSSL.
+alter the options using `cabal configure`. This package uses Haskell's FFI to interface with OpenSSL.
 
 Provided that you have all the dependencies, you should be able to just do:
 
