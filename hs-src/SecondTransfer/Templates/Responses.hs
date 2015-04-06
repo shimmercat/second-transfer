@@ -1,8 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
-module SecondTransfer.MainLoop.StreamWorker (
-    send404
-
-	,StreamWorker
+module SecondTransfer.Templates.Responses (
+	StreamWorker
 	,StreamInputToken
 	,StreamOutputAction
 	) where 
@@ -14,11 +12,7 @@ import           Data.Conduit
 
 
 import SecondTransfer.MainLoop.Tokens (
-                             StreamOutputAction(..)
-                             ,StreamInputToken
-							 ,StreamOutputAction
-							 ,StreamWorker
-                             ,UnpackedNameValueList(..)
+                             UnpackedNameValueList(..)
                              )
 
 
@@ -35,9 +29,3 @@ bad404ResponseHeaders =  UnpackedNameValueList [
                 ,("server", "ReHv0.0")
                 ]
 
-
-send404 :: ConduitM StreamInputToken StreamOutputAction IO ()
-send404 = do 
-    yield $ SendHeaders_SOA bad404ResponseHeaders
-    yield $ SendData_SOA bad404ResponseData
-    yield $ Finish_SOA
