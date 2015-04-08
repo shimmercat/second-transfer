@@ -32,22 +32,27 @@ Here is how you create a very basic HTTP/2 webserver:
 {-# LANGUAGE OverloadedStrings #-}
 import SecondTransfer(
     CoherentWorker
+    , Footers
     , DataAndConclusion
     , tlsServeWithALPN
     , http2Attendant
     )
+import SecondTransfer.Http2(
+      makeSessionsContext
+    , defaultSessionsConfig
+    )
 
-import Data.Conduit(yield)
+import Data.Conduit
 
 
-saysHello :: 'DataAndConclusion'
+saysHello :: DataAndConclusion
 saysHello = do 
-    yield "Hello world!\\ns"
+    yield "Hello world!"
     -- No footers
     return []
 
 
-helloWorldWorker :: 'CoherentWorker'
+helloWorldWorker :: CoherentWorker
 helloWorldWorker request = return (
     [
         (":status", "200")
@@ -58,10 +63,12 @@ helloWorldWorker request = return (
 
 
 -- For this program to work, it should be run from the top of 
--- the developement directory, so that it has access to the toy 
--- certificates and keys defined there. 
+-- the developement directory.
 main = do 
-    'tlsServeWithALPN'
+    sessions_context <- makeSessionsContext defaultSessionsConfig
+    let 
+        http2_attendant = http2Attendant sessions_context helloWorldWorker
+    tlsServeWithALPN
         "tests\/support\/servercert.pem"   -- Server certificate
         "tests\/support\/privkey.pem"      -- Certificate private key
         "127.0.0.1"                      -- On which interface to bind
@@ -70,9 +77,7 @@ main = do
             ("h2",    http2_attendant)   -- they may be slightly different, but for this 
                                          -- test it doesn't matter.
         ]
-        8000                             -- Port to open
-  where 
-    http2_attendant = http2Attendant helloWorldWorker
+        8000 
 @
 
 `CoherentWorker` is the type of the basic callback function that you need to implement. 
@@ -117,6 +122,9 @@ module SecondTransfer(
     , FinalizationHeaders
     
     -- * Basic utilities for  HTTP/2 servers
+    -- ** Configuration 
+    
+    -- ** Callback types
     ,Attendant
     ,PullAction
     ,PushAction

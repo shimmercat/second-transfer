@@ -1,5 +1,9 @@
 import Test.HUnit
 
+import SecondTransfer.Test.DecoySession
+
+import Tests.HTTP2Session
+
 
 test1 = TestCase (assertEqual "for (foo 3)," (1,2) (1,2))
 test2 = TestCase (
@@ -10,7 +14,11 @@ test2 = TestCase (
 		assertBool ( "(partB" ++ show y ++ ") failed" ) b
 	)
 
-tests = TestList [TestLabel "test1" test1, TestLabel "test2" test2]
+tests = TestList [
+	TestLabel "testPrefaceChecks" testPrefaceChecks,
+	TestLabel "testPrefaceChecks2" testPrefaceChecks2
+	]
+
 
 main = do 
 	runTestTT tests 

@@ -4,7 +4,10 @@
              DeriveDataTypeable, TemplateHaskell #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http2.Framer (
+    BadPrefaceException,
+
     wrapSession,
+    http2FrameLength,
 
     -- Not needed anywhere, but supress the warning about unneeded symbol
     closeAction
@@ -14,40 +17,37 @@ module SecondTransfer.Http2.Framer (
 
 import           Control.Concurrent
 import           Control.Exception
-import qualified Control.Exception            as E
-import           Control.Monad.IO.Class       (liftIO)
-import           Control.Monad.Trans.Class    (lift)
-import           Control.Monad.Trans.Reader 
-import qualified Control.Lens                 as L
-import           Control.Lens                 (view)
-import           Data.Binary                  (decode)
-import qualified Data.ByteString              as B
-import qualified Data.ByteString.Lazy         as LB
+import qualified Control.Exception                      as E
+import           Control.Lens                           (view)
+import qualified Control.Lens                           as L
+import           Control.Lens                           ((^.))
+import           Control.Monad.IO.Class                 (liftIO)
+import           Control.Monad.Trans.Class              (lift)
+import           Control.Monad.Trans.Reader
+import           Data.Binary                            (decode)
+import qualified Data.ByteString                        as B
+import qualified Data.ByteString.Lazy                   as LB
 import           Data.Conduit
-import           Data.Typeable                (Typeable)
-import           Data.Foldable                (find)
+import           Data.Foldable                          (find)
+import           Data.Typeable                          (Typeable)
 
-import qualified Network.HTTP2                as NH2
+import qualified Network.HTTP2                          as NH2
+-- Logging utilities
+import           System.Log.Logger
 
+import qualified Data.HashTable.IO                      as H
 
-import qualified Data.HashTable.IO            as H
-
-import           SecondTransfer.Http2.Session
+import           SecondTransfer.Http2.Session           
 import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker)
 import qualified SecondTransfer.MainLoop.Framer         as F
-import           SecondTransfer.MainLoop.PushPullType   (Attendant, PullAction,
-                                               PushAction, CloseAction)
+import           SecondTransfer.MainLoop.PushPullType   (Attendant, CloseAction,
+                                                         PullAction, PushAction)
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
+import           SecondTransfer.Exception
 
 
 http2PrefixLength :: Int
 http2PrefixLength = B.length NH2.connectionPreface
-
-
-data BadPrefixException = BadPrefixException 
-    deriving (Show, Typeable)
-
-instance Exception BadPrefixException
 
 
 
@@ -81,6 +81,12 @@ data FramerSessionData = FramerSessionData {
     , _noHeadersInChannel    :: MVar NoHeadersInChannel
     , _pushAction            :: PushAction
     , _closeAction           :: CloseAction
+
+    -- Global id of the session, used for e.g. error reporting.
+    , _sessionId             :: Int 
+
+    -- Sessions context, used for thing like e.g. error reporting
+    , _sessionsContext       :: SessionsContext
     }
 
 
@@ -90,12 +96,18 @@ L.makeLenses ''FramerSessionData
 type FramerSession = ReaderT FramerSessionData IO
 
 
-wrapSession :: CoherentWorker -> Attendant
-wrapSession coherent_worker push_action pull_action close_action = do
+wrapSession :: CoherentWorker -> SessionsContext -> Attendant
+wrapSession coherent_worker sessions_context push_action pull_action close_action = do
 
-    let session_start = SessionStartData {}
+    let 
+        session_id_mvar = view nextSessionId sessions_context
 
-    (session_input, session_output) <- http2Session coherent_worker session_start
+    new_session_id <- modifyMVarMasked
+        session_id_mvar
+        (\ session_id -> return (session_id+1, session_id))
+
+    (session_input, session_output) <- (http2Session 
+        coherent_worker new_session_id sessions_context)
 
     -- TODO : Add type annotations....
     s2f <- H.new 
@@ -114,15 +126,27 @@ wrapSession coherent_worker push_action pull_action close_action = do
         ,_noHeadersInChannel  = no_headers_in_channel
         ,_pushAction          = push_action
         ,_closeAction         = close_action
+        ,_sessionId           = new_session_id
+        ,_sessionsContext     = sessions_context
         }
 
-    forkIO $ close_on_error $ runReaderT (inputGatherer pull_action session_input   ) framer_session_data  
-    forkIO $ close_on_error $ runReaderT (outputGatherer session_output ) framer_session_data 
+    forkIO 
+        $ close_on_error new_session_id sessions_context 
+        $ runReaderT (inputGatherer pull_action session_input ) framer_session_data  
+    forkIO 
+        $ close_on_error new_session_id sessions_context 
+        $ runReaderT (outputGatherer session_output ) framer_session_data 
 
     return ()
 
   where 
-    close_on_error comp = E.finally comp close_action
+    close_on_error session_id session_context comp = E.finally (
+        E.catch comp (exc_handler session_id session_context)) close_action
+
+    exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
+    exc_handler x y e = do
+        sessionExceptionHandler Framer_SessionComponent x y e
+        throwIO e
 
 
 http2FrameLength :: F.LengthCallback
@@ -173,10 +197,10 @@ inputGatherer pull_action session_input = do
 
     if prefix /= NH2.connectionPreface 
       then 
-        liftIO $ throwIO BadPrefixException
+        liftIO $ do 
+            throwIO BadPrefaceException
       else 
         return ()
-
     let 
         source::Source FramerSession B.ByteString
         source = transPipe liftIO $ F.readNextChunk http2FrameLength remaining pull_action

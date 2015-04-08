@@ -5,6 +5,7 @@ module SecondTransfer.Http2.MakeAttendant (
 
 
 import           SecondTransfer.Http2.Framer            (wrapSession)
+import           SecondTransfer.Http2.Session           (SessionsContext)
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.PushPullType   (
 														 --CloseAction,
@@ -21,8 +22,8 @@ import           SecondTransfer.MainLoop.PushPullType   (
 -- 
 -- Given a `CoherentWorker`, this function wraps it with flow control, multiplexing,
 -- and state maintenance needed to run an HTTP/2 session.      
-http2Attendant :: CoherentWorker -> Attendant
-http2Attendant coherent_worker push_action pull_action  close_action = do 
+http2Attendant :: SessionsContext -> CoherentWorker -> Attendant
+http2Attendant sessions_context coherent_worker push_action pull_action  close_action = do 
     let 
-        attendant = wrapSession coherent_worker
+        attendant = wrapSession coherent_worker sessions_context
     attendant push_action pull_action close_action    

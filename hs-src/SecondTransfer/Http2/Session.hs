@@ -8,44 +8,62 @@ module SecondTransfer.Http2.Session(
     ,getFrameFromSession
     ,sendFrameToSession
     ,sendCommandToSession
+    ,defaultSessionsConfig
+    ,sessionId
+    ,reportErrorCallback
+    ,sessionsCallbacks
+    ,nextSessionId
+    ,makeSessionsContext
+    ,sessionsConfig
+    ,sessionExceptionHandler
 
     ,CoherentSession
     ,SessionInput(..)
     ,SessionInputCommand(..)
     ,SessionOutput(..)
-    ,SessionStartData(..)
+    ,SessionsContext(..)
+    ,SessionCoordinates(..)
+    ,SessionComponent(..)
+    ,SessionsCallbacks
+    ,SessionsConfig
+    ,ErrorCallback
+
+    -- Internal stuff
+    ,OutputFrame
+    ,InputFrame
     ) where
 
 
 -- System grade utilities
-import           Control.Monad                           (forever)
-import           Control.Concurrent                      (forkIO, ThreadId)
+import           Control.Concurrent                     (ThreadId, forkIO)
 import           Control.Concurrent.Chan
-import           Control.Monad.IO.Class                  (liftIO)
+import           Control.Exception                      (SomeException, throwTo)
+import qualified Control.Exception                      as E
+import           Control.Monad                          (forever)
+import           Control.Monad.IO.Class                 (liftIO)
 import           Control.Monad.Trans.Reader
-import           Control.Exception                       (throwTo)
 
-import           Data.Conduit
-import           Data.Conduit.List                       (foldMapM)
-import qualified Data.ByteString                         as B
 import           Control.Concurrent.MVar
-import qualified Data.IntSet                             as NS
-import qualified Data.HashTable.IO          as H
+import qualified Data.ByteString                        as B
+import           Data.Conduit
+import           Data.Conduit.List                      (foldMapM)
+import qualified Data.HashTable.IO                      as H
+import qualified Data.IntSet                            as NS
 
 import           Control.Lens
 
 -- No framing layer here... let's use Kazu's Yamamoto library
-import qualified Network.HTTP2            as NH2
-import qualified Network.HPACK            as HP
+import qualified Network.HPACK                          as HP
+import qualified Network.HTTP2                          as NH2
 
 -- Logging utilities
 import           System.Log.Logger
 
 -- Imports from other parts of the program
-import           SecondTransfer.MainLoop.CoherentWorker 
+import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
-import           SecondTransfer.Utils                             (unfoldChannelAndSource)
-
+import           SecondTransfer.Utils                   (unfoldChannelAndSource)
+import           SecondTransfer.Exception
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to 
 -- use :-( 
@@ -102,15 +120,6 @@ getFrameFromSession :: SessionOutput -> IO (Either SessionOutputCommand OutputFr
 getFrameFromSession (SessionOutput chan) = readChan chan
 
 
--- Here is how we make a session 
-type SessionMaker = SessionStartData -> IO Session
-
-
-
--- Here is how we make a session wrapping a CoherentWorker
-type CoherentSession = CoherentWorker -> SessionMaker 
-
-
 type HashTable k v = H.CuckooHashTable k v
 
 
@@ -134,21 +143,112 @@ data  SessionOutputCommand =
   deriving Show
 
 
--- TODO: Put here information needed for the session to work
-data SessionStartData = SessionStartData {
-    
+-- | Information used to identify a particular session. 
+newtype SessionCoordinates = SessionCoordinates  Int
+    deriving Show
+
+instance Eq SessionCoordinates where 
+    (SessionCoordinates a) == (SessionCoordinates b) =  a == b
+
+-- | Get/set a numeric Id from a `SessionCoordinates`. For example, to 
+--   get the session id with this, import `Control.Lens.(^.)` and then do 
+--
+-- @
+--      session_id = session_coordinates ^. sessionId
+-- @
+-- 
+sessionId :: Functor f => (Int -> f Int) -> SessionCoordinates -> f SessionCoordinates
+sessionId f (SessionCoordinates session_id) = 
+    fmap (\ s' -> (SessionCoordinates s')) (f session_id)
+
+
+
+-- | Components at an individual session. Used to report
+--   where in the session an error was produced. This interface is likely 
+--   to change in the future, as we add more metadata to exceptions
+data SessionComponent = 
+    SessionInputThread_SessionComponent 
+    |SessionHeadersOutputThread_SessionComponent
+    |SessionDataOutputThread_SessionComponent
+    |Framer_SessionComponent
+    deriving Show
+
+
+-- | Used by this session engine to report an error at some component, in a particular
+--   session. 
+type ErrorCallback = (SessionComponent, SessionCoordinates, SomeException) -> IO ()
+
+-- | Callbacks that you can provide your sessions to notify you 
+--   of interesting things happening in the server. 
+data SessionsCallbacks = SessionsCallbacks {
+    _reportErrorCallback :: Maybe ErrorCallback
+}
+
+makeLenses ''SessionsCallbacks
+
+
+-- | Configuration information you can provide to the session maker.
+data SessionsConfig = SessionsConfig {
+    _sessionsCallbacks :: SessionsCallbacks
+}
+
+-- makeLenses ''SessionsConfig
+
+-- | Lens to access sessionsCallbacks in the `SessionsConfig` object.
+sessionsCallbacks :: Lens' SessionsConfig SessionsCallbacks
+sessionsCallbacks  f (
+    SessionsConfig {
+        _sessionsCallbacks= s 
+    }) = fmap (\ s' -> SessionsConfig {_sessionsCallbacks = s'}) (f s)
+
+
+-- | Contains information that applies to all 
+--   sessions created in the program. Use the lenses 
+--   interface to access members of this struct. 
+-- 
+data SessionsContext = SessionsContext {
+     _sessionsConfig  :: SessionsConfig
+    ,_nextSessionId   :: MVar Int
     }
 
 
-makeLenses ''SessionStartData
+makeLenses ''SessionsContext
 
+-- Here is how we make a session 
+type SessionMaker = SessionsContext -> IO Session
+
+
+-- Here is how we make a session wrapping a CoherentWorker
+type CoherentSession = CoherentWorker -> SessionMaker 
+
+
+-- | Creates a default sessions context. Modify as needed using 
+--   the lenses interfaces
+defaultSessionsConfig :: SessionsConfig
+defaultSessionsConfig = SessionsConfig {
+    _sessionsCallbacks = SessionsCallbacks {
+            _reportErrorCallback = Nothing
+        }
+    }
+
+
+-- Adds runtime data to a context, and let it work.... 
+makeSessionsContext :: SessionsConfig -> IO SessionsContext
+makeSessionsContext sessions_config = do 
+    next_session_id_mvar <- newMVar 1 
+    return $ SessionsContext {
+        _sessionsConfig = sessions_config,
+        _nextSessionId = next_session_id_mvar
+        }
 
 data PostInputMechanism = PostInputMechanism (Chan (Maybe B.ByteString), InputDataStream)
 
 
 -- NH2.Frame != Frame
 data SessionData = SessionData {
-    _sessionInput                :: Chan (Either SessionInputCommand InputFrame)
+    _sessionsContext             :: SessionsContext 
+
+    ,_sessionInput               :: Chan (Either SessionInputCommand InputFrame)
 
     -- We need to lock this channel occassionally so that we can order multiple 
     -- header frames properly.... 
@@ -179,6 +279,8 @@ data SessionData = SessionData {
     -- raise asynchronous exceptions in the worker thread if the stream 
     -- is cancelled by the client
     ,_stream2WorkerThread        :: HashTable Int ThreadId
+
+    ,_sessionIdAtSession         :: Int
     }
 
 
@@ -186,8 +288,8 @@ makeLenses ''SessionData
 
 
 --                                v- {headers table size comes here!!}
-http2Session :: CoherentWorker -> SessionStartData -> IO Session
-http2Session coherent_worker _ =   do 
+http2Session :: CoherentWorker -> Int -> SessionsContext -> IO Session
+http2Session coherent_worker session_id sessions_context =   do 
     session_input             <- newChan
     session_output            <- newChan
     session_output_mvar       <- newMVar session_output
@@ -222,7 +324,8 @@ http2Session coherent_worker _ =   do
         }
 
     let session_data  = SessionData {
-        _sessionInput                = session_input 
+        _sessionsContext             = sessions_context
+        ,_sessionInput                = session_input 
         ,_sessionOutput              = session_output_mvar
         ,_toDecodeHeaders            = decode_headers_table_mvar
         ,_toEncodeHeaders            = encode_headers_table_mvar
@@ -232,21 +335,30 @@ http2Session coherent_worker _ =   do
         ,_streamsCancelled           = cancelled_streams_mvar
         ,_stream2PostInputMechanism  = stream2postinputmechanism
         ,_stream2WorkerThread        = stream2workerthread
+        ,_sessionIdAtSession         = session_id
         }
 
+    let 
+        exc_handler :: SessionComponent -> HTTP2SessionException -> IO () 
+        exc_handler component e = sessionExceptionHandler component session_id sessions_context e
+        exc_guard :: SessionComponent -> IO () -> IO ()
+        exc_guard component action = E.catch action $ exc_handler component
+
     -- Create an input thread that decodes frames...
-    forkIO $ runReaderT sessionInputThread session_data
+    forkIO $ exc_guard SessionInputThread_SessionComponent 
+           $ runReaderT sessionInputThread session_data
  
     -- Create a thread that captures headers and sends them down the tube 
-    forkIO $ runReaderT (headersOutputThread headers_output session_output_mvar) session_data
+    forkIO $ exc_guard SessionHeadersOutputThread_SessionComponent 
+           $ runReaderT (headersOutputThread headers_output session_output_mvar) session_data
 
     -- Create a thread that captures data and sends it down the tube
-    forkIO $ dataOutputThread data_output session_output_mvar
+    forkIO $ exc_guard SessionDataOutputThread_SessionComponent 
+           $ dataOutputThread data_output session_output_mvar
 
-    -- The two previous thread fill the session_output argument below (they write to it)
+    -- The two previous threads fill the session_output argument below (they write to it)
     -- the session machinery in the other end is in charge of sending that data through the 
     -- socket.
-    
 
     return ( (SessionInput session_input),
              (SessionOutput session_output) )
@@ -314,7 +426,6 @@ sessionInputThread  = do
                     let source = postDataSourceFromMechanism mechanism
                     return $ Just source
                   else do 
-                    -- liftIO $ putStrLn "Headers end reqeust"
                     return Nothing
 
 
@@ -344,14 +455,14 @@ sessionInputThread  = do
                 maybe_thread_id <- H.lookup stream2workerthread stream_id
                 case maybe_thread_id  of 
                     Nothing -> 
-                        errorM "HTTP2.Session" $ "Attention: could not find stream " ++ (show stream_id) ++ ("in threads register")
+                        -- This is actually more like an internal error
+                        error "InterruptingUnexistentStream"
 
                     Just thread_id -> do
                         throwTo thread_id StreamCancelledException
                         infoM "HTTP2.Session" $ "Stream successfully interrupted"
 
             continue 
-
 
         Right frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) -> do 
             -- So I got data to process
@@ -390,7 +501,6 @@ sessionInputThread  = do
 
             continue 
 
-
         Right (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _)) | NH2.testAck flags-> do 
             -- Deal with pings: this is an Ack, so do nothing
             continue 
@@ -427,6 +537,7 @@ sessionInputThread  = do
 
 
         Right somethingelse -> do 
+            -- An undhandled case here....
             liftIO $ errorM "HTTP2.Session" $  "Received problematic frame: "
             liftIO $ errorM "HTTP2.Session" $  "..  " ++ (show somethingelse)
 
@@ -762,3 +873,21 @@ dataOutputThread input_chan session_output_mvar = forever $ do
     -- Restore output capability, so that other pieces waiting can send...
     liftIO $ debugM "HTTP2.Session" $  "Output capability restored"
     liftIO $ putMVar session_output_mvar session_output                    
+
+
+sessionExceptionHandler :: E.Exception e => SessionComponent -> Int -> SessionsContext -> e -> IO ()
+sessionExceptionHandler session_component session_id sessions_context e = do 
+    let
+        getit = ( sessionsConfig . sessionsCallbacks . reportErrorCallback ) 
+        maybe_error_callback = sessions_context ^. getit 
+        error_tuple = (
+            session_component,
+            SessionCoordinates session_id, 
+            E.toException e
+            )
+    case maybe_error_callback of 
+        Nothing -> 
+            errorM "HTTP2.Session" (show (e))
+
+        Just callback -> 
+            callback error_tuple

@@ -6,6 +6,10 @@ import SecondTransfer(
 	, tlsServeWithALPN
 	, http2Attendant
 	)
+import SecondTransfer.Http2(
+	  makeSessionsContext
+	, defaultSessionsConfig
+	)
 
 import Data.Conduit
 
@@ -30,6 +34,9 @@ helloWorldWorker request = return (
 -- For this program to work, it should be run from the top of 
 -- the developement directory.
 main = do 
+	sessions_context <- makeSessionsContext defaultSessionsConfig
+	let 
+		http2_attendant = http2Attendant sessions_context helloWorldWorker
 	tlsServeWithALPN
 		"tests/support/servercert.pem"   -- Server certificate
 		"tests/support/privkey.pem"      -- Certificate private key
@@ -39,6 +46,4 @@ main = do
 			("h2",    http2_attendant)   -- they may be slightly different, but for this 
 			                             -- test it doesn't matter.
 		]
-		8000
-  where 
-  	http2_attendant = http2Attendant helloWorldWorker
+		8000 	
