@@ -37,6 +37,14 @@ Done:
 - Version 0.1: Having something that can run. No unit-testing, nothing 
                fancy. 
 
+- Version 0.2: Absolutely minimal amount of unit tests.
+
 Pending:
 
-- Version 0.2: Have some unit tests. A minimal amount of them
+- Version 0.3: Better examples of usage. 
+
+- Version 0.4: By-the-book stream state management. In particular, ensure 
+               that we are not allowing frames to come off-order from the 
+               other peer. 
+
+- Version 0.5: Guaranties about early resource release...

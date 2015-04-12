@@ -20,8 +20,8 @@ import           Control.Exception
 import qualified Control.Exception                      as E
 import           Control.Lens                           (view)
 import qualified Control.Lens                           as L
-import           Control.Lens                           ((^.))
 import           Control.Monad.IO.Class                 (liftIO)
+import qualified Control.Monad.Catch                    as C
 import           Control.Monad.Trans.Class              (lift)
 import           Control.Monad.Trans.Reader
 import           Data.Binary                            (decode)
@@ -29,7 +29,6 @@ import qualified Data.ByteString                        as B
 import qualified Data.ByteString.Lazy                   as LB
 import           Data.Conduit
 import           Data.Foldable                          (find)
-import           Data.Typeable                          (Typeable)
 
 import qualified Network.HTTP2                          as NH2
 -- Logging utilities
@@ -41,15 +40,13 @@ import           SecondTransfer.Http2.Session
 import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker)
 import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.MainLoop.PushPullType   (Attendant, CloseAction,
-                                                         PullAction, PushAction)
+                                                         PullAction, PushAction, IOProblem)
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
 
 
 http2PrefixLength :: Int
 http2PrefixLength = B.length NH2.connectionPreface
-
-
 
 -- Let's do flow control here here .... 
 
@@ -77,7 +74,11 @@ data FramerSessionData = FramerSessionData {
     , _stream2outputBytes    :: HashTable GlobalStreamId (Chan LB.ByteString)
     , _defaultStreamWindow   :: MVar Int
 
+    -- Wait variable to output bytes to the channel
     , _canOutput             :: MVar CanOutput
+    -- Flag that says if the session has been unwound... if such, 
+    -- threads are adviced to exit as early as possible
+    , _outputIsForbidden     :: MVar Bool 
     , _noHeadersInChannel    :: MVar NoHeadersInChannel
     , _pushAction            :: PushAction
     , _closeAction           :: CloseAction
@@ -87,6 +88,9 @@ data FramerSessionData = FramerSessionData {
 
     -- Sessions context, used for thing like e.g. error reporting
     , _sessionsContext       :: SessionsContext
+
+    -- For GoAway frames
+    , _lastStream            :: MVar Int 
     }
 
 
@@ -110,11 +114,13 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         coherent_worker new_session_id sessions_context)
 
     -- TODO : Add type annotations....
-    s2f <- H.new 
-    s2o <- H.new 
-    default_stream_size_mvar <- newMVar 65536
-    can_output <- newMVar CanOutput
-    no_headers_in_channel <- newMVar NoHeadersInChannel
+    s2f                       <- H.new 
+    s2o                       <- H.new 
+    default_stream_size_mvar  <- newMVar 65536
+    can_output                <- newMVar CanOutput
+    no_headers_in_channel     <- newMVar NoHeadersInChannel
+    last_stream_id            <- newMVar 0
+    output_is_forbidden       <- newMVar False
 
 
     -- We need some shared state 
@@ -128,7 +134,21 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         ,_closeAction         = close_action
         ,_sessionId           = new_session_id
         ,_sessionsContext     = sessions_context
+        ,_lastStream          = last_stream_id
+        ,_outputIsForbidden   = output_is_forbidden
         }
+
+
+    let 
+        -- TODO: Dodgy exception handling here...
+        close_on_error session_id session_context comp = E.finally (
+            E.catch comp (exc_handler session_id session_context)) close_action
+
+        exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
+        exc_handler x y e = do
+            modifyMVar_ output_is_forbidden (\ _ -> return True) 
+            sessionExceptionHandler Framer_SessionComponent x y e
+
 
     forkIO 
         $ close_on_error new_session_id sessions_context 
@@ -138,15 +158,6 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         $ runReaderT (outputGatherer session_output ) framer_session_data 
 
     return ()
-
-  where 
-    close_on_error session_id session_context comp = E.finally (
-        E.catch comp (exc_handler session_id session_context)) close_action
-
-    exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
-    exc_handler x y e = do
-        sessionExceptionHandler Framer_SessionComponent x y e
-        throwIO e
 
 
 http2FrameLength :: F.LengthCallback
@@ -196,8 +207,11 @@ inputGatherer pull_action session_input = do
     (prefix, remaining) <- liftIO $ F.readLength http2PrefixLength pull_action
 
     if prefix /= NH2.connectionPreface 
-      then 
+      then do 
+        sendGoAwayFrame NH2.ProtocolError
         liftIO $ do 
+            -- We just the the GoAway frame, although this is awfully early
+            -- and probably wrong
             throwIO BadPrefaceException
       else 
         return ()
@@ -222,57 +236,75 @@ inputGatherer pull_action session_input = do
 
                 case error_or_frame of 
 
-                    Left some_error -> do 
-                        liftIO $ putStrLn $ "Got an error: " ++ (show some_error)
+                    Left _ -> do 
+                        -- Got an error from the decoder... meaning that a frame could 
+                        -- not be decoded.... in this case we send a cancel session command 
+                        -- to the session. 
+                        liftIO $ errorM "HTTP2.Framer" "CouldNotDecodeFrame"
+                        -- Send frames like GoAway and such...
+                        lift $ sendGoAwayFrame NH2.ProtocolError
+                        -- Inform the session that it can tear down itself
+                        liftIO $ sendCommandToSession session_input CancelSession_SIC
+                        -- Any resources remaining here can be disposed
+                        lift $ releaseFramer
+                        -- And end this thread
 
+                    Right right_frame -> do
+                        case right_frame of 
 
-                    Right (NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do 
-                        -- Bookkeep the increase on bytes on that stream
-                        -- liftIO $ putStrLn $ "Extra capacity for stream " ++ (show stream_id)
-                        lift $ addCapacity (NH2.fromStreamIdentifier stream_id) (fromIntegral credit)
-                        return ()
-
-
-                    Right frame@(NH2.Frame _ (NH2.SettingsFrame settings_list) ) -> do 
-                        -- Increase all the stuff....
-                        case find (\(i,_) -> i == NH2.SettingsInitialWindowSize) settings_list of 
-
-                            Just (_, new_default_stream_size) -> do 
-                                old_default_stream_size_mvar <- view defaultStreamWindow
-                                old_default_stream_size <- liftIO $ takeMVar old_default_stream_size_mvar
-                                let general_delta = new_default_stream_size - old_default_stream_size
-                                stream_to_flow <- view stream2flow
-                                -- Add capacity to everybody's windows
-                                liftIO $ 
-                                    H.mapM_ (
-                                            \ (k,v) -> if k /=0 
-                                                          then writeChan v (AddBytes_FCM general_delta) 
-                                                          else return () )
-                                            stream_to_flow
-
-
-                                -- And set a new value 
-                                liftIO $ putMVar old_default_stream_size_mvar new_default_stream_size
-
-
-                            Nothing -> 
+                            (NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do 
+                                -- Bookkeep the increase on bytes on that stream
+                                -- liftIO $ putStrLn $ "Extra capacity for stream " ++ (show stream_id)
+                                lift $ addCapacity (NH2.fromStreamIdentifier stream_id) (fromIntegral credit)
                                 return ()
 
-                        -- And send the frame down to the session
-                        liftIO $ sendFrameToSession session_input frame
+
+                            frame@(NH2.Frame _ (NH2.SettingsFrame settings_list) ) -> do 
+                                -- Increase all the stuff....
+                                case find (\(i,_) -> i == NH2.SettingsInitialWindowSize) settings_list of 
+
+                                    Just (_, new_default_stream_size) -> do 
+                                        old_default_stream_size_mvar <- view defaultStreamWindow
+                                        old_default_stream_size <- liftIO $ takeMVar old_default_stream_size_mvar
+                                        let general_delta = new_default_stream_size - old_default_stream_size
+                                        stream_to_flow <- view stream2flow
+                                        -- Add capacity to everybody's windows
+                                        liftIO $ 
+                                            H.mapM_ (
+                                                    \ (k,v) -> if k /=0 
+                                                                  then writeChan v (AddBytes_FCM general_delta) 
+                                                                  else return () )
+                                                    stream_to_flow
 
 
-                    Right a_frame   -> do 
-                        liftIO $ sendFrameToSession session_input a_frame
+                                        -- And set a new value 
+                                        liftIO $ putMVar old_default_stream_size_mvar new_default_stream_size
 
-                -- tail recursion: go again...
-                consume 
+
+                                    Nothing -> 
+                                        -- This is a silenced internal error
+                                        return ()
+
+                                -- And send the frame down to the session, so that session specific settings
+                                -- can be applied. 
+                                liftIO $ sendFrameToSession session_input frame
+
+
+                            a_frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) _ )   -> do 
+                                -- Update the keep of last stream 
+                                lift $ updateLastStream $ NH2.fromStreamIdentifier stream_id
+
+                                -- Send frame to the session
+                                liftIO $ sendFrameToSession session_input a_frame
+                        -- tail recursion: go again...
+                        consume 
 
             Nothing    -> 
                 -- We may as well exit this thread
                return ()
 
 
+-- All the output frames come this way first
 outputGatherer :: SessionOutput -> FramerSession ()
 outputGatherer session_output = do 
 
@@ -296,11 +328,9 @@ outputGatherer session_output = do
 
         case command_or_frame of 
 
-            Left cmd -> do 
-                -- TODO: This is just a quickie behavior I dropped 
-                -- here, semantics need to be different probably.
-                liftIO $ putStrLn $ "Received a command... terminating " ++ (show cmd)
-
+            Left CancelSession_SOC -> do 
+                -- The session wants to cancel things
+                releaseFramer
 
             Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _) ) -> do
                 -- This frame is flow-controlled... I may be unable to send this frame in
@@ -320,12 +350,10 @@ outputGatherer session_output = do
 
                 loopPart
 
-
             Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
                 handleHeadersOfStream p1 p2
                 
                 loopPart
-
 
             Right (p1, p2@(NH2.ContinuationFrame _) ) -> do
                 handleHeadersOfStream p1 p2
@@ -342,21 +370,50 @@ outputGatherer session_output = do
                 loopPart
 
 
+updateLastStream :: GlobalStreamId  -> FramerSession ()
+updateLastStream stream_id = do 
+    last_stream_id_mvar <- view lastStream
+    liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
+
+
+
 startStreamOutputQueue :: Int -> FramerSession (Chan LB.ByteString, Chan FlowControlCommand)
 startStreamOutputQueue stream_id = do
     -- New thread for handling outputs of this stream is needed
     bytes_chan <- liftIO newChan 
     command_chan <- liftIO newChan 
+
     s2o <- view stream2outputBytes
+
     liftIO $ H.insert s2o stream_id bytes_chan 
+
     s2c <- view stream2flow
-    liftIO $ H.insert s2c stream_id command_chan 
+
+
+    liftIO $ H.insert s2c stream_id command_chan
+
+    --  
     initial_cap_mvar <- view defaultStreamWindow
     initial_cap <- liftIO $ readMVar initial_cap_mvar
+    close_action <- view closeAction
+    sessions_context <- view sessionsContext 
+    session_id' <- view SecondTransfer.Http2.Framer.sessionId
+    output_is_forbidden_mvar <- view outputIsForbidden 
 
     -- And don't forget the thread itself
+    let 
+        close_on_error session_id session_context comp = E.finally (
+            E.catch comp (exc_handler session_id session_context)) close_action
+
+        exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
+        exc_handler x y e = do
+            -- Let's also decree that other streams don't even try
+            modifyMVar_ output_is_forbidden_mvar ( \ _ -> return True)
+            sessionExceptionHandler Framer_SessionComponent x y e
+
+
     read_state <- ask 
-    liftIO $ forkIO $ runReaderT
+    liftIO $ forkIO $ close_on_error session_id' sessions_context  $ runReaderT
         (flowControlOutput stream_id initial_cap "" command_chan bytes_chan)
         read_state
 
@@ -365,6 +422,9 @@ startStreamOutputQueue stream_id = do
 
 -- This works in the output side of the HTTP/2 framing session, and it acts as a 
 -- semaphore ensuring that headers are output without any interleaved frames. 
+-- 
+-- There are more synchronization mechanisms in the session, this does not act 
+-- alone. 
 handleHeadersOfStream :: NH2.EncodeInfo -> NH2.FramePayload -> FramerSession ()
 handleHeadersOfStream p1@(NH2.EncodeInfo _ _ _) frame_payload
     | (frameIsHeaderOfStream frame_payload) && (not $ frameEndsHeaders p1 frame_payload) = do
@@ -384,8 +444,8 @@ handleHeadersOfStream p1@(NH2.EncodeInfo _ _ _) frame_payload
     | frameEndsHeaders p1 frame_payload = do 
         -- I can only get here for a continuation frame  after something else that is a headers
         no_headers <- view noHeadersInChannel
-        result <- liftIO $ tryPutMVar no_headers NoHeadersInChannel
-        liftIO $ putStrLn $ "Could put MVAR (yes must be): " ++ (show result)
+        liftIO $ putMVar no_headers NoHeadersInChannel
+        return ()
 
 
 frameIsHeaderOfStream :: NH2.FramePayload -> Bool
@@ -401,6 +461,8 @@ frameEndsHeaders (NH2.EncodeInfo flags _ _) (NH2.ContinuationFrame _) = NH2.test
 frameEndsHeaders _ _ = False
 
 
+-- Push a frame into the output channel... this waits for the 
+-- channel to be free to send. 
 pushFrame :: NH2.EncodeInfo
              -> NH2.FramePayload -> FramerSession ()
 pushFrame p1 p2 = do
@@ -408,23 +470,32 @@ pushFrame p1 p2 = do
     sendBytes bs
 
 
+sendGoAwayFrame :: NH2.ErrorCodeId -> FramerSession ()
+sendGoAwayFrame error_code = do
+    last_stream_id_mvar <- view lastStream
+    last_stream_id <- liftIO $ readMVar last_stream_id_mvar
+    pushFrame (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing)
+        (NH2.GoAwayFrame (NH2.toStreamIdentifier last_stream_id) error_code "")
+
+
 sendBytes :: LB.ByteString -> FramerSession ()
 sendBytes bs = do
     push_action <- view pushAction
     can_output <- view canOutput 
     liftIO $ do 
-        bs `seq` takeMVar can_output
-        push_action bs
-        putMVar  can_output CanOutput
+        bs `seq` 
+            (C.bracket 
+                (takeMVar   can_output)
+                (\ _ -> push_action bs)
+                (\ c -> putMVar  can_output c)
+            )
 
 
--- A thread in charge of doing flow control transmission
--- TODO: Do session flow control..... 
+-- A thread in charge of doing flow control transmission....This sends already
+-- formatted frames (ByteStrings), not the frames themselves. And it doesn't 
+-- mess with the structure of the packets.
 flowControlOutput :: Int -> Int -> LB.ByteString -> (Chan FlowControlCommand) -> (Chan LB.ByteString) ->  FramerSession ()
 flowControlOutput stream_id capacity leftovers commands_chan bytes_chan = do 
-    -- Get some bytes to send 
-    
-
     if leftovers == "" 
       then do
         -- Get more data (possibly block waiting for it)
@@ -435,20 +506,26 @@ flowControlOutput stream_id capacity leftovers commands_chan bytes_chan = do
         let amount = fromIntegral $ ((LB.length leftovers) - 9)
         if  amount <= capacity 
           then do
+            -- Is 
             -- I can send ... if no headers are in process....
             no_headers <- view noHeadersInChannel
-            liftIO $ takeMVar no_headers
-            sendBytes leftovers
-            -- liftIO $ putStrLn $ "Sent flow-controlled data for " ++ (show stream_id)
-            -- liftIO $ putStrLn $ "Capacity left " ++ (show (capacity - amount))
-            liftIO $ putMVar no_headers NoHeadersInChannel
-            -- and tail-invoke 
+            C.bracket
+                (liftIO $ takeMVar no_headers)
+                (\ _ -> liftIO $ putMVar no_headers NoHeadersInChannel)
+                (\ _ -> sendBytes leftovers )
             flowControlOutput  stream_id (capacity - amount) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead 
-            liftIO $ putStrLn $ "Warning: channel flow-saturated " ++ (show stream_id)
+            -- liftIO $ putStrLn $ "Warning: channel flow-saturated " ++ (show stream_id)
             command <- liftIO $ readChan commands_chan
             case command of 
                 AddBytes_FCM delta_cap -> do 
                     -- liftIO $ putStrLn $ "Flow control delta_cap stream " ++ (show stream_id)
                     flowControlOutput stream_id (capacity + delta_cap) leftovers commands_chan bytes_chan
+
+
+releaseFramer :: FramerSession ()
+releaseFramer = do 
+    -- Release any resources pending...
+
+    return ()

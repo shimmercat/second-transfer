@@ -35,7 +35,7 @@ simpleWorker request = return (
 
 setError :: MVar Bool -> ErrorCallback
 setError mvar = \ error_info -> do 
-    putStrLn $ show error_info
+    -- putStrLn $ show error_info
     modifyMVar_ mvar (\ _ -> return True )
 
 

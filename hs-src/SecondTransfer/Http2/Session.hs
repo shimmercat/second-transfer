@@ -21,6 +21,7 @@ module SecondTransfer.Http2.Session(
     ,SessionInput(..)
     ,SessionInputCommand(..)
     ,SessionOutput(..)
+    ,SessionOutputCommand(..)
     ,SessionsContext(..)
     ,SessionCoordinates(..)
     ,SessionComponent(..)
@@ -45,10 +46,13 @@ import           Control.Monad.Trans.Reader
 
 import           Control.Concurrent.MVar
 import qualified Data.ByteString                        as B
+import qualified Data.ByteString.Builder                as Bu
+import qualified Data.ByteString.Lazy                   as Bl
 import           Data.Conduit
 import           Data.Conduit.List                      (foldMapM)
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
+import           Data.Monoid                            as Mo
 
 import           Control.Lens
 
@@ -124,7 +128,7 @@ type HashTable k v = H.CuckooHashTable k v
 
 
 -- Blaze builder could be more proper here... 
-type Stream2HeaderBlockFragment = HashTable GlobalStreamId B.ByteString
+type Stream2HeaderBlockFragment = HashTable GlobalStreamId Bu.Builder
 
 
 type WorkerMonad = ReaderT WorkerThreadEnvironment IO 
@@ -277,7 +281,7 @@ data SessionData = SessionData {
     -- Worker thread register. This is a dictionary from stream id to 
     -- the ThreadId of the thread with the worker thread. I use this to 
     -- raise asynchronous exceptions in the worker thread if the stream 
-    -- is cancelled by the client
+    -- is cancelled by the client. This way we get early finalization. 
     ,_stream2WorkerThread        :: HashTable Int ThreadId
 
     ,_sessionIdAtSession         :: Int
@@ -390,7 +394,7 @@ sessionInputThread  = do
 
         Left CancelSession_SIC -> do 
             -- Good place to tear down worker threads... Let the rest of the finalization
-            -- to somebody else....
+            -- to the framer
             liftIO $ do 
                 H.mapM_
                     (\ (_, thread_id) -> do
@@ -692,9 +696,9 @@ appendHeaderFragmentBlock global_stream_id bytes = do
     maybe_old_block <- liftIO $ H.lookup ht global_stream_id
     new_block <- return $ case maybe_old_block of 
 
-        Nothing -> bytes
+        Nothing -> Bu.byteString bytes
 
-        Just something -> something `B.append` bytes 
+        Just something -> something `mappend` (Bu.byteString bytes) 
 
     liftIO $ H.insert ht global_stream_id new_block
 
@@ -703,7 +707,7 @@ getHeaderBytes :: GlobalStreamId -> ReaderT SessionData IO B.ByteString
 getHeaderBytes global_stream_id = do 
     ht <- view stream2HeaderBlockFragment 
     Just bytes <- liftIO $ H.lookup ht global_stream_id
-    return bytes
+    return $ Bl.toStrict $ Bu.toLazyByteString bytes
 
 
 frameIsHeaderOfStream :: InputFrame -> Maybe (GlobalStreamId, B.ByteString)
