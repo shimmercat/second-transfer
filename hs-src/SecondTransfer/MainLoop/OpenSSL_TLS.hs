@@ -140,6 +140,7 @@ tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the serve
 tlsServeWithALPN certificate_filename key_filename interface_name attendants interface_port = do 
 
     let protocols_bs = protocolsToWire $ fmap (\ (s,_) -> pack s) attendants
+    infoM "OpenSSL" "Entering tlsServeWithALPN"
     withCString certificate_filename $ \ c_certfn -> withCString key_filename $ \ c_keyfn -> withCString interface_name $ \ c_iname -> do 
 
         connection_ptr <- BU.unsafeUseAsCStringLen protocols_bs $ \ (pchar, len) ->
@@ -152,9 +153,11 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                 (fromIntegral len)
 
         if connection_ptr == nullPtr 
-          then 
+          then do
+            errorM "OpenSSL" "Could not create listening socket"
             throwIO $ TLSLayerGenericProblem "Could not create listening end"
-          else 
+          else do
+            infoM "OpenSSL" "Listening socket created"
             return ()
 
         forever $ do 
@@ -166,6 +169,7 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                             r = case result_code of  
                                 re  | re == allOk        -> do 
                                         p <- peek wired_ptr_ptr
+                                        infoM "OpenSSL" "A connection was accepted"
                                         return $ Right  p
                                     | re == timeoutReached -> tryOnce 
                                     | re == badHappened  -> return $ Left "A wait for connection failed"
