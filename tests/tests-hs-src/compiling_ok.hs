@@ -3,8 +3,9 @@ import SecondTransfer(
 	CoherentWorker
 	, Footers
 	, DataAndConclusion
-	, tlsServeWithALPN
+	, tlsServeWithALPNAndFinishOnRequest
 	, http2Attendant
+	, FinishRequest(..)
 	)
 import SecondTransfer.Http2(
 	  makeSessionsContext
@@ -12,7 +13,8 @@ import SecondTransfer.Http2(
 	)
 
 import Data.Conduit
-
+import Control.Concurrent         (threadDelay, forkIO)
+import Control.Concurrent.MVar    
 
 saysHello :: DataAndConclusion
 saysHello = do 
@@ -35,9 +37,13 @@ helloWorldWorker request = return (
 -- the developement directory.
 main = do 
 	sessions_context <- makeSessionsContext defaultSessionsConfig
+	finish <- newEmptyMVar
+	forkIO $ do 
+		threadDelay 1000000
+		putMVar finish FinishRequest 
 	let 
 		http2_attendant = http2Attendant sessions_context helloWorldWorker
-	tlsServeWithALPN
+	tlsServeWithALPNAndFinishOnRequest
 		"tests/support/servercert.pem"   -- Server certificate
 		"tests/support/privkey.pem"      -- Certificate private key
 		"127.0.0.1"                      -- On which interface to bind
@@ -46,4 +52,5 @@ main = do
 			("h2",    http2_attendant)   -- they may be slightly different, but for this 
 			                             -- test it doesn't matter.
 		]
-		8000 	
+		8000
+		finish
