@@ -230,14 +230,15 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                             return ()
 
 
--- | Interruptible version of `tlsServeWithALPN`. Use the extra argument to notify 
---   the server of finishing. 
+-- | Interruptible version of `tlsServeWithALPN`. Use the extra argument to ask 
+--   the server to finish: you pass an empty MVar and when you want to finish you 
+--   just populate it. 
 tlsServeWithALPNAndFinishOnRequest :: FilePath 
                  -> FilePath              -- ^ Same as for `tlsServeWithALPN`             
                  -> String                -- ^ Same as for `tlsServeWithALPN`
                  -> [(String, Attendant)] -- ^ Same as for `tlsServeWithALPN`
                  -> Int                   -- ^ Same as for `tlsServeWithALPN`
-                 -> MVar FinishRequest    -- ^ Finish request
+                 -> MVar FinishRequest    -- ^ Finish request, write a value here to finish serving
                  -> IO ()
 tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_name attendants interface_port finish_request = do 
 
