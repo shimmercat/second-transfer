@@ -30,8 +30,8 @@ import qualified Data.ByteString.Unsafe     as BU
 import           System.Log.Logger
 
 import           SecondTransfer.MainLoop.PushPullType
-           
 
+#include "Logging.cpphs"
 
 -- | Exception inheriting from `IOProblem`. This is thrown by the 
 -- OpenSSL subsystem to signal that the connection was broken or that 
@@ -140,7 +140,7 @@ tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the serve
 tlsServeWithALPN certificate_filename key_filename interface_name attendants interface_port = do 
 
     let protocols_bs = protocolsToWire $ fmap (\ (s,_) -> pack s) attendants
-    infoM "OpenSSL" "Entering tlsServeWithALPN"
+    INSTRUMENTATION( infoM "OpenSSL" "Entering tlsServeWithALPN" )
     withCString certificate_filename $ \ c_certfn -> withCString key_filename $ \ c_keyfn -> withCString interface_name $ \ c_iname -> do 
 
         connection_ptr <- BU.unsafeUseAsCStringLen protocols_bs $ \ (pchar, len) ->
@@ -154,10 +154,10 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
         if connection_ptr == nullPtr 
           then do
-            errorM "OpenSSL" "Could not create listening socket"
+            INSTRUMENTATION( errorM "OpenSSL" "Could not create listening socket" )
             throwIO $ TLSLayerGenericProblem "Could not create listening end"
           else do
-            infoM "OpenSSL" "Listening socket created"
+            INSTRUMENTATION( infoM "OpenSSL" "Listening socket created" )
             return ()
 
         forever $ do 
@@ -169,7 +169,7 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                             r = case result_code of  
                                 re  | re == allOk        -> do 
                                         p <- peek wired_ptr_ptr
-                                        infoM "OpenSSL" "A connection was accepted"
+                                        INSTRUMENTATION( infoM "OpenSSL" "A connection was accepted" )
                                         return $ Right  p
                                     | re == timeoutReached -> tryOnce 
                                     | re == badHappened  -> return $ Left "A wait for connection failed"
@@ -179,8 +179,8 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
             case either_wired_ptr of 
 
                 Left msg -> do 
-                    errorM "OpenSSL" $ ".. wait for connection failed. " ++ msg
-
+                    INSTRUMENTATION( errorM "OpenSSL" $ ".. wait for connection failed. " ++ msg )
+                    return ()
 
                 Right wired_ptr -> do 
                     already_closed_mvar <- newMVar False
@@ -193,7 +193,9 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                         pullAction = do 
                             allocaBytes useBufferSize $ \ pcharbuffer -> 
                                 alloca $ \ data_recvd_ptr -> do 
+                                    INSTRUMENTATION( infoM "OpenSSL" "Waiting for data" )
                                     result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
+                                    INSTRUMENTATION( infoM "OpenSSL" "Received data" )
                                     recvd_bytes <- case result of 
                                         r | r == allOk       -> peek data_recvd_ptr
                                           | r == badHappened -> throwIO $ TLSLayerGenericProblem "Could not receive data"
@@ -225,7 +227,7 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                             E.catch 
                                 (session_attendant pushAction pullAction closeAction)
                                 ((\ e -> do 
-                                    errorM "OpenSSL" " ** Session ended by TLSLayerGenericProblem (well handled)"
+                                    INSTRUMENTATION( errorM "OpenSSL" " ** Session ended by TLSLayerGenericProblem (well handled)")
                                     throwIO e
                                 )::TLSLayerGenericProblem -> IO () )
 

@@ -141,6 +141,9 @@ module SecondTransfer(
 
     ,TLSLayerGenericProblem(..)
     ,FinishRequest(..)
+
+    -- | Activate logging to terminal
+    ,enableConsoleLogging
 	) where 
 
 import SecondTransfer.MainLoop.CoherentWorker 

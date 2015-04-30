@@ -18,6 +18,8 @@ module SecondTransfer.MainLoop (
 	,tlsServeWithALPN
     ,tlsServeWithALPNAndFinishOnRequest
 
+    ,enableConsoleLogging
+
     ,TLSLayerGenericProblem(..)
     ,FinishRequest(..)
 	) where 
@@ -29,3 +31,4 @@ import           SecondTransfer.MainLoop.PushPullType   (Attendant, PullAction,
                                                          )
 
 import           SecondTransfer.MainLoop.OpenSSL_TLS
+import           SecondTransfer.MainLoop.Logging         (enableConsoleLogging)

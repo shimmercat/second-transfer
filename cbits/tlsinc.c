@@ -63,7 +63,7 @@ static int thread_setup(void);
 
 ////////////////////////////////////////////////////////////////////////
 
- 
+
 static int threads_are_up = 0;
 
 // Leaky implementation now 
@@ -71,79 +71,71 @@ void close_connection(connection_t* conn)
 {
     if (conn->socket)
     {
-      close (conn->socket);
-      conn->socket = 0;
+        close (conn->socket);
+        conn->socket = 0;
     }
 
     if (conn->sslContext)
     {
-      SSL_CTX_free(conn->sslContext);
-      conn->sslContext = 0;
+        SSL_CTX_free(conn->sslContext);
+        conn->sslContext = 0;
     }
 
-  free(conn);
+    free(conn);
 }
 
 // For this example, we'll be testing on openssl.org
 
-// Wired-in data that I will need to use?
-
-#define CERTIFICATE_PLACE "/home/alcides/projects/rede/mimic/config/servercert.pem"
-#define PRIVKEY_PLACE     "/home/alcides/projects/rede/mimic/config/privkey.pem"
-// This should bind to local interface
-#define SERVER  "www.httpdos.com"
-// Grr
-#define PORT 1060
 
 // Establish a regular tcp connection
 static int tcpStart (char* hostname, int portno, int* errorh)
 {
-  int error, handle;
-  *errorh = 0;
-  struct hostent *host;
-  struct sockaddr_in server;
+    int error, handle;
+    *errorh = 0;
+    struct hostent *host;
+    struct sockaddr_in server;
 
-  bzero((char *) &server, sizeof(server));
-   
+    bzero((char *) &server, sizeof(server));
 
-  host = gethostbyname (hostname);
-  handle = socket (AF_INET, SOCK_STREAM, 0);
-  int one = 1;
-  setsockopt(handle, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-  if (handle == -1)
+
+    host = gethostbyname (hostname);
+    handle = socket (AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(handle, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (handle == -1)
     {
-      perror ("Socket");
-      handle = 0;
-      *errorh = BAD_HAPPENED;
+        perror ("Socket could not be created");
+        handle = 0;
+        *errorh = BAD_HAPPENED;
     }
-  else
+    else
     {
-      server.sin_family = AF_INET;
-      server.sin_port = htons (portno);
-      server.sin_addr = *((struct in_addr *) host->h_addr);
-      bzero (&(server.sin_zero), 8);
+        server.sin_family = AF_INET;
+        server.sin_port = htons (portno);
+        server.sin_addr = *((struct in_addr *) host->h_addr);
+        bzero (&(server.sin_zero), 8);
 
-      error = bind (handle, (struct sockaddr *) &server,
-                       sizeof (struct sockaddr));
-      if (error == -1)
+        error = bind (handle, (struct sockaddr *) &server,
+                sizeof (struct sockaddr));
+        if (error == -1)
         {
-          perror ("Bind");
-          handle = 0;
-          *errorh = BAD_HAPPENED;
-        }
-      else 
-        {
-          error = listen(handle, 5);
-          if ( error != 0 )
-          {
-            perror("Listen");
+            perror ("Bind");
             handle = 0;
             *errorh = BAD_HAPPENED;
-          }
+        }
+        else 
+        {
+            error = listen(handle, 5);
+            if ( error != 0 )
+            {
+                perror("Listen");
+                handle = 0;
+                *errorh = BAD_HAPPENED;
+            }
         }
     }
 
-  return handle;
+    return handle;
 }
 
 // Dh_Callback {{{
@@ -177,22 +169,22 @@ DH *get_dh2236()
         0x69,0x49,0x22,0x24,0xB6,0xB8,0x45,0xCA,0x8F,0x35,0x71,0x45,
         0x4C,0x65,0x38,0x11,0x21,0xD5,0x39,0x03,0x4D,0x05,0xBB,0x95,
         0x43,0x58,0xBB,0xF3,
-        };
+    };
     static unsigned char dh2236_g[]={
         0x02,
-        };
+    };
     DH *dh;
 
     if ((dh=DH_new()) == NULL) return(NULL);
     dh->p=BN_bin2bn(dh2236_p,sizeof(dh2236_p),NULL);
     dh->g=BN_bin2bn(dh2236_g,sizeof(dh2236_g),NULL);
     if ((dh->p == NULL) || (dh->g == NULL))
-        { DH_free(dh); return(NULL); }
+    { DH_free(dh); return(NULL); }
     return(dh);
 }
 DH *get_dh2048()
 {
-static unsigned char dh2048_p[]={
+    static unsigned char dh2048_p[]={
         0xCE,0x28,0x14,0x1C,0xEF,0x22,0x1D,0x86,0xEA,0x10,0x00,0x50,
         0x24,0x42,0x95,0xC3,0x07,0x5A,0x87,0xED,0x0F,0xC5,0xDC,0x0F,
         0x5E,0x7E,0x69,0x25,0x85,0x90,0x39,0x60,0x1E,0x87,0x5C,0x4B,
@@ -215,22 +207,22 @@ static unsigned char dh2048_p[]={
         0x06,0x59,0x4F,0xE7,0x5B,0xD2,0xFC,0x25,0xC6,0x2C,0xA3,0xE8,
         0x05,0xE5,0x8D,0xC2,0x94,0x76,0x90,0x63,0x29,0xB4,0xEE,0x2D,
         0xD6,0x50,0x83,0x8B,
-        };
-static unsigned char dh2048_g[]={
+    };
+    static unsigned char dh2048_g[]={
         0x02,
-        };
-DH *dh;
+    };
+    DH *dh;
 
-if ((dh=DH_new()) == NULL) return(NULL);
-dh->p=BN_bin2bn(dh2048_p,sizeof(dh2048_p),NULL);
-dh->g=BN_bin2bn(dh2048_g,sizeof(dh2048_g),NULL);
-if ((dh->p == NULL) || (dh->g == NULL))
-        { DH_free(dh); return(NULL); }
-return(dh);
+    if ((dh=DH_new()) == NULL) return(NULL);
+    dh->p=BN_bin2bn(dh2048_p,sizeof(dh2048_p),NULL);
+    dh->g=BN_bin2bn(dh2048_g,sizeof(dh2048_g),NULL);
+    if ((dh->p == NULL) || (dh->g == NULL))
+    { DH_free(dh); return(NULL); }
+    return(dh);
 }
 
 DH *get_dh1024()
-    {
+{
     static unsigned char dh1024_p[]={
         0x87,0xF4,0xE5,0x5A,0x1E,0x7F,0x98,0x83,0xFD,0x23,0x6A,0xF3,
         0x8C,0xE8,0x2F,0x35,0x64,0x3D,0x13,0x34,0x5B,0x0A,0x52,0xEC,
@@ -243,17 +235,17 @@ DH *get_dh1024()
         0x69,0xF8,0x07,0x4F,0x33,0x17,0x72,0xCC,0xEB,0xBD,0x77,0xD1,
         0x9C,0x40,0xA6,0x55,0xE3,0x87,0x76,0x66,0x3B,0xE3,0xE4,0x6A,
         0x4B,0x6B,0xF1,0x92,0x1A,0x3A,0x25,0xC3,
-        };
+    };
     static unsigned char dh1024_g[]={
         0x02,
-        };
+    };
     DH *dh;
 
     if ((dh=DH_new()) == NULL) return(NULL);
     dh->p=BN_bin2bn(dh1024_p,sizeof(dh1024_p),NULL);
     dh->g=BN_bin2bn(dh1024_g,sizeof(dh1024_g),NULL);
     if ((dh->p == NULL) || (dh->g == NULL))
-        { DH_free(dh); return(NULL); }
+    { DH_free(dh); return(NULL); }
     return (dh);
 }
 
@@ -264,8 +256,8 @@ static DH *tmp_dh_callback(SSL *s, int is_export, int keylength);
 // Setup dh params 
 static void setup_dh_parms(SSL_CTX *sslContext)
 {
- /* Set up ephemeral DH stuff */
- SSL_CTX_set_tmp_dh_callback(sslContext, tmp_dh_callback);
+    /* Set up ephemeral DH stuff */
+    SSL_CTX_set_tmp_dh_callback(sslContext, tmp_dh_callback);
 }
 
 static DH *tmp_dh_callback(SSL *s, int is_export, int keylength)
@@ -286,7 +278,7 @@ static DH *tmp_dh_callback(SSL *s, int is_export, int keylength)
             break;
         default:
             /* Generating a key on the fly is very costly, so use what is there */
-            printf("Keylength %d \n", keylength);
+            printf("UNEXPECTED: Keylength %d \n", keylength);
     }
     return(dh_tmp);
 }
@@ -295,97 +287,97 @@ static DH *tmp_dh_callback(SSL *s, int is_export, int keylength)
 
 
 static int protocol_select (
-     SSL *ssl,
-     const unsigned char **out,
-     unsigned char *outlen,
-     const unsigned char *in,
-     unsigned int inlen,
-     void *arg)
+        SSL *ssl,
+        const unsigned char **out,
+        unsigned char *outlen,
+        const unsigned char *in,
+        unsigned int inlen,
+        void *arg)
 {
-  // Oh well, C is a verbose beast
-  connection_t* conn = (connection_t*) arg;
-  static char output[64];
+    // Oh well, C is a verbose beast
+    connection_t* conn = (connection_t*) arg;
+    static char output[64];
 
-  char* incursor = (char*) in;
+    char* incursor = (char*) in;
 
-  while (incursor < (char*)in + inlen )
-  {
-    // Got a protocol.... can I satisfy it?
-    char sublen = *incursor;
-    printf("offered prot %.*s \n", sublen, incursor+1);
-
-    char* stored_cursor = conn->protocol_list;
-    int sto_protocol = 0;
-
-    while( stored_cursor < conn->protocol_list + conn->protocol_list_length)
+    while (incursor < (char*)in + inlen )
     {
-      char sublen2 = *stored_cursor;
+        // Got a protocol.... can I satisfy it?
+        char sublen = *incursor;
+        //printf("offered prot %.*s \n", sublen, incursor+1);
 
-      if (sublen != sublen2)
-      {
-        
-      } else {
-        int cmpresult = strncmp( incursor + 1, stored_cursor + 1, sublen);
-        if (cmpresult == 0)
+        char* stored_cursor = conn->protocol_list;
+        int sto_protocol = 0;
+
+        while( stored_cursor < conn->protocol_list + conn->protocol_list_length)
         {
-          // They are equal, choose this one...
-          strncpy( output, stored_cursor+1, sublen);
-          *outlen = sublen;
-          *out = output;
+            char sublen2 = *stored_cursor;
+
+            if (sublen != sublen2)
+            {
+
+            } else {
+                int cmpresult = strncmp( incursor + 1, stored_cursor + 1, sublen);
+                if (cmpresult == 0)
+                {
+                    // They are equal, choose this one...
+                    strncpy( output, stored_cursor+1, sublen);
+                    *outlen = sublen;
+                    *out = output;
 
 
-          return SSL_TLSEXT_ERR_OK;
+                    return SSL_TLSEXT_ERR_OK;
+                }
+            }
+            sto_protocol += 1;
+            stored_cursor += (1+sublen2);
         }
-      }
-      sto_protocol += 1;
-      stored_cursor += (1+sublen2);
+
+        incursor += (1+sublen);
     }
 
-    incursor += (1+sublen);
-  }
-
-   // I think this is what should be returned 
-   return -1;
+    // I think this is what should be returned 
+    return -1;
 }
 
 
 int lookup_protocol(
-  char* selected, int selected_len, 
-  char* myprotocol_list, int mpl_len
-  )
+        char* selected, int selected_len, 
+        char* myprotocol_list, int mpl_len
+        )
 {
-  char* incursor = selected;
+    char* incursor = selected;
 
-  char* stored_cursor = myprotocol_list;
-  int sto_protocol = 0;
+    char* stored_cursor = myprotocol_list;
+    int sto_protocol = 0;
 
-  if (selected_len == 0)
-  {
-    // No protocol was selected
-    return -2;
-  }
-
-  while( stored_cursor < myprotocol_list + mpl_len)
-  {
-    char sublen2 = *stored_cursor;
-
-    if (sublen2 != selected_len)
+    if (selected_len == 0)
     {
-      
-    } else {
-      int cmpresult = strncmp( selected, stored_cursor + 1, sublen2);
-      if (cmpresult == 0)
-      {
-        // They are equal, choose this one...
-        return sto_protocol;
-      }
+        // No protocol was selected
+        return -2;
     }
-    sto_protocol += 1;
-    stored_cursor += (1+sublen2);
-  }
 
-   // I think this is what should be returned 
-   return -1;
+    while( stored_cursor < myprotocol_list + mpl_len)
+    {
+        char sublen2 = *stored_cursor;
+
+        if (sublen2 != selected_len)
+        {
+
+        } else {
+            int cmpresult = strncmp( selected, stored_cursor + 1, sublen2);
+            if (cmpresult == 0)
+            {
+                // They are equal, choose this one...
+                return sto_protocol;
+            }
+        }
+        sto_protocol += 1;
+        stored_cursor += (1+sublen2);
+    }
+
+    // I think this is what should be returned 
+    return -1;
 }
 
 static int ssl_servername_cb(SSL *s, int *ad, void *arg)
@@ -415,126 +407,129 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg)
 
 // Establish a connection using an SSL layer
 static connection_t *sslStart (
-  char* certificate_filename, char* privkey_filename, char* hostname, int portno,
-  char* protocol_list, int protocol_list_length
-  )
+        char* certificate_filename, char* privkey_filename, char* hostname, int portno,
+        char* protocol_list, int protocol_list_length
+        )
 {
-  int result;
-  connection_t *c;
+    int result;
+    connection_t *c;
 
-  if (! threads_are_up)
-  {
-    threads_are_up = 1;
-    thread_setup();
-  }
-
-  c = malloc (sizeof (connection_t));
-  c->sslContext = NULL;
-  c->protocol_list  = (char*) malloc(protocol_list_length);
-  strncpy( c->protocol_list, protocol_list, protocol_list_length );
-  c->protocol_list_length = protocol_list_length;
-  c->socket = tcpStart (hostname, portno, &result);
-
-  if ( result )
-  {
-    return 0;
-  }
-
-  if (c->socket)
-  {
-    // Register the error strings for libcrypto & libssl
-    SSL_load_error_strings ();
-    // Register the available ciphers and digests
-    SSL_library_init ();
-
-    // New context saying we are a server, and using SSL 2 or 3
-    c->sslContext = SSL_CTX_new( TLSv1_2_server_method() );
-    if (c->sslContext == NULL)
+    if (! threads_are_up)
     {
-      ERR_print_errors_fp (stderr);
-      perror("Could not create context");
-      return 0;
+        threads_are_up = 1;
+        thread_setup();
     }
 
+    c = malloc (sizeof (connection_t));
+    c->sslContext = NULL;
+    c->protocol_list  = (char*) malloc(protocol_list_length);
+    strncpy( c->protocol_list, protocol_list, protocol_list_length );
+    c->protocol_list_length = protocol_list_length;
+    c->socket = tcpStart (hostname, portno, &result);
 
-      // Now I set a few options....
-      /*SSL_CTX_set_verify(c->sslContext, NULL );*/
-      // const long flags = 
-      //   SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
-      const long flags = 
-        SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
-      SSL_CTX_set_options(c->sslContext, flags);
-      setup_dh_parms( c->sslContext );
-      SSL_CTX_set_ecdh_auto (c->sslContext, 1);
-
-      // Give the impression that we are using SNI
-      SSL_CTX_set_tlsext_servername_callback(c->sslContext, ssl_servername_cb);
-
-
-
-      // The only cipher supported by HTTP/2 ... sort of.
-      result = SSL_CTX_set_cipher_list(c->sslContext, "ECDHE-RSA-AES128-GCM-SHA256");
-      /*result = SSL_CTX_set_cipher_list(c->sslContext, "DEFAULT");*/
-
-      // Be sure we are able to do ALPN
-      // void SSL_CTX_set_alpn_select_cb(SSL_CTX *ctx,
-      //                           int (*cb) (SSL *ssl,
-      //                                      const unsigned char **out,
-      //                                      unsigned char *outlen,
-      //                                      const unsigned char *in,
-      //                                      unsigned int inlen,
-      //                                      void *arg), void *arg);
-      SSL_CTX_set_alpn_select_cb( c->sslContext, protocol_select, c);
-
-      if ( result != 1 )
-      {
-        ERR_print_errors_fp (stderr);
-        perror("Could not set cipher");
-        return 0;
-      }
-      // The certificate (well-wired)
-      SSL_CTX_use_certificate_file(c->sslContext, certificate_filename, SSL_FILETYPE_PEM);
-      SSL_CTX_use_PrivateKey_file(c->sslContext,  privkey_filename, SSL_FILETYPE_PEM);
-      // Check the private key 
-      result = SSL_CTX_check_private_key(c->sslContext);
-      if ( result != 1)
-      {
-        perror("Check private key failed");
-        return 0;
-      }
-      // //////////////////////////////////////////
-
-    }
-  else
+    if ( result )
     {
-      perror ("Connect failed");
+        return 0;
     }
 
-  return c;
+    if (c->socket)
+    {
+        // Register the error strings for libcrypto & libssl
+        SSL_load_error_strings ();
+        // Register the available ciphers and digests
+        SSL_library_init ();
+
+        // New context saying we are a server, and using SSL 2 or 3
+        c->sslContext = SSL_CTX_new( TLSv1_2_server_method() );
+        if (c->sslContext == NULL)
+        {
+            ERR_print_errors_fp (stderr);
+            perror("Could not create context");
+            return 0;
+        }
+
+
+        // Now I set a few options....
+        /*SSL_CTX_set_verify(c->sslContext, NULL );*/
+        // const long flags = 
+        //   SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
+        const long flags = 
+            SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
+        SSL_CTX_set_options(c->sslContext, flags);
+        setup_dh_parms( c->sslContext );
+        SSL_CTX_set_ecdh_auto (c->sslContext, 1);
+
+        // Give the impression that we are using SNI
+        SSL_CTX_set_tlsext_servername_callback(c->sslContext, ssl_servername_cb);
+
+
+
+        // The only cipher supported by HTTP/2 ... sort of.
+        result = SSL_CTX_set_cipher_list(c->sslContext, "ECDHE-RSA-AES128-GCM-SHA256");
+        /*result = SSL_CTX_set_cipher_list(c->sslContext, "DEFAULT");*/
+
+        // Be sure we are able to do ALPN
+        // void SSL_CTX_set_alpn_select_cb(SSL_CTX *ctx,
+        //                           int (*cb) (SSL *ssl,
+        //                                      const unsigned char **out,
+        //                                      unsigned char *outlen,
+        //                                      const unsigned char *in,
+        //                                      unsigned int inlen,
+        //                                      void *arg), void *arg);
+        SSL_CTX_set_alpn_select_cb( c->sslContext, protocol_select, c);
+
+        if ( result != 1 )
+        {
+            ERR_print_errors_fp (stderr);
+            perror("Could not set cipher");
+            return 0;
+        }
+        // The certificate (well-wired)
+        SSL_CTX_use_certificate_file(c->sslContext, certificate_filename, SSL_FILETYPE_PEM);
+        SSL_CTX_use_PrivateKey_file(c->sslContext,  privkey_filename, SSL_FILETYPE_PEM);
+        // Check the private key 
+        result = SSL_CTX_check_private_key(c->sslContext);
+        if ( result != 1)
+        {
+            char msg[600];
+            snprintf(msg, 600, "Check certificate file %s and privkey %s failed", certificate_filename,
+                     privkey_filename);
+            perror(msg);
+            return 0;
+        }
+        // //////////////////////////////////////////
+
+    }
+    else
+    {
+        perror ("Connect failed");
+    }
+
+    return c;
 }
 
 
 connection_t* make_connection(char* certificate_filename, char* privkey_filename, char* hostname, int portno,
-    char* my_protocol_list, int protocol_list_length
-    )
+        char* my_protocol_list, int protocol_list_length
+        )
 {
-  const int len = strlen(hostname);
-  if ( len > 0 && hostname[len-1] == '\n' )
-  { 
-     printf("HELLO THERE. I'M A FLIMSY C FUNCTION AND I CAN NOT REMOVE THE END-OF-LINE IN THE PROVIDED HOST NAME WITHOUT A TON OF LINES. I'M GOING TO SEGFAULT NOW. BYE.\n");
-     *( (int*) 0) = 42; // <-- This is the answer
-  }
+    const int len = strlen(hostname);
+    if ( len > 0 && hostname[len-1] == '\n' )
+    { 
+        printf("HELLO THERE. I'M A FLIMSY C FUNCTION AND I CAN NOT REMOVE THE END-OF-LINE IN THE PROVIDED HOST NAME WITHOUT A TON OF LINES. I'M GOING TO SEGFAULT NOW. BYE.\n");
+        *( (int*) 0) = 42; // <-- This is the answer
+    }
 
 
-  return sslStart(
-    certificate_filename, privkey_filename, hostname, 
-    portno, my_protocol_list, protocol_list_length); 
+    return sslStart(
+            certificate_filename, privkey_filename, hostname, 
+            portno, my_protocol_list, protocol_list_length); 
 }
 
 int wait_for_connection(
-  connection_t* c, 
-  int microseconds,
-  wired_session_t** wired_session)
+        connection_t* c, 
+        int microseconds,
+        wired_session_t** wired_session)
 {
     int clilen, newsockfd;
     // Don't return anything if there's a failure...
@@ -563,24 +558,24 @@ int wait_for_connection(
 
         if ( retval == -1 )
         {
-          if ( errno == EINTR )
-          {
-             // printf(".");
-             can_go = 0;
-          } else {
-             perror("select()");
-             return BAD_HAPPENED;
-          }
+            if ( errno == EINTR )
+            {
+                // printf(".");
+                can_go = 0;
+            } else {
+                perror("select()");
+                return BAD_HAPPENED;
+            }
         } else if (retval > 0)
         {
-          // We got data, just let it go...
-          // printf("letitgo\n");
-          can_go = 1;
+            // We got data, just let it go...
+            // printf("letitgo\n");
+            can_go = 1;
         } else 
         {
-          // We didn't get data, finish and terminate
-          // printf("timeo\n");
-          return TIMEOUT_REACHED;
+            // We didn't get data, finish and terminate
+            // printf("timeo\n");
+            return TIMEOUT_REACHED;
         }
 
     }
@@ -600,7 +595,7 @@ int wait_for_connection(
         perror("ERROR on accept");
         return BAD_HAPPENED;
     }
-        
+
     // Create an SSL struct for the connection
 
     result->socket = newsockfd;
@@ -631,11 +626,11 @@ int wait_for_connection(
     // After this one is okej, see which protocol was selected
     const unsigned char* out_protocol; unsigned pr_len;
     SSL_get0_alpn_selected(result->sslHandle, &out_protocol,
-                            &pr_len);
+            &pr_len);
     // Wonder who is in charge of releasing that buffer...
     result -> protocol_index = lookup_protocol( 
-      (char*)out_protocol, pr_len, 
-      c->protocol_list, c->protocol_list_length);
+            (char*)out_protocol, pr_len, 
+            c->protocol_list, c->protocol_list_length);
 
     *wired_session = result;
 
@@ -645,17 +640,17 @@ int wait_for_connection(
 // Disconnect & free connection struct
 /*static void sslDisconnect (connection *c)*/
 /*{*/
-  /*if (c->socket)*/
-    /*close (c->socket);*/
-  /*if (c->sslHandle)*/
-    /*{*/
-      /*SSL_shutdown (c->sslHandle);*/
-      /*SSL_free (c->sslHandle);*/
-    /*}*/
-  /*if (c->sslContext)*/
-    /*SSL_CTX_free (c->sslContext);*/
+/*if (c->socket)*/
+/*close (c->socket);*/
+/*if (c->sslHandle)*/
+/*{*/
+/*SSL_shutdown (c->sslHandle);*/
+/*SSL_free (c->sslHandle);*/
+/*}*/
+/*if (c->sslContext)*/
+/*SSL_CTX_free (c->sslContext);*/
 
-  /*free (c);*/
+/*free (c);*/
 /*}*/
 
 
@@ -709,77 +704,77 @@ int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_re
 #define MUTEX_LOCK(x)    pthread_mutex_lock(&(x))
 #define MUTEX_UNLOCK(x)  pthread_mutex_unlock(&(x))
 #define THREAD_ID        pthread_self(  )
- 
- 
+
+
 void handle_error(const char *file, int lineno, const char *msg){
-     fprintf(stderr, "** %s:%d %s\n", file, lineno, msg);
-     ERR_print_errors_fp(stderr);
-     /* exit(-1); */ 
- }
- 
+    fprintf(stderr, "** %s:%d %s\n", file, lineno, msg);
+    ERR_print_errors_fp(stderr);
+    /* exit(-1); */ 
+}
+
 /* This array will store all of the mutexes available to OpenSSL. */ 
 static MUTEX_TYPE *mutex_buf= NULL;
- 
- 
+
+
 static void locking_function(int mode, int n, const char * file, int line)
 {
-  if (mode & CRYPTO_LOCK)
-    MUTEX_LOCK(mutex_buf[n]);
-  else
-    MUTEX_UNLOCK(mutex_buf[n]);
+    if (mode & CRYPTO_LOCK)
+        MUTEX_LOCK(mutex_buf[n]);
+    else
+        MUTEX_UNLOCK(mutex_buf[n]);
 }
- 
+
 static unsigned long id_function(void)
 {
-  return ((unsigned long)THREAD_ID);
+    return ((unsigned long)THREAD_ID);
 }
 
 void dispose_wired_session(wired_session_t* ws)
 {
-  if (ws == 0)
-    return ;
-  if ( ws-> sslHandle )
-  {
-    SSL_shutdown( ws->sslHandle );
-    ws -> sslHandle = 0;
-  }
-  if (ws->socket)
-  {
-    close(ws->socket);
-    ws -> socket = 0;
-  }
-  free(ws);
+    if (ws == 0)
+        return ;
+    if ( ws-> sslHandle )
+    {
+        SSL_shutdown( ws->sslHandle );
+        ws -> sslHandle = 0;
+    }
+    if (ws->socket)
+    {
+        close(ws->socket);
+        ws -> socket = 0;
+    }
+    free(ws);
 }
 
 
 int thread_setup(void)
 {
-  int i;
+    int i;
 
-  // printf("Threads setup\n");
- 
-  mutex_buf = malloc(CRYPTO_num_locks(  ) * sizeof(MUTEX_TYPE));
-  if (!mutex_buf)
-    return 0;
-  for (i = 0;  i < CRYPTO_num_locks(  );  i++)
-    MUTEX_SETUP(mutex_buf[i]);
-  CRYPTO_set_id_callback(id_function);
-  CRYPTO_set_locking_callback(locking_function);
-  return 1;
+    // printf("Threads setup\n");
+
+    mutex_buf = malloc(CRYPTO_num_locks(  ) * sizeof(MUTEX_TYPE));
+    if (!mutex_buf)
+        return 0;
+    for (i = 0;  i < CRYPTO_num_locks(  );  i++)
+        MUTEX_SETUP(mutex_buf[i]);
+    CRYPTO_set_id_callback(id_function);
+    CRYPTO_set_locking_callback(locking_function);
+    return 1;
 }
- 
+
 int thread_cleanup(void)
 {
-  int i;
- 
-  if (!mutex_buf)
-    return 0;
-  CRYPTO_set_id_callback(NULL);
-  CRYPTO_set_locking_callback(NULL);
-  for (i = 0;  i < CRYPTO_num_locks(  );  i++)
-    MUTEX_CLEANUP(mutex_buf[i]);
-  free(mutex_buf);
-  mutex_buf = NULL;
-  return 1;
+    int i;
+
+    if (!mutex_buf)
+        return 0;
+    CRYPTO_set_id_callback(NULL);
+    CRYPTO_set_locking_callback(NULL);
+    for (i = 0;  i < CRYPTO_num_locks(  );  i++)
+        MUTEX_CLEANUP(mutex_buf[i]);
+    free(mutex_buf);
+    mutex_buf = NULL;
+    return 1;
 }
 

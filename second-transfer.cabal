@@ -39,6 +39,10 @@ extra-source-files:  README.md
 -- Constraint on the version of Cabal needed to build this package.
 cabal-version:       >=1.10
 
+Flag debug 
+  Description: Enable debug support 
+  Default:     True
+
 source-repository head
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
@@ -57,6 +61,7 @@ library
                   , SecondTransfer.Http2
                   , SecondTransfer.MainLoop.Internal
                   , SecondTransfer.Exception
+                  , SecondTransfer.MainLoop.Logging
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType
@@ -66,6 +71,16 @@ library
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant
                 , SecondTransfer.Http2.Session
+
+
+  build-tools: cpphs
+
+  if flag(debug)
+    CPP-Options: -DENABLE_DEBUG
+    if !os(windows)
+      CC-Options: "-DDEBUG"
+    else
+      CC-Options: "-DNDEBUG"
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:    
@@ -145,6 +160,8 @@ library
   extra-libraries: ssl crypto
 
   extra-lib-dirs: /opt/openssl-1.0.2/lib
+
+  include-dirs: macros/
 
 
 
