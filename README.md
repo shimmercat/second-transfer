@@ -24,6 +24,11 @@ Provided that you have all the dependencies, you should be able to just do:
 
     $ cabal install second-transfer
 
+Running the tests
+-----------------
+
+    $ cabal test
+
 Example
 -------
 
