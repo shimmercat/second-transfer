@@ -45,6 +45,9 @@ import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
 
 
+#include "Logging.cpphs"
+
+
 http2PrefixLength :: Int
 http2PrefixLength = B.length NH2.connectionPreface
 
@@ -204,6 +207,7 @@ addCapacity stream_id delta_cap = do
 inputGatherer :: PullAction -> SessionInput -> FramerSession ()
 inputGatherer pull_action session_input = do 
     -- We can start by reading off the prefix....
+    liftIO $ debugM "HTTP2.Framer" "Entering InputGatherer"
     (prefix, remaining) <- liftIO $ F.readLength http2PrefixLength pull_action
 
     if prefix /= NH2.connectionPreface 

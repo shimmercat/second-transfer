@@ -10,7 +10,7 @@ import           System.IO                 (stderr)
 import           System.Log.Formatter      (simpleLogFormatter)
 import           System.Log.Handler        (setFormatter, LogHandler)
 import           System.Log.Handler.Simple
-import           System.Log.Handler.Syslog (Facility (..), Option (..), openlog)
+-- import           System.Log.Handler.Syslog (Facility (..), Option (..), openlog)
 import           System.Log.Logger
 
 
@@ -53,6 +53,6 @@ setLoggerLevels s = do
         )
     updateGlobalLogger "HTTP2.Framer" (
         setHandlers [s] . 
-        setLevel INFO
+        setLevel DEBUG
         )
 

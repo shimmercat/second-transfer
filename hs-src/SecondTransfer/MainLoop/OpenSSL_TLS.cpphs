@@ -134,7 +134,8 @@ tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the serve
                  -> String                  -- ^ Name of the network interface where you want to start your server
                  -> [(String, Attendant)]   -- ^ List of protocol names and the corresponding `Attendant` to use for 
                                             --   each. This way you can serve both HTTP\/1.1 over TLS and HTTP\/2 in the
-                                            --   same socket.
+                                            --   same socket. Use the empty string for a default attendant when no protocol
+                                            --   is specified.
                  -> Int                     -- ^ Port to open to listen for connections. 
                  -> IO ()
 tlsServeWithALPN certificate_filename key_filename interface_name attendants interface_port = do 
@@ -157,7 +158,7 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
             INSTRUMENTATION( errorM "OpenSSL" "Could not create listening socket" )
             throwIO $ TLSLayerGenericProblem "Could not create listening end"
           else do
-            INSTRUMENTATION( infoM "OpenSSL" "Listening socket created" )
+            INSTRUMENTATION( infoM "OpenSSL" "Listening soxket created" )
             return ()
 
         forever $ do 
@@ -193,9 +194,8 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                         pullAction = do 
                             allocaBytes useBufferSize $ \ pcharbuffer -> 
                                 alloca $ \ data_recvd_ptr -> do 
-                                    INSTRUMENTATION( infoM "OpenSSL" "Waiting for data" )
                                     result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
-                                    INSTRUMENTATION( infoM "OpenSSL" "Received data" )
+                                    INSTRUMENTATION( debugM "OpenSSL" "Received data" )
                                     recvd_bytes <- case result of 
                                         r | r == allOk       -> peek data_recvd_ptr
                                           | r == badHappened -> throwIO $ TLSLayerGenericProblem "Could not receive data"
@@ -213,13 +213,12 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                                 return ()
 
                     use_protocol <- getSelectedProtocol wired_ptr
-
-                    -- putStrLn $ ".. Using protocol: " ++ (show use_protocol)
+                    INSTRUMENTATION( infoM "OpenSSL" $ "Selected protocol:" ++ (show use_protocol))
 
                     let 
                         maybe_session_attendant = case fromIntegral use_protocol of 
                             n | (use_protocol >= 0)  -> Just $ snd $ attendants !! n 
-                              | otherwise          -> Nothing 
+                              | otherwise            -> Nothing
 
                     case maybe_session_attendant of 
 
