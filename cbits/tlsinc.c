@@ -363,7 +363,7 @@ int lookup_protocol(
 
         if (sublen2 != selected_len)
         {
-
+            // It is not this cone, continue
         } else {
             int cmpresult = strncmp( selected, stored_cursor + 1, sublen2);
             if (cmpresult == 0)
