@@ -207,7 +207,7 @@ addCapacity stream_id delta_cap = do
 inputGatherer :: PullAction -> SessionInput -> FramerSession ()
 inputGatherer pull_action session_input = do 
     -- We can start by reading off the prefix....
-    liftIO $ debugM "HTTP2.Framer" "Entering InputGatherer"
+    INSTRUMENTATION( liftIO $ debugM "HTTP2.Framer" "Entering InputGatherer" )
     (prefix, remaining) <- liftIO $ F.readLength http2PrefixLength pull_action
 
     if prefix /= NH2.connectionPreface 
@@ -216,9 +216,10 @@ inputGatherer pull_action session_input = do
         liftIO $ do 
             -- We just the the GoAway frame, although this is awfully early
             -- and probably wrong
+            INSTRUMENTATION( errorM "HTTP2.Framer" "Invalid prologue")
             throwIO BadPrefaceException
       else 
-        return ()
+        INSTRUMENTATION( liftIO $ debugM "HTTP2.Framer" "Prologue validated" )
     let 
         source::Source FramerSession B.ByteString
         source = transPipe liftIO $ F.readNextChunk http2FrameLength remaining pull_action
