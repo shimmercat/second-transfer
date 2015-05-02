@@ -134,8 +134,8 @@ tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the serve
                  -> String                  -- ^ Name of the network interface where you want to start your server
                  -> [(String, Attendant)]   -- ^ List of protocol names and the corresponding `Attendant` to use for 
                                             --   each. This way you can serve both HTTP\/1.1 over TLS and HTTP\/2 in the
-                                            --   same socket. Use the empty string for a default attendant when no protocol
-                                            --   is specified.
+                                            --   same socket. When no ALPN negotiation is present during the negotiation, 
+                                            --   the first protocol in this list is used.
                  -> Int                     -- ^ Port to open to listen for connections. 
                  -> IO ()
 tlsServeWithALPN certificate_filename key_filename interface_name attendants interface_port = do 
@@ -218,7 +218,8 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                     let 
                         maybe_session_attendant = case fromIntegral use_protocol of 
                             n | (use_protocol >= 0)  -> Just $ snd $ attendants !! n 
-                              | otherwise            -> Nothing
+                              -- Or just select the first one
+                              | otherwise            -> Just . snd . head $ attendants
 
                     case maybe_session_attendant of 
 
@@ -327,7 +328,7 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
                         let 
                             maybe_session_attendant = case fromIntegral use_protocol of 
                                 n | (use_protocol >= 0)  -> Just $ snd $ attendants !! n 
-                                  | otherwise          -> Nothing 
+                                  | otherwise            -> Just . snd . head $ attendants
 
                         case maybe_session_attendant of 
 
