@@ -14,6 +14,7 @@ import           System.Log.Handler.Simple
 import           System.Log.Logger
 
 
+-- | Activates logging to terminal
 enableConsoleLogging :: IO ()
 enableConsoleLogging = configureLoggingToConsole
 

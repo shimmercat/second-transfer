@@ -47,6 +47,12 @@ import Data.Conduit
 
 saysHello :: DataAndConclusion
 saysHello = do 
+    -- The data in each yield will be automatically split across multiple 
+    -- data frames if needed, so you can yield a large block of contents here
+    -- if you wish. 
+    -- If you do multiple yields, no data will be left buffered between them, 
+    -- so that you can for example implement a chat client in a single HTTP/2 stream.
+    -- Pity browsers hardly support that.
     yield "Hello world!"
     -- No footers
     return []
@@ -142,7 +148,13 @@ module SecondTransfer(
     ,TLSLayerGenericProblem(..)
     ,FinishRequest(..)
 
-    -- | Activate logging to terminal
+    -- * Logging 
+    --
+    -- | The library uses hslogger for its logging. Since logging is 
+    -- expensive, most of the instrumentation needs to be activated 
+    -- at compile time by activating the "debug" flag. And then you 
+    -- need to configure the loggers. The function `enableConsoleLogging` 
+    -- configures them to output a lot of information to standard output.
     ,enableConsoleLogging
 	) where 
 

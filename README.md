@@ -44,12 +44,12 @@ Done:
 
 - Version 0.2: Absolutely minimal amount of unit tests.
 
+- Version 0.3: More sensible logging.
+
 Pending:
 
-- Version 0.3: Better examples of usage. 
+- Better examples.
 
-- Version 0.4: By-the-book stream state management. In particular, ensure 
-               that we are not allowing frames to come off-order from the 
-               other peer. 
+- Epoll I/O management
 
-- Version 0.5: Guaranties about early resource release...
+- Benchmarking.

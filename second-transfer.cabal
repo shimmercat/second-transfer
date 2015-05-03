@@ -41,7 +41,7 @@ cabal-version:       >=1.10
 
 Flag debug 
   Description: Enable debug support 
-  Default:     True
+  Default:     False
 
 source-repository head
   type:     git
