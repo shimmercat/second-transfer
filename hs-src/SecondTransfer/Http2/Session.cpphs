@@ -55,7 +55,7 @@ import qualified Data.IntSet                            as NS
 import           Data.Monoid                            as Mo
 
 import           Control.Lens
-
+ 
 -- No framing layer here... let's use Kazu's Yamamoto library
 import qualified Network.HPACK                          as HP
 import qualified Network.HTTP2                          as NH2
@@ -767,8 +767,8 @@ headersOutputThread input_chan session_output_mvar = forever $ do
         (\ session_output -> do
             writeIndividualHeaderFrames session_output stream_id bs_chunks True
             -- And say that the headers for this thread are out 
-            putMVar headers_ready_mvar HeadersSent
             INSTRUMENTATION( infoM "HTTP2.Session" $ "Headers were output for stream " ++ (show stream_id) )
+            putMVar headers_ready_mvar HeadersSent
             ) 
   where 
     writeIndividualHeaderFrames :: 
