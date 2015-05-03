@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.3.0.2
+version     :              0.3.0.3
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -39,6 +39,8 @@ extra-source-files:  README.md
 -- Constraint on the version of Cabal needed to build this package.
 cabal-version:       >=1.10
 
+extra-source-files: macros/Logging.cpphs
+
 Flag debug 
   Description: Enable debug support 
   Default:     False
@@ -50,8 +52,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.3.0.2
-
+  tag:      0.3.0.3
 
 library
 
@@ -71,7 +72,6 @@ library
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant
                 , SecondTransfer.Http2.Session
-
 
   build-tools: cpphs
 
