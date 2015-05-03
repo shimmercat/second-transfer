@@ -6,6 +6,6 @@
 
 #else
 
-#define INSTRUMENTATION(x)
+#define INSTRUMENTATION(x)   (return ())
 
 #endif 
