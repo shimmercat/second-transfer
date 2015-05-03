@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.3.0.0
+version     :              0.3.0.2
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -50,7 +50,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.3.0.0
+  tag:      0.3.0.2
 
 
 library
