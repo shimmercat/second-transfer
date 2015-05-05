@@ -372,7 +372,8 @@ http2Session coherent_worker session_id sessions_context =   do
              (SessionOutput session_output) )
 
 
-
+-- TODO: Some ill clients can break this thread with exceptions. Make these paths a bit
+--- more robust.
 sessionInputThread :: ReaderT SessionData IO ()
 sessionInputThread  = do 
     INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" "Entering sessionInputThread" )
@@ -480,12 +481,20 @@ sessionInputThread  = do
         Right frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) -> do 
             -- So I got data to process
             -- TODO: Handle end of stream
-            let stream_id = NH2.fromStreamIdentifier nh2_stream_id 
+            let stream_id = NH2.fromStreamIdentifier nh2_stream_id
+            -- TODO: Handle the cases where the stream_id doesn't match an already existent
+            -- stream. In such cases it is justified to reset the connection with a  protocol_error.
+
             streamWorkerSendData stream_id somebytes
             -- After that data has been received and forwarded downstream, we can issue a windows update
             --
             -- TODO: We can use wider frames to avoid congestion...
             -- .... and we can also be more compositional with these short bursts of data....
+            --
+            -- TODO: Consider that the best place to output these frames can be somewhere else...
+            --
+            -- TODO: Use a special, with-quota queue here to do flow control. Don't send meaningless
+            --       WindowUpdateFrame's
             sendOutFrame
                 (NH2.EncodeInfo
                     NH2.defaultFlags
@@ -563,10 +572,9 @@ sessionInputThread  = do
     sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload -> ReaderT SessionData IO ()
     sendOutFrame encode_info payload = do 
         session_output_mvar <- view sessionOutput 
+
         session_output <- liftIO $ takeMVar session_output_mvar
-
         liftIO $ writeChan session_output $ Right (encode_info, payload)
-
         liftIO $ putMVar session_output_mvar session_output
 
 
@@ -584,6 +592,8 @@ createMechanismForStream stream_id = do
 
 
 -- TODO: Can be optimized by factoring out the mechanism lookup
+-- TODO IMPORTANT: This is a good place to drop the postinputmechanism
+-- for a stream, so that unprocessed data can be garbage-collected.
 closePostDataSource :: GlobalStreamId -> ReaderT SessionData IO ()
 closePostDataSource stream_id = do 
     stream2postinputmechanism <- view stream2PostInputMechanism
@@ -596,8 +606,7 @@ closePostDataSource stream_id = do
             liftIO $ writeChan chan Nothing
 
         Nothing -> 
-            -- This is an internal error, the mechanism should be 
-            -- created when the stream ends
+            -- TODO: This is a protocol error, handle it properly
             error "Internal error/closePostDataSource"
 
 
@@ -613,7 +622,8 @@ streamWorkerSendData stream_id bytes = do
 
         Nothing -> 
             -- This is an internal error, the mechanism should be 
-            -- created when the headers end
+            -- created when the headers end (and if the headers 
+            -- do not finish the stream)
             error "Internal error"
 
 
@@ -689,21 +699,6 @@ sendDataOfStream stream_id headers_sent = do
             Just bytes -> do
                 liftIO $ writeChan data_output (stream_id, Just bytes)
                 consumer data_output
-
-
--- sendDataOfStream :: Sink     
-
-
--- Allow this very important function to be used in the future to process footers
-
--- difficultFunction :: (Monad m)
---                   => ConduitM () a2 m r1 -> ConduitM a2 Void m r2
---                   -> m (r2, Maybe r1)
--- difficultFunction l r = liftM (fmap getLast) $ runWriterT (l' $$ r')
---   where
---     l' = transPipe lift l >>= lift . tell . Last . Just
---     r' = transPipe lift r
-
 
 
 appendHeaderFragmentBlock :: GlobalStreamId -> B.ByteString -> ReaderT SessionData IO ()
