@@ -99,25 +99,6 @@ stripString :: String -> String
 stripString  = filter $ \ ch -> (ch /= '\n') && ( ch /= ' ')
 
 
--- neutralizeUrl :: B.ByteString -> B.ByteString
--- neutralizeUrl url = let 
---     Just (U.URI {- scheme -} _ authority u_path u_query u_frag) = U.parseURI $ unpack url
---     Just (U.URIAuth _ use_host _) = authority
---     complete_url  = U.URI {
---         U.uriScheme     = "snu:"
---         ,U.uriAuthority = Just $ U.URIAuth {
---             U.uriUserInfo = ""
---             ,U.uriRegName = use_host 
---             ,U.uriPort    = ""
---             }
---         ,U.uriPath      = u_path
---         ,U.uriQuery     = u_query 
---         ,U.uriFragment  = u_frag 
---       }
---   in 
---     pack $ show complete_url
-
-
 domainFromUrl :: B.ByteString -> B.ByteString
 domainFromUrl url = let 
     Just (U.URI {- scheme -} _ authority _ _ _) = U.parseURI $ unpack url
@@ -125,11 +106,3 @@ domainFromUrl url = let
   in 
     pack use_host
 
-
--- hashFromUrl :: B.ByteString -> B.ByteString 
--- hashFromUrl url = 
---     B.take 10 . B16.encode . MD5.finalize $ foldl MD5.update MD5.init $  [urlHashSalt, neutralizeUrl url]
-
-
--- hashSafeFromUrl :: B.ByteString -> SafeUrl 
--- hashSafeFromUrl = SafeUrl . hashFromUrl
