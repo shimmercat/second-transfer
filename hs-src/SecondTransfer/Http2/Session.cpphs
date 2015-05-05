@@ -25,8 +25,8 @@ module SecondTransfer.Http2.Session(
     ,SessionsContext(..)
     ,SessionCoordinates(..)
     ,SessionComponent(..)
-    ,SessionsCallbacks
-    ,SessionsConfig
+    ,SessionsCallbacks(..)
+    ,SessionsConfig(..)
     ,ErrorCallback
 
     -- Internal stuff
@@ -189,6 +189,7 @@ type ErrorCallback = (SessionComponent, SessionCoordinates, SomeException) -> IO
 -- | Callbacks that you can provide your sessions to notify you 
 --   of interesting things happening in the server. 
 data SessionsCallbacks = SessionsCallbacks {
+    -- Callback used to report errors during this session
     _reportErrorCallback :: Maybe ErrorCallback
 }
 
@@ -197,6 +198,7 @@ makeLenses ''SessionsCallbacks
 
 -- | Configuration information you can provide to the session maker.
 data SessionsConfig = SessionsConfig {
+    -- | Session callbacks
     _sessionsCallbacks :: SessionsCallbacks
 }
 
@@ -254,6 +256,7 @@ data PostInputMechanism = PostInputMechanism (Chan (Maybe B.ByteString), InputDa
 
 -- NH2.Frame != Frame
 data SessionData = SessionData {
+    -- ATTENTION: Ignore the warning coming from here for now
     _sessionsContext             :: SessionsContext 
 
     ,_sessionInput               :: Chan (Either SessionInputCommand InputFrame)

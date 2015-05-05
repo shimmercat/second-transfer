@@ -21,7 +21,8 @@ compliant HTTP/2 servers. The library
     should even be able to do both simultaneously. 
 
 Setting up TLS for HTTP/2 correctly is enough of a shore, so I have bundled here the
-TLS setup logic. 
+TLS setup logic. Before you read any further, ATTENTION: enable always the threaded 
+ghc runtime in your final programs if you want TLS to work.
 
 Frame encoding and decoding is done with 
 Kazu Yamamoto's <http://hackage.haskell.org/package/http2 http2> package. 
@@ -132,6 +133,11 @@ module SecondTransfer(
     
     -- ** Callback types
     ,Attendant
+    -- *** Push, Pull and Close actions
+    -- 
+    -- | You don't need to do anything with these types if you are using
+    --   `http2Attendant` and `tlsServeWithALPN`. But they are useful if 
+    --   you want to implement your own layer.
     ,PullAction
     ,PushAction
     ,CloseAction

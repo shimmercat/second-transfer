@@ -4,11 +4,11 @@ module SecondTransfer.Http2(
 	,makeSessionsContext
 	,defaultSessionsConfig
 	-- | Configuration information
-	,SessionsConfig 
+	,SessionsConfig(..)
 	-- | Context. You need to use `makeSessionsContext` to instance
 	--   one of this. 
 	,SessionsContext
-	,SessionsCallbacks
+	,SessionsCallbacks(..)
 	,ErrorCallback
 	,sessionsCallbacks
 
@@ -22,7 +22,7 @@ import SecondTransfer.Http2.Session(
 	defaultSessionsConfig,
 	makeSessionsContext,
 
-	SessionsConfig,
+	SessionsConfig(..),
 	SessionsContext,
 	SessionsCallbacks,
 	ErrorCallback,
