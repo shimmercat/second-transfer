@@ -28,8 +28,6 @@ import           Data.Text.Encoding
 import qualified Network.URI               as U
 
 
-
-
 strToInt::String -> Int 
 strToInt = fromIntegral . toInteger . (read::String->Integer)
 
