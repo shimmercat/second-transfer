@@ -6,40 +6,27 @@ module SecondTransfer.Utils (
     ,word24ToInt
     ,putWord24be
     ,getWord24be
-    -- ,getTimeDiff
-    -- ,timeAsDouble 
-    -- ,reportTimedEvent
     ,lowercaseText
     ,unfoldChannelAndSource
     ,stripString
-    -- ,neutralizeUrl
     ,domainFromUrl
-    -- ,hashFromUrl
-    -- ,hashSafeFromUrl
-    -- ,unSafeUrl
 
-    -- ,SafeUrl
     ) where 
 
 
 import           Control.Concurrent.Chan
 import           Control.Monad.Trans.Class (lift)
--- import qualified Crypto.Hash.MD5           as MD5
 import           Data.Binary               (Binary, get, put, putWord8)
 import           Data.Binary.Get           (Get, getWord16be, getWord8)
 import           Data.Binary.Put           (Put, putWord16be)
 import           Data.Bits
 import qualified Data.ByteString           as B
--- import qualified Data.ByteString.Base16    as B16
 import           Data.ByteString.Char8     (pack, unpack)
--- import           Data.Hashable             (Hashable)
 import           Data.Conduit
 import qualified Data.Text                 as T
 import           Data.Text.Encoding
 import qualified Network.URI               as U
--- import qualified System.Clock              as SC
--- import           Text.Printf               (printf)
--- import qualified Text.Show.ByteString      as S(Show(..))
+
 
 
 
@@ -49,11 +36,6 @@ strToInt = fromIntegral . toInteger . (read::String->Integer)
 
 newtype Word24 = Word24 Int
     deriving (Show)
-
-
--- Newtype to protect url usage
--- newtype SafeUrl = SafeUrl { unSafeUrl :: B.ByteString } deriving (Eq, Show, Hashable)
-
 
 
 word24ToInt :: Word24 -> Int 
