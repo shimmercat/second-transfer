@@ -426,6 +426,11 @@ sessionInputThread  = do
                 liftIO $ H.delete stream_request_headers stream_id
                 liftIO $ putMVar decode_headers_table_mvar new_table
 
+                -- TODO: Validate headers, abort session if the headers are invalid.
+                -- Otherwise other invariants will break!!
+                -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
+                --
+
                 -- If the headers end the request.... 
                 post_data_source <- if not (frameEndsStream frame)
                   then do 
@@ -633,14 +638,14 @@ isStreamCancelled stream_id = do
     return $ NS.member stream_id cancelled_streams
 
 
+
 workerThread :: Request -> CoherentWorker -> WorkerMonad ()
 workerThread req coherent_worker =
   do
     headers_output <- view headersOutput
     stream_id      <- view streamId
-    (headers, _, data_and_conclussion) <- liftIO $ coherent_worker req
 
-    -- liftIO $ putStrLn $ "Num pushed streams: " ++ (show $ length pushed_streams)
+    (headers, _, data_and_conclussion) <- liftIO $ coherent_worker req
 
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO $ newEmptyMVar
@@ -661,7 +666,7 @@ workerThread req coherent_worker =
             (transPipe liftIO data_and_conclussion) 
             `fuseBothMaybe` 
             (sendDataOfStream stream_id headers_sent)
-        -- BIG TODO: Send the headers ... likely stream conclusion semantics 
+        -- BIG TODO: Send the footers ... likely stream conclusion semantics 
         -- will need to be changed. 
         return ()
       else 
@@ -822,8 +827,8 @@ dataOutputThread input_chan session_output_mvar = forever $ do
                 withLockedSessionOutput
                     (\ session_output ->    writeChan session_output $ Right ( NH2.EncodeInfo {
                              NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
-                            ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id 
-                            ,NH2.encodePadding  = Nothing }, 
+                            ,NH2.encodeStreamId  = NH2.toStreamIdentifier stream_id 
+                            ,NH2.encodePadding   = Nothing }, 
                             NH2.DataFrame ""
                             )
                         )
