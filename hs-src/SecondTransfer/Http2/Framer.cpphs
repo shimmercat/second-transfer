@@ -144,8 +144,13 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
 
     let 
         -- TODO: Dodgy exception handling here...
-        close_on_error session_id session_context comp = E.finally (
-            E.catch comp (exc_handler session_id session_context)) close_action
+        close_on_error session_id session_context comp = 
+            E.finally (
+                E.catch
+                    comp
+                    (exc_handler session_id session_context)
+                    )
+                close_action
 
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
@@ -407,8 +412,13 @@ startStreamOutputQueue stream_id = do
 
     -- And don't forget the thread itself
     let 
-        close_on_error session_id session_context comp = E.finally (
-            E.catch comp (exc_handler session_id session_context)) close_action
+        close_on_error session_id session_context comp = 
+            E.finally 
+                (E.catch 
+                    comp
+                    (exc_handler session_id session_context)
+                ) 
+                close_action
 
         exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
         exc_handler x y e = do

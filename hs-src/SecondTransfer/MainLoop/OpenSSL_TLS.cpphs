@@ -158,7 +158,7 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
             INSTRUMENTATION( errorM "OpenSSL" "Could not create listening socket" )
             throwIO $ TLSLayerGenericProblem "Could not create listening end"
           else do
-            INSTRUMENTATION( infoM "OpenSSL" "Listening soxket created" )
+            INSTRUMENTATION( infoM "OpenSSL" "Listening socket created" )
             return ()
 
         forever $ do 
@@ -204,11 +204,13 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
                         -- Ensure that the socket and the struct are only closed once
                         closeAction = do
+                            -- debugM "OpenSSL" "About to close connection"
                             b <- readMVar already_closed_mvar
                             if not b 
                               then do
-                                putMVar already_closed_mvar True
+                                modifyMVar_ already_closed_mvar (\ _ -> return True)
                                 disposeWiredSession wired_ptr
+                                -- debugM "OpenSSL" "dispose clalled"
                               else 
                                 return ()
 
@@ -313,11 +315,13 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
 
                                         B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
                             closeAction = do
+                                -- debugM "OpenSSL" "Close action about to be invoked"
                                 b <- readMVar already_closed_mvar
                                 if not b 
                                   then do
-                                    putMVar already_closed_mvar True
+                                    modifyMVar_ already_closed_mvar (\ _ -> return True)
                                     disposeWiredSession wired_ptr
+                                    -- debugM "OpenSSL" "Close action invoked"
                                   else 
                                     return ()
 
