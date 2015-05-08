@@ -42,14 +42,6 @@ setLoggerLevels s = do
         )
     updateGlobalLogger "OpenSSL" (
         setHandlers [s] .  
-        setLevel INFO  
-        )
-    updateGlobalLogger "HarWorker" (
-        setHandlers [s] .  
-        setLevel DEBUG  
-        )
-    updateGlobalLogger "ResearchWorker" (
-        setHandlers [s] .  
         setLevel DEBUG  
         )
     updateGlobalLogger "HTTP2.Framer" (
