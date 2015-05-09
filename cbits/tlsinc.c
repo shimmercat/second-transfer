@@ -558,10 +558,12 @@ int wait_for_connection(
 
         if ( retval == -1 )
         {
-            if ( errno == EINTR )
+            if ( errno == EINTR ) 
             {
                 // printf(".");
-                can_go = 0;
+                // I get a lot of these signals due to the fact of the 
+                // Haskell runtime having its own use for signals.
+                return TIMEOUT_REACHED;
             } else {
                 perror("select()");
                 return BAD_HAPPENED;

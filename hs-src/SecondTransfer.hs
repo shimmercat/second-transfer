@@ -118,6 +118,9 @@ module SecondTransfer(
     --   its source for the response data. A coherent worker can also present
     --   create streams to push to the client. 
 	  Headers
+    , HeaderName
+    , HeaderValue
+    , Header
     , Request
     , Footers
     , CoherentWorker

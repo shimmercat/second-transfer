@@ -424,30 +424,27 @@ sessionInputThread  = do
                 let for_worker_thread     = set streamId stream_id for_worker_thread_uns 
                 headers_bytes             <- getHeaderBytes stream_id
                 dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
-                (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
+                (new_table, header_list ) <- liftIO $ {-# SCC "decodeHeader" #-} HP.decodeHeader dyn_table headers_bytes
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here 
-                liftIO $ H.delete stream_request_headers stream_id
-                liftIO $ putMVar decode_headers_table_mvar new_table
+                liftIO $ do 
+                    H.delete stream_request_headers stream_id
+                    putMVar decode_headers_table_mvar new_table
 
                 -- TODO: Validate headers, abort session if the headers are invalid.
                 -- Otherwise other invariants will break!!
                 -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
-                --
 
                 -- If the headers end the request.... 
                 post_data_source <- if not (frameEndsStream frame)
                   then do 
-                    
                     mechanism <- createMechanismForStream stream_id 
                     let source = postDataSourceFromMechanism mechanism
                     return $ Just source
                   else do 
                     return Nothing
 
-
                 -- I'm clear to start the worker, in its own thread
-                -- !!
                 liftIO $ do 
                     thread_id <- forkIO $ runReaderT 
                         (workerThread (header_list, post_data_source) coherent_worker)

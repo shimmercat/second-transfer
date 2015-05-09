@@ -9,6 +9,9 @@
 module SecondTransfer.MainLoop.CoherentWorker(
     getHeaderFromFlatList
 
+    , HeaderName
+    , HeaderValue
+    , Header
     , Headers
     , FinalizationHeaders
     , Request
@@ -28,6 +31,14 @@ import           Data.Conduit
 import           Data.Foldable     (find)
 import           Data.Typeable
 
+-- | The name part of a header
+type HeaderName = B.ByteString
+
+-- | The value part of a header
+type HeaderValue = B.ByteString
+
+-- | The complete header
+type Header = (HeaderName, HeaderValue)
 
 -- |List of headers. The first part of each tuple is the header name 
 -- (be sure to conform to the HTTP/2 convention of using lowercase)
@@ -35,7 +46,7 @@ import           Data.Typeable
 -- the special :method, :scheme, :authority and :path pseudo-headers for 
 -- requests; and :status (with a plain numeric value represented in ascii digits)
 -- for responses.
-type Headers = [(B.ByteString, B.ByteString)]
+type Headers = [Header]
 
 -- |This is a Source conduit (see Haskell Data.Conduit library from Michael Snoyman)
 -- that you can use to retrieve the data sent by the client piece-wise.  

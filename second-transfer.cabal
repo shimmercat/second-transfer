@@ -156,7 +156,7 @@ library
 
   -- cc-options: -g3 -O0
 
-  ghc-options:
+  ghc-options: -O2
 
   extra-libraries: ssl crypto
 
