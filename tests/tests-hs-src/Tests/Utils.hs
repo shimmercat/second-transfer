@@ -3,7 +3,7 @@ module Tests.Utils where
 
 import Test.HUnit    
 
-import SecondTransfer.Utils.HTTPHeaders   (lowercaseHeaders)
+import SecondTransfer.Utils.HTTPHeaders   (lowercaseHeaders, headersAreValidHTTP2)
 import SecondTransfer                     (Headers)
 
 
@@ -17,5 +17,7 @@ testLowercaseHeaders = TestCase $ do
         regular = lowercaseHeaders irregular
     assertEqual "lowercase" regular [
         ("a", "B"),
-        ("c", "D")
+        ("c-d", "D")
         ]
+    assertEqual "test-lowercase-1" (headersAreValidHTTP2 irregular) False
+    assertEqual "test-lowercase-2" (headersAreValidHTTP2 regular) True
