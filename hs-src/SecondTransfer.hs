@@ -8,7 +8,17 @@ Stability   : experimental
 Portability : POSIX
 
 This library implements enough of the HTTP/2  to build 
-compliant HTTP/2 servers. The library
+compliant HTTP/2 servers. 
+
+Frame encoding and decoding is done with 
+Kazu Yamamoto's <http://hackage.haskell.org/package/http2 http2> package, our goal
+here is to sort the HTTP/2 frames according to the protocol. 
+
+You can find more detailed information about this library at the page 
+<https://www.httptwo.com/second-transfer/> (but notice that the site uses
+the library and doesn't yet talk HTTP/1.1, so use a modern browser).
+
+The library
 
   * Is concurrent, meaning that you can use amazing Haskell lightweight threads to 
     process the requests. 
@@ -24,8 +34,7 @@ Setting up TLS for HTTP/2 correctly is enough of a shore, so I have bundled here
 TLS setup logic. Before you read any further, ATTENTION: enable always the threaded 
 ghc runtime in your final programs if you want TLS to work.
 
-Frame encoding and decoding is done with 
-Kazu Yamamoto's <http://hackage.haskell.org/package/http2 http2> package. 
+
 
 Here is how you create a very basic HTTP/2 webserver:
 
