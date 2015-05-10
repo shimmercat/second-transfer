@@ -1,3 +1,8 @@
+
+module Main where 
+
+import System.Exit
+
 import Test.HUnit
 
 import SecondTransfer.Test.DecoySession
@@ -14,5 +19,7 @@ tests = TestList [
 
 
 main = do 
-	runTestTT tests 
-	return ()
+    rets <- runTestTT tests 
+    if (errors rets == 0 && failures rets == 0)
+        then exitWith ExitSuccess
+        else exitWith $ ExitFailure (-1)
