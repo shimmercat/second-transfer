@@ -173,7 +173,7 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                                         INSTRUMENTATION( infoM "OpenSSL" "A connection was accepted" )
                                         return $ Right  p
                                     | re == timeoutReached -> tryOnce 
-                                    | re == badHappened  -> return $ Left "A wait for connection failed"
+                                    | re == badHappened  -> return $ Left ("A wait for connection failed" :: String)
                         r 
                 in tryOnce
 
