@@ -484,8 +484,8 @@ static connection_t *sslStart (
             perror("Could not set cipher");
             return 0;
         }
-        // The certificate (well-wired)
-        SSL_CTX_use_certificate_file(c->sslContext, certificate_filename, SSL_FILETYPE_PEM);
+        // Load a certificate in .pem format.
+        SSL_CTX_use_certificate_chain_file(c->sslContext, certificate_filename);
         SSL_CTX_use_PrivateKey_file(c->sslContext,  privkey_filename, SSL_FILETYPE_PEM);
         // Check the private key 
         result = SSL_CTX_check_private_key(c->sslContext);

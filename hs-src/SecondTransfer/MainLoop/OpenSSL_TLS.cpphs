@@ -130,6 +130,8 @@ protocolsToWire protocols =
 tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the server is going to use to identify itself.
                                             --   Bear in mind that multiple domains can be served from the same HTTP/2 
                                             --   TLS socket, so please create the HTTP/2 certificate accordingly.
+                                            --   Also, currently this function only accepts paths to certificates 
+                                            --   or certificate chains in .pem format. 
                  -> FilePath                -- ^ Path to the key of your certificate. 
                  -> String                  -- ^ Name of the network interface where you want to start your server
                  -> [(String, Attendant)]   -- ^ List of protocol names and the corresponding `Attendant` to use for 
