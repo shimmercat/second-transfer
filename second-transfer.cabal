@@ -105,7 +105,8 @@ library
                  lens >= 4.7 && < 4.8,
                  http2 >= 0.7,
                  hslogger >= 1.2.6,
-                 hashable >= 1.2
+                 hashable >= 1.2,
+                 attoparsec >= 0.12
   
   -- Directories containing source files.
   hs-source-dirs: hs-src

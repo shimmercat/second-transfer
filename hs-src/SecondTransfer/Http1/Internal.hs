@@ -13,7 +13,7 @@ module SecondTransfer.Http1.Internal(
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
-    ,BodyStopCondition
+    ,BodyStopCondition(..)
     ) where 
 
 -- TODO: Move this to SecondTransfer.Http1.Internal, and leave this module
@@ -23,6 +23,7 @@ module SecondTransfer.Http1.Internal(
 import           Control.Exception                      (throw)
 -- import           Control.Lens
 import qualified Control.Lens                           as L
+import           Control.Applicative
 
 import qualified Data.ByteString                        as B
 import qualified Data.ByteString.Builder                as Bu
@@ -30,9 +31,11 @@ import           Data.ByteString.Char8                  (pack, unpack)
 import qualified Data.ByteString.Char8                  as Ch8
 import qualified Data.ByteString.Lazy                   as Lb
 import           Data.Char                              (toLower)
-import           Data.Maybe                             (isJust, isNothing)
-import           Data.Monoid                            (mappend, mconcat,
+import           Data.Maybe                             (isJust)
+import           Data.Monoid                            (mappend,
                                                          mempty)
+import qualified Data.Attoparsec.ByteString             as Ap
+
 import           Data.Foldable                          (find)
 import           Data.Word                              (Word8)
 
@@ -50,8 +53,11 @@ data IncrementalHttp1Parser = IncrementalHttp1Parser {
 
 type HeaderParseClosure = (B.ByteString ->  ([Int], Int, Word8))
 
-
 -- L.makeLenses ''IncrementalHttp1Parser
+
+instance Show IncrementalHttp1Parser where 
+    show (IncrementalHttp1Parser ft _sp ) = show $ Bu.toLazyByteString ft
+
 
 newIncrementalHttp1Parser :: IncrementalHttp1Parser
 newIncrementalHttp1Parser = IncrementalHttp1Parser {
@@ -73,6 +79,7 @@ data Http1ParserCompletion =
     --   to stop receiving the body, the third is leftovers from 
     --   parsing the headers.
     |HeadersAndBody_H1PC   Headers BodyStopCondition B.ByteString
+    deriving Show
 
 
 -- | Stop condition when parsing the body. Right now only length 
@@ -82,6 +89,7 @@ data Http1ParserCompletion =
 --  HTTP/1.1, uploads will need it.
 data BodyStopCondition = 
      UseBodyLength_BSC Int 
+     deriving (Show,Eq)
 
 
 data RequestOrResponseLine = 
@@ -89,6 +97,7 @@ data RequestOrResponseLine =
     Request_RoRL B.ByteString B.ByteString
     -- First argument is the status code
     |Response_RoRL Int
+    deriving (Show, Eq)
 
     
 addBytes :: IncrementalHttp1Parser -> B.ByteString -> Http1ParserCompletion
@@ -115,8 +124,8 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     full_headers_text = Lb.toStrict $ Bu.toLazyByteString full_text
 
     -- Filter out CRLF pairs corresponding to multiline headers.
-    no_cont_positions = filter 
-        (\ pos -> if pos >= last_headers_position then False else 
+    no_cont_positions_reverse = filter 
+        (\ pos -> if pos >= last_headers_position then True else 
             not . isWsCh8 $
                 (Ch8.index 
                     full_headers_text
@@ -124,6 +133,8 @@ elaborateHeaders full_text crlf_positions last_headers_position =
                 )
         )
         crlf_positions
+
+    no_cont_positions = reverse . tail $ no_cont_positions_reverse
 
     -- Now get the headers as slices from the original string.
     headers_pre = map 
@@ -145,9 +156,9 @@ elaborateHeaders full_text crlf_positions last_headers_position =
 
     -- The first line is not actually a header, but contains the method, the version
     -- and the URI
-    (pseudo_headers_builder, request_or_response) = parseFirstLine (head headers_pre)
+    request_or_response = parseFirstLine (head headers_pre)
 
-    headers_1 = pseudo_headers_builder headers_0
+    headers_1 = headers_0
 
     (headers_2, has_body) = case request_or_response of 
 
@@ -197,12 +208,19 @@ splitByColon :: B.ByteString -> (B.ByteString, B.ByteString)
 splitByColon  = L.over L._2 (B.tail) . Ch8.break (== ':') 
 
 
-parseFirstLine :: B.ByteString -> ( ( Headers -> Headers ), RequestOrResponseLine )
-parseFirstLine = error "Not implemented"
-
+parseFirstLine :: B.ByteString -> RequestOrResponseLine
+parseFirstLine s = 
+  let 
+    either_error_or_rrl = Ap.parseOnly httpFirstLine s 
+    exc = HTTP11SyntaxException "BadMessageFirstLine"
+  in 
+    case either_error_or_rrl of 
+        Left _ -> throw exc 
+        Right rrl -> rrl
 
 bsToLower :: B.ByteString -> B.ByteString
 bsToLower = Ch8.map toLower 
+
 
 -- This ought to be slow!
 stripBs :: B.ByteString -> B.ByteString
@@ -241,7 +259,7 @@ locateCRLFs initial_offset other_positions prev_last_char next_chunk =
 
 
 twoCRLFsAreConsecutive :: [Int] -> Maybe Int 
-twoCRLFsAreConsecutive (p2:p1:_) | p1 - p2 == 2 = Just p1
+twoCRLFsAreConsecutive (p2:p1:_) | p2 - p1 == 2 = Just p1
 twoCRLFsAreConsecutive _                        = Nothing
 
 
@@ -251,14 +269,71 @@ isWsCh8 s = isJust (Ch8.elemIndex
         " \t"
     )
 
+isWs :: Word8 -> Bool
+isWs s = isJust (B.elemIndex
+        s
+        " \t"
+    )
+
+http1Token :: Ap.Parser B.ByteString
+http1Token = Ap.string "HTTP/1.1" <|> Ap.string "HTTP/1.0"
+
+http1Method :: Ap.Parser B.ByteString
+http1Method = 
+    Ap.string "GET"
+    <|> Ap.string "POST"
+    <|> Ap.string "HEAD"
+    <|> Ap.string "PUT"
+    <|> Ap.string "OPTIONS"
+    <|> Ap.string "TRACE"
+    <|> Ap.string "CONNECT"
+
+unspacedUri :: Ap.Parser B.ByteString
+unspacedUri = Ap.takeWhile (not . isWs)
+
+
+space :: Ap.Parser Word8
+space = Ap.word8 32
+
+requestLine :: Ap.Parser RequestOrResponseLine
+requestLine = 
+    flip Request_RoRL
+    <$> 
+    http1Method 
+    <* space
+    <*>
+    unspacedUri 
+    <* space
+    <* http1Token
+
+digit :: Ap.Parser Word8
+digit = Ap.satisfy (Ap.inClass "0-9")
+
+responseLine :: Ap.Parser RequestOrResponseLine
+responseLine = 
+    (pure Response_RoRL)
+    <*
+    http1Token
+    <*
+    space
+    <*>
+    ( read . map (toEnum . fromIntegral )  <$> Ap.count 3 digit )
+    <*
+    space 
+    <*
+    Ap.takeByteString
+
+httpFirstLine :: Ap.Parser RequestOrResponseLine
+httpFirstLine = requestLine <|> responseLine
+
 -- For testing purposes... --------------------------------------------------------------
 -----------------------------------------------------------------------------------------
 
-assertEqual :: Eq a => String -> a -> a -> IO ()
-assertEqual label v1 v2 = do 
-    putStrLn label
-    if v1 == v2 
-      then 
-        putStrLn "Ok"
-      else 
-        putStrLn "NoOk"
+-- assertEqual :: Eq a => String -> a -> a -> IO ()
+-- assertEqual label v1 v2 = do 
+--     putStrLn label
+--     if v1 == v2 
+--       then 
+--         putStrLn "Ok"
+--       else 
+--         putStrLn "NoOk"

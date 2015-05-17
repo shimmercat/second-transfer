@@ -5,6 +5,7 @@ module SecondTransfer.Exception (
 	,FramerException (..)
 	,BadPrefaceException (..)
     ,HTTP11Exception (..)
+    ,HTTP11SyntaxException (..)
     ,ContentLengthMissingException (..)
 	) where 
 
@@ -88,5 +89,13 @@ data ContentLengthMissingException = ContentLengthMissingException
     deriving (Typeable, Show)
 
 instance Exception ContentLengthMissingException where 
+    toException = convertHTTP11ExceptionToException
+    fromException = getHTTP11ExceptionFromException
+
+
+data HTTP11SyntaxException = HTTP11SyntaxException String 
+    deriving (Typeable, Show)
+
+instance Exception HTTP11SyntaxException where 
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException

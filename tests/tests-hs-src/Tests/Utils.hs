@@ -44,4 +44,3 @@ testCRLFLocate = TestCase $ do
     assertEqual "many-positions.position" positions [14,12,5]
     assertEqual "many-positions.length" length_ (B.length input_text_2)
     assertEqual "many-positions.lastchar" lastchar (fromIntegral . fromEnum $ '\n')
-
