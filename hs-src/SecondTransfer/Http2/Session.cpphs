@@ -16,6 +16,7 @@ module SecondTransfer.Http2.Session(
     ,makeSessionsContext
     ,sessionsConfig
     ,sessionExceptionHandler
+    ,sessionIdAtSession
 
     ,CoherentSession
     ,SessionInput(..)
@@ -291,6 +292,7 @@ data SessionData = SessionData {
     -- is cancelled by the client. This way we get early finalization. 
     ,_stream2WorkerThread        :: HashTable Int ThreadId
 
+    -- Use to retrieve/set the session id
     ,_sessionIdAtSession         :: Int
     }
 

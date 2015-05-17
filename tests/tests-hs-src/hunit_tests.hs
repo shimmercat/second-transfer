@@ -14,7 +14,8 @@ import Tests.Utils
 tests = TestList [
 	TestLabel "testPrefaceChecks" testPrefaceChecks,
 	TestLabel "testPrefaceChecks2" testPrefaceChecks2,
-    TestLabel "testLowercaseHeaders" testLowercaseHeaders
+    TestLabel "testLowercaseHeaders" testLowercaseHeaders,
+    TestLabel  "testCRLFLocate" testCRLFLocate
 	]
 
 

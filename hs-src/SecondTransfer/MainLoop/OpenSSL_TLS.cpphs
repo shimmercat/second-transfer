@@ -181,8 +181,9 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
             case either_wired_ptr of 
 
-                Left msg -> do 
-                    INSTRUMENTATION( errorM "OpenSSL" $ ".. wait for connection failed. " ++ msg )
+-- Disable a warning
+                Left _msg -> do 
+                    INSTRUMENTATION( errorM "OpenSSL" $ ".. wait for connection failed. " ++ _msg )
                     return ()
 
                 Right wired_ptr -> do 

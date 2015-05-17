@@ -4,6 +4,8 @@ module SecondTransfer.Exception (
 	HTTP2SessionException (..)
 	,FramerException (..)
 	,BadPrefaceException (..)
+    ,HTTP11Exception (..)
+    ,ContentLengthMissingException (..)
 	) where 
 
 import           Control.Exception
@@ -58,3 +60,33 @@ data BadPrefaceException = BadPrefaceException
 instance Exception BadPrefaceException where
     toException   = convertFramerExceptionToException
     fromException = getFramerExceptionFromException
+
+
+-- | Abstract exception. All HTTP/1.1 related exceptions derive from here.
+--   Notice that this includes a lot of logical errors and they can be
+--   raised when handling HTTP/2 sessions also
+data HTTP11Exception = forall e . Exception e => HTTP11Exception e
+    deriving Typeable
+
+instance Show HTTP11Exception where
+    show (HTTP11Exception e) = show e
+
+instance  Exception HTTP11Exception 
+
+convertHTTP11ExceptionToException :: Exception e => e -> SomeException
+convertHTTP11ExceptionToException = toException . HTTP11Exception
+
+getHTTP11ExceptionFromException :: Exception e => SomeException -> Maybe e
+getHTTP11ExceptionFromException x = do
+    HTTP2SessionException a <- fromException x
+    cast a
+
+-- | Thrown with HTTP/1.1 over HTTP/1.1 sessions when the response body
+--   or the request body doesn't include a Content-Length header field,
+--   even if it should have included it 
+data ContentLengthMissingException = ContentLengthMissingException 
+    deriving (Typeable, Show)
+
+instance Exception ContentLengthMissingException where 
+    toException = convertHTTP11ExceptionToException
+    fromException = getHTTP11ExceptionFromException

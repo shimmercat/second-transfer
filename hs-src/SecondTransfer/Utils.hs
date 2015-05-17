@@ -10,7 +10,7 @@ module SecondTransfer.Utils (
     ,unfoldChannelAndSource
     ,stripString
     ,domainFromUrl
-
+    ,subByteString
     ) where 
 
 
@@ -104,3 +104,9 @@ domainFromUrl url = let
   in 
     pack use_host
 
+
+-- Returns the sub-bytestring that starts at start_pos and ends
+-- just before end_pos
+subByteString :: Int -> Int -> B.ByteString -> B.ByteString
+subByteString start_pos end_pos  = 
+    B.take (end_pos - start_pos ) . B.drop start_pos 

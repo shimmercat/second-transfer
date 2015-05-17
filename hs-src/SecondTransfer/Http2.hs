@@ -8,7 +8,7 @@ module SecondTransfer.Http2(
 	-- | Context. You need to use `makeSessionsContext` to instance
 	--   one of this. 
 	,SessionsContext
-	,SessionsCallbacks(..)
+	,SessionsCallbacks
 	,ErrorCallback
 	,sessionsCallbacks
 

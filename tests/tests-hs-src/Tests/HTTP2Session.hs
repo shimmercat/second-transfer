@@ -53,7 +53,7 @@ testPrefaceChecks = TestCase $ do
     decoy_session <- createDecoySession attendant
     -- This should work
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-    threadDelay 2000000
+    threadDelay 1000000
     got_error <- readMVar errors_mvar
     if got_error then do 
         assertFailure "Exception raised"
@@ -70,7 +70,7 @@ testPrefaceChecks2 = TestCase $ do
     decoy_session <- createDecoySession attendant
     -- This should work
     sendRawDataToSession decoy_session "PRI * HXXP/2.0\r\n\r\nSM\r\n\r\n"
-    threadDelay 2000000
+    threadDelay 1000000
     got_error <- readMVar errors_mvar
     if not got_error then do 
         assertFailure "Exception didn't raise"

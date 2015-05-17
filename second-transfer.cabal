@@ -65,6 +65,7 @@ library
                   , SecondTransfer.Exception
                   , SecondTransfer.MainLoop.Logging
                   , SecondTransfer.Utils.HTTPHeaders
+                  , SecondTransfer.Http1.Internal
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType
@@ -74,6 +75,7 @@ library
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant
                 , SecondTransfer.Http2.Session
+
 
   build-tools: cpphs
 
