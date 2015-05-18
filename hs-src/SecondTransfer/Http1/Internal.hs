@@ -68,14 +68,14 @@ newIncrementalHttp1Parser = IncrementalHttp1Parser {
 
 -- | Was the parser complete?
 data Http1ParserCompletion = 
-    -- ^ No, not even headers are done. Use the returned
+    -- | No, not even headers are done. Use the returned
     --   value to continue
     MustContinue_H1PC IncrementalHttp1Parser
-    -- ^ Headers were completed. For some HTTP methods that's all
+    -- | Headers were completed. For some HTTP methods that's all
     --   there is, and that's what this case represents. The second
     --   argument is a left-overs string.
     |OnlyHeaders_H1PC      Headers B.ByteString
-    -- ^ For requests with a body. The second argument is a condition
+    -- | For requests with a body. The second argument is a condition
     --   to stop receiving the body, the third is leftovers from 
     --   parsing the headers.
     |HeadersAndBody_H1PC   Headers BodyStopCondition B.ByteString
