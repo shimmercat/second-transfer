@@ -17,7 +17,8 @@ tests = TestList [
 	TestLabel "testPrefaceChecks2" testPrefaceChecks2,
     TestLabel "testLowercaseHeaders" testLowercaseHeaders,
     TestLabel "testCRLFLocate" testCRLFLocate,
-    TestLabel "testHTTP1Parse" testParse
+    TestLabel "testHTTP1Parse" testParse,
+    TestLabel "testReplaceHostByAuthority" testReplaceHostByAuthority
 	]
 
 

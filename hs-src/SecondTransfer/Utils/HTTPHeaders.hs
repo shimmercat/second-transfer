@@ -1,10 +1,32 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, Rank2Types #-}
+{-|
+
+Utilities for working with headers. 
+
+-}
 module SecondTransfer.Utils.HTTPHeaders (
+    -- * Simple manipulation
+    -- 
+    -- | These transformations are simple enough that don't require
+    --   going away from the list representation (see type `Headers`) 
     lowercaseHeaders
     ,headersAreValidHTTP2
     ,fetchHeader
-    ,replaceHostByAuthority
+    -- * Transformations based on maps
+    --
+    -- | Many operations benefit
+    --   from transforming the list to a map with custom sorting and 
+    --   doing a set of operations on that representation.
+    --
+    ,HeaderEditor
+    -- ** Introducing and removing the `HeaderEditor`
+    ,fromList 
+    ,toList 
+    -- ** Access to a particular header
     ,headerLens
+    ,replaceHeaderValue
+    -- ** HTTP utilities
+    ,replaceHostByAuthority
     ) where 
 
 import qualified Control.Lens                           as L
@@ -16,6 +38,8 @@ import           Data.List                              (find)
 import           Data.Text                              (toLower)
 import qualified Data.Text                              as T
 import           Data.Text.Encoding                     (decodeUtf8, encodeUtf8)
+import qualified Data.Map.Strict                        as Ms
+import           Data.Word                              (Word8)
 
 import           Control.Applicative                    ((<$>))
 
@@ -52,6 +76,33 @@ fetchHeader headers header_name =
     find ( \ x -> fst x == header_name ) headers 
 
 
+newtype Autosorted = Autosorted { toFlatBs :: B.ByteString }
+  deriving Eq
+
+
+colon :: Word8 
+colon = fromIntegral . fromEnum $ ':'
+
+
+instance Ord Autosorted where 
+  compare (Autosorted a) (Autosorted b) | (B.head a) == colon, (B.head b) /= colon = LT 
+  compare (Autosorted a) (Autosorted b) | (B.head a) /= colon, (B.head b) == colon = GT 
+  compare (Autosorted a) (Autosorted b)  = compare a b
+
+-- | Abstract data-type. Use `fromList` to get one of these from `Headers`. 
+-- The underlying representation admits better asymptotics.
+newtype HeaderEditor = HeaderEditor { innerMap :: Ms.Map Autosorted B.ByteString }
+
+
+-- | /O(n*log n)/ Builds the editor from a list. 
+fromList :: Headers -> HeaderEditor 
+fromList = HeaderEditor . Ms.fromList . map (\(hn, hv) -> (Autosorted hn, hv))
+
+-- | /O(n)/ Takes the HeaderEditor back to Headers
+toList :: HeaderEditor -> Headers 
+toList (HeaderEditor m) = [ (toFlatBs x, v) | (x,v) <- Ms.toList m ]
+
+
 -- | replaceHeaderValue headers header_name maybe_header_value looks for 
 --   header_name. If header_name is found and maybe_header_value is nothing, it 
 --   returns a new headers list with the header deleted. If header_name is found
@@ -60,49 +111,39 @@ fetchHeader headers header_name =
 --   is Nothing, it returns the original headers list. If header_name is not in headers
 --   and maybe_header_value is Just new_value, it returns a new list where the last element
 --   is (header_name, new_value)
-replaceHeaderValue :: Headers -> B.ByteString -> Maybe B.ByteString -> Headers 
-replaceHeaderValue headers header_name maybe_header_value = 
-    disect id headers
+replaceHeaderValue :: HeaderEditor -> B.ByteString -> Maybe B.ByteString -> HeaderEditor
+replaceHeaderValue (HeaderEditor m) header_name maybe_header_value = 
+    HeaderEditor $ Ms.alter (const maybe_header_value) (Autosorted header_name) m
+
+
+-- | headerLens header_name represents a lens into the headers,
+--   and you can use it then to add, alter and remove headers.
+--   It uses the same semantics than `replaceHeaderValue`
+headerLens :: B.ByteString -> L.Lens' HeaderEditor (Maybe B.ByteString)
+headerLens name = 
+    L.lens 
+        (Ms.lookup hname . innerMap ) 
+        (\(HeaderEditor hs) mhv -> HeaderEditor $ Ms.alter (const mhv) hname hs)
   where 
-    disect builder [] = case maybe_header_value of 
-        Nothing -> headers
-        Just new_value -> builder $ (header_name, new_value):[]
-    disect builder ( el@(hn,_) : rest) 
-        | hn /= header_name = 
-            disect
-                (\ constructed_list -> builder $ el:constructed_list )
-                rest
-        | otherwise = case maybe_header_value of 
-            Nothing -> builder rest 
-            Just new_value -> builder $ (hn, new_value):rest
+    hname = Autosorted name
 
-headerLens :: 
-  Functor f => 
-  B.ByteString -> 
-  (Maybe B.ByteString -> f (Maybe B.ByteString)) ->
-  Headers ->
-  f Headers
-headerLens header_name f headers | old_header_value <- fetchHeader headers header_name = fmap 
-  (\ new_header_value -> replaceHeaderValue headers header_name new_header_value)
-  (f old_header_value )
-
--- | Replaces a "Host" HTTP/1.1 header by an ":authority" HTTP/1.1 
+-- | Replaces a \"host\" HTTP\/1.1 header by an ":authority" HTTP\/2 
 -- header.
--- Notice that having a "Host" header is perfectly valid in certain 
--- circumstances, check 8.1.2.3. However right now I don't see 
--- those circumstances aplying to this library when acting as a pure
--- server.... 
+-- The list is expected to be already in lowercase, so nothing will happen if there
+-- the header name portion is \"Host\" instead of \"host\".
 --
--- Anyway, call this function when it makes sense, e.g., when implementing
--- a proxy to an application server. 
-replaceHostByAuthority :: Headers -> Headers 
+-- Notice that having a "Host" header in an HTTP\/2 message is perfectly valid in certain 
+-- circumstances, check <https://http2.github.io/http2-spec/#rfc.section.8.1.2.3 Section 8.1.2.3>
+-- of the spec for details.
+replaceHostByAuthority :: HeaderEditor -> HeaderEditor
 replaceHostByAuthority  headers = 
   let
-    host_lens :: L.Lens' Headers (Maybe B.ByteString)
+    host_lens :: L.Lens' HeaderEditor (Maybe B.ByteString)
     host_lens = headerLens "host"
+    authority_lens = headerLens ":authority"
     maybe_host_header = headers ^. host_lens
-    headers_without_host = L.set host_lens Nothing headers
+    no_hosts = L.set host_lens Nothing headers
   in 
     case maybe_host_header of 
         Nothing -> headers 
-        Just host -> (":authority", host): headers_without_host
+        Just host -> L.set authority_lens (Just host) no_hosts

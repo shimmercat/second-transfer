@@ -7,8 +7,7 @@ import qualified Data.ByteString                  as B
 import           Test.HUnit
 
 import           SecondTransfer                   (Headers)
-import           SecondTransfer.Utils.HTTPHeaders (headersAreValidHTTP2,
-                                                   lowercaseHeaders)
+import           SecondTransfer.Utils.HTTPHeaders 
 import           SecondTransfer.Http1.Internal    (locateCRLFs)
 
 
@@ -44,3 +43,22 @@ testCRLFLocate = TestCase $ do
     assertEqual "many-positions.position" positions [14,12,5]
     assertEqual "many-positions.length" length_ (B.length input_text_2)
     assertEqual "many-positions.lastchar" lastchar (fromIntegral . fromEnum $ '\n')
+
+
+testReplaceHostByAuthority :: Test 
+testReplaceHostByAuthority = TestCase $ do 
+    let 
+        headers_pre = [
+            ("A", "B"),
+            ("C-D", "D"),
+            ("Host", "D")
+            ] :: Headers
+        regular = toList. replaceHostByAuthority . fromList . lowercaseHeaders $ headers_pre
+    -- Do not pass in headers with uppercase
+    assertEqual "replace-host-by-authority" 
+        [
+            (":authority", "D"),
+            ("a", "B"),
+            ("c-d", "D")
+        ]
+        regular
