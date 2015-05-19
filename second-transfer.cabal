@@ -60,6 +60,7 @@ library
   exposed-modules:  SecondTransfer
                   , SecondTransfer.MainLoop
                   , SecondTransfer.Http2
+                  , SecondTransfer.Http1
                   , SecondTransfer.Exception
                   , SecondTransfer.Types
                   , SecondTransfer.Utils.HTTPHeaders
@@ -67,7 +68,6 @@ library
                   -- here for the sake of the test suite. They are hidden 
                   -- from the documentation.
                   , SecondTransfer.MainLoop.Internal
-                  , SecondTransfer.Http1.Parse
                   , SecondTransfer.MainLoop.OpenSSL_TLS
                   , SecondTransfer.SessionsConfig
 
@@ -76,10 +76,15 @@ library
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
                 , SecondTransfer.MainLoop.Logging                
+
                 , SecondTransfer.Utils
+
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant
                 , SecondTransfer.Http2.Session
+
+                , SecondTransfer.Http1.Parse
+                , SecondTransfer.Http1.Session
 
 
   build-tools: cpphs

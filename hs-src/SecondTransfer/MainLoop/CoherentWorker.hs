@@ -24,11 +24,11 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , InputDataStream
     ) where 
 
-import           Control.Exception
+
 import qualified Data.ByteString   as B
 import           Data.Conduit
 import           Data.Foldable     (find)
-import           Data.Typeable
+
 
 -- | The name part of a header
 type HeaderName = B.ByteString
