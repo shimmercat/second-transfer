@@ -1,4 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable, ExistentialQuantification #-}
+{-|
+Module      : SecondTransfer.Exception
+Description : If you need to handle exceptions (I hope not)
+-}
 module SecondTransfer.Exception (
 	-- * Exceptions thrown by the HTTP/2 sessions
 	HTTP2SessionException (..)

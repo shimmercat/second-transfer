@@ -69,12 +69,12 @@ library
                   , SecondTransfer.MainLoop.Internal
                   , SecondTransfer.Http1.Parse
                   , SecondTransfer.MainLoop.OpenSSL_TLS
+                  , SecondTransfer.SessionsConfig
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
-                , SecondTransfer.MainLoop.BaseSession
                 , SecondTransfer.Utils
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant

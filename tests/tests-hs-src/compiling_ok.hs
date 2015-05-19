@@ -7,7 +7,7 @@ import SecondTransfer(
 	, http2Attendant
 	, FinishRequest(..)
 	)
-import SecondTransfer.Http2(
+import SecondTransfer.SessionsConfig(
 	  makeSessionsContext
 	, defaultSessionsConfig
 	)

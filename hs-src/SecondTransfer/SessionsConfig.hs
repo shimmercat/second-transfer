@@ -1,6 +1,5 @@
 {-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell, OverloadedStrings #-}
-{-# OPTIONS_HADDOCK hide #-}
-module SecondTransfer.MainLoop.BaseSession(
+module SecondTransfer.SessionsConfig(
     sessionId
     ,defaultSessionsConfig
     ,makeSessionsContext

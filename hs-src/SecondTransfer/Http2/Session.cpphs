@@ -67,7 +67,7 @@ import           System.Log.Logger
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
-import           SecondTransfer.MainLoop.BaseSession
+import           SecondTransfer.SessionsConfig
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 

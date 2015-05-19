@@ -1,6 +1,6 @@
 {-|
 Module      : SecondTransfer
-Description : A library for implementing HTTP\/2 servers supporting streaming requests and responses.
+Description : One-stop module for implementing a webserver
 Copyright   : (c) Alcides Viamontes Esquivel, 2015
 License     : BSD
 Maintainer  : alcidesv@zunzun.se
@@ -47,7 +47,7 @@ import SecondTransfer(
     , tlsServeWithALPN
     , http2Attendant
     )
-import SecondTransfer.Http2(
+import SecondTransfer.SessionsConfig(
       makeSessionsContext
     , defaultSessionsConfig
     )
@@ -140,9 +140,6 @@ module SecondTransfer(
     , InputDataStream
     , FinalizationHeaders
     
-    -- * Basic utilities for  HTTP/2 servers
-    -- ** Configuration 
-    
     -- ** Callback types
     ,Attendant
     -- *** Push, Pull and Close actions
@@ -178,4 +175,5 @@ module SecondTransfer(
 
 import SecondTransfer.MainLoop.CoherentWorker 
 import SecondTransfer.MainLoop
+import SecondTransfer.SessionsConfig
 import SecondTransfer.Http2.MakeAttendant(http2Attendant)
