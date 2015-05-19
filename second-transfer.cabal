@@ -61,7 +61,7 @@ library
                   , SecondTransfer.MainLoop
                   , SecondTransfer.Http2
                   , SecondTransfer.Exception
-                  , SecondTransfer.MainLoop.Logging
+                  , SecondTransfer.Types
                   , SecondTransfer.Utils.HTTPHeaders
                   -- These are really internal modules, but  are exposed 
                   -- here for the sake of the test suite. They are hidden 
@@ -75,6 +75,7 @@ library
                 , SecondTransfer.MainLoop.PushPullType
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
+                , SecondTransfer.MainLoop.Logging                
                 , SecondTransfer.Utils
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant

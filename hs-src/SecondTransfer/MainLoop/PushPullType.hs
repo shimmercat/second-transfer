@@ -5,13 +5,8 @@ module SecondTransfer.MainLoop.PushPullType (
 	,PullAction
 	,Attendant
     ,CloseAction
-    ,IOProblem(..)
-    ,GenericIOProblem(..)
 	) where 
 
-
-import           Control.Exception 
-import           Data.Typeable                (Typeable, cast)
 
 import qualified Data.ByteString              as B
 import qualified Data.ByteString.Lazy         as LB
@@ -50,28 +45,3 @@ type CloseAction = IO ()
 --   which for HTTP/2 is quite complicated. You use the function `http2Attendant`
 --   to create one of these from a `CoherentWorker`.
 type Attendant = PushAction -> PullAction -> CloseAction -> IO () 
-
-
--- | Throw exceptions derived from this (e.g, `GenericIOProblem` below)
---   to have the HTTP/2 session to terminate gracefully. 
-data IOProblem = forall e . Exception e => IOProblem e 
-	deriving Typeable
-
-
-instance  Show IOProblem where
-	show (IOProblem e) = show e 
-
-instance Exception IOProblem 
-
--- | A concrete case of the above exception. Throw one of this
---   if you don't want to implement your own type. Use 
---   `IOProblem` in catch signatures.
-data GenericIOProblem = GenericIOProblem
-	deriving (Show, Typeable)
-
-
-instance Exception GenericIOProblem where 
-	toException = toException . IOProblem
-	fromException x = do 
-		IOProblem a <- fromException x 
-		cast a

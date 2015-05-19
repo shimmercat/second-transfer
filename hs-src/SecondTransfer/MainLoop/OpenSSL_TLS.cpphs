@@ -30,10 +30,11 @@ import qualified Data.ByteString.Unsafe     as BU
 import           System.Log.Logger
 
 import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.Exception
 
 #include "Logging.cpphs"
 
--- | Exception inheriting from `IOProblem`. This is thrown by the 
+-- | Exceptions inheriting from `IOProblem`. This is thrown by the 
 -- OpenSSL subsystem to signal that the connection was broken or that 
 -- otherwise there was a problem at the SSL layer. 
 data TLSLayerGenericProblem = TLSLayerGenericProblem String

@@ -1,6 +1,5 @@
 {-|
 Module      : SecondTransfer
-Description : One-stop module for implementing a webserver
 Copyright   : (c) Alcides Viamontes Esquivel, 2015
 License     : BSD
 Maintainer  : alcidesv@zunzun.se
@@ -140,19 +139,9 @@ module SecondTransfer(
     , InputDataStream
     , FinalizationHeaders
     
-    -- ** Callback types
+    -- ** How to couple bidirectional data channels to sessions
     ,Attendant
-    -- *** Push, Pull and Close actions
-    -- 
-    -- | You don't need to do anything with these types if you are using
-    --   `http2Attendant` and `tlsServeWithALPN`. But they are useful if 
-    --   you want to implement your own layer.
-    ,PullAction
-    ,PushAction
-    ,CloseAction
     ,http2Attendant
-    ,IOProblem
-    ,GenericIOProblem
     -- * High level OpenSSL functions. 
     -- 
     -- | Use these functions to create your TLS-compliant 
@@ -175,5 +164,5 @@ module SecondTransfer(
 
 import SecondTransfer.MainLoop.CoherentWorker 
 import SecondTransfer.MainLoop
-import SecondTransfer.SessionsConfig
+import SecondTransfer.Types
 import SecondTransfer.Http2.MakeAttendant(http2Attendant)

@@ -17,7 +17,7 @@ import qualified Data.ByteString         as B
 import qualified Data.ByteString.Lazy    as LB
 
 import           SecondTransfer.Http2
-import           SecondTransfer.MainLoop
+import           SecondTransfer.Types
 import           SecondTransfer.MainLoop.Internal
 
 

@@ -40,7 +40,7 @@ import           SecondTransfer.Http2.Session
 import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker)
 import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.MainLoop.PushPullType   (Attendant, CloseAction,
-                                                         PullAction, PushAction, IOProblem)
+                                                         PullAction, PushAction)
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
 

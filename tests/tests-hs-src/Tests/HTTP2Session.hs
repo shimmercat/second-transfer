@@ -4,13 +4,15 @@ module Tests.HTTP2Session where
 import Test.HUnit    
 
 
-import Control.Concurrent.MVar
-import Control.Lens
-import Control.Concurrent (threadDelay)
+import           Control.Concurrent               (threadDelay)
+import           Control.Concurrent.MVar
+import           Control.Lens
 
-import SecondTransfer.Test.DecoySession
-import SecondTransfer.Http2
-import SecondTransfer
+import           SecondTransfer.Http2             (http2Attendant)
+import           SecondTransfer.SessionsConfig
+import           SecondTransfer.Test.DecoySession
+import           SecondTransfer.Types
+
 
 
 import Data.Conduit(yield)

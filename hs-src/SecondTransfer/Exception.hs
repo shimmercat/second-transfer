@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable, ExistentialQuantification #-}
 {-|
 Module      : SecondTransfer.Exception
-Description : If you need to handle exceptions (I hope not)
 -}
 module SecondTransfer.Exception (
 	-- * Exceptions thrown by the HTTP/2 sessions
@@ -11,6 +10,10 @@ module SecondTransfer.Exception (
     ,HTTP11Exception (..)
     ,HTTP11SyntaxException (..)
     ,ContentLengthMissingException (..)
+
+    -- * Exceptions related to the IO layer
+    ,IOProblem(..)
+    ,GenericIOProblem(..)
 	) where 
 
 import           Control.Exception
@@ -103,3 +106,27 @@ data HTTP11SyntaxException = HTTP11SyntaxException String
 instance Exception HTTP11SyntaxException where 
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
+
+-- | Throw exceptions derived from this (e.g, `GenericIOProblem` below)
+--   to have the HTTP/2 session to terminate gracefully. 
+data IOProblem = forall e . Exception e => IOProblem e 
+    deriving Typeable
+
+
+instance  Show IOProblem where
+    show (IOProblem e) = show e 
+
+instance Exception IOProblem 
+
+-- | A concrete case of the above exception. Throw one of this
+--   if you don't want to implement your own type. Use 
+--   `IOProblem` in catch signatures.
+data GenericIOProblem = GenericIOProblem
+    deriving (Show, Typeable)
+
+
+instance Exception GenericIOProblem where 
+    toException = toException . IOProblem
+    fromException x = do 
+        IOProblem a <- fromException x 
+        cast a
