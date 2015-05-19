@@ -59,13 +59,16 @@ library
 
   exposed-modules:  SecondTransfer
                   , SecondTransfer.MainLoop
-                  , SecondTransfer.MainLoop.OpenSSL_TLS
                   , SecondTransfer.Http2
-                  , SecondTransfer.MainLoop.Internal
                   , SecondTransfer.Exception
                   , SecondTransfer.MainLoop.Logging
                   , SecondTransfer.Utils.HTTPHeaders
+                  -- These are really internal modules, but  are exposed 
+                  -- here for the sake of the test suite. They are hidden 
+                  -- from the documentation.
+                  , SecondTransfer.MainLoop.Internal
                   , SecondTransfer.Http1.Parse
+                  , SecondTransfer.MainLoop.OpenSSL_TLS
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType

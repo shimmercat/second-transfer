@@ -9,8 +9,6 @@ module SecondTransfer.Http1.Parse(
     ,locateCRLFs
     ,splitByColon
     ,stripBs
-    -- ,test1
-    -- ,test2
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
