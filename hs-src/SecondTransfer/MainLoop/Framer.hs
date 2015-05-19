@@ -14,6 +14,7 @@ import           Control.Monad.IO.Class    (MonadIO
                                            -- , liftIO
                                            )
 import qualified Data.ByteString           as B
+import qualified Data.ByteString.Builder   as Bu
 import qualified Data.ByteString.Lazy      as LB
 import           Data.Conduit
 
@@ -39,17 +40,13 @@ readNextChunk :: Monad m =>
     -> Source m B.ByteString               -- ^ Packet and leftovers, if we could get them 
 readNextChunk length_callback input_leftovers gen = do 
     let 
+
         maybe_length = length_callback input_leftovers
-        readUpTo_ lo the_length | (B.length lo) >= the_length = 
-            return $ B.splitAt the_length lo
-        readUpTo_ lo the_length = do 
-            frag <- lift gen 
-            readUpTo_ (lo `mappend` frag) the_length
 
     case maybe_length of 
         Just the_length -> do 
             -- Just need to read the rest .... 
-            (package_bytes, newnewleftovers) <- readUpTo_ input_leftovers the_length
+            (package_bytes, newnewleftovers) <- lift $ readUpTo gen input_leftovers the_length
             yield package_bytes 
             readNextChunk length_callback newnewleftovers gen 
 
@@ -85,12 +82,18 @@ readNextChunkAndContinue length_callback input_leftovers gen = do
 
 
 readUpTo :: Monad m => m B.ByteString -> B.ByteString -> Int -> m (B.ByteString, B.ByteString)
-readUpTo _ lo the_length | (B.length lo) >= the_length = 
-    return $ B.splitAt the_length lo
-readUpTo gen lo the_length = do 
-    frag <- gen 
-    readUpTo gen (lo `mappend` frag) the_length
-
+readUpTo gen input_leftovers the_length = 
+  let 
+    initial_length = B.length input_leftovers
+    bu = Bu.byteString input_leftovers
+    go lo readsofar_length 
+        | readsofar_length >= the_length = 
+            return $ B.splitAt the_length $ LB.toStrict . Bu.toLazyByteString $ lo
+        | otherwise = do
+            frag <- gen 
+            go (lo `mappend` (Bu.byteString frag)) (readsofar_length + (B.length frag))
+  in 
+    go bu initial_length
 
 -- Some protocols, e.g., http/2, have the client transmit a fixed-length
 -- prefix. This function reads both that prefix and returns whatever get's
