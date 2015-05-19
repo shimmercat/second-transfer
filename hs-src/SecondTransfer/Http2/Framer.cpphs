@@ -155,7 +155,7 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True) 
-            sessionExceptionHandler Framer_SessionComponent x y e
+            sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
 
     forkIO 
@@ -424,7 +424,7 @@ startStreamOutputQueue stream_id = do
         exc_handler x y e = do
             -- Let's also decree that other streams don't even try
             modifyMVar_ output_is_forbidden_mvar ( \ _ -> return True)
-            sessionExceptionHandler Framer_SessionComponent x y e
+            sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
 
     read_state <- ask 

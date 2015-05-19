@@ -71,6 +71,7 @@ library
                 , SecondTransfer.MainLoop.PushPullType
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
+                , SecondTransfer.MainLoop.BaseSession
                 , SecondTransfer.Utils
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant
