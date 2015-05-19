@@ -10,4 +10,4 @@ import SecondTransfer.MainLoop.PushPullType(Attendant)
 
 
 http11Attendant :: SessionsContext -> CoherentWorker -> Attendant
-http11Attendant = error "Not implemented yet"
+http11Attendant sessions_context coherent_worker = error "Not implemented yet"
