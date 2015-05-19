@@ -8,7 +8,7 @@ import           Data.Maybe                          (isJust)
 import           Test.HUnit
 
 import           SecondTransfer                      (Headers)
-import           SecondTransfer.Http1.Internal.Parse
+import           SecondTransfer.Http1.Parse
 
 
 testParse :: Test

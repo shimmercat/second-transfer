@@ -1,3 +1,4 @@
+{-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.Internal(
 	readNextChunkAndContinue
 	,http2FrameLength

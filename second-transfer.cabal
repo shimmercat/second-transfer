@@ -65,7 +65,7 @@ library
                   , SecondTransfer.Exception
                   , SecondTransfer.MainLoop.Logging
                   , SecondTransfer.Utils.HTTPHeaders
-                  , SecondTransfer.Http1.Internal.Parse
+                  , SecondTransfer.Http1.Parse
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType

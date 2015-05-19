@@ -1,6 +1,7 @@
+{-# OPTIONS_HADDOCK hide #-}
 {-# LANGUAGE TemplateHaskell, OverloadedStrings #-}
 
-module SecondTransfer.Http1.Internal.Parse(
+module SecondTransfer.Http1.Parse(
     newIncrementalHttp1Parser
     ,addBytes
 
