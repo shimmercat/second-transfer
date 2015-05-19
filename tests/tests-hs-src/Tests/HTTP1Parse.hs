@@ -2,13 +2,13 @@
 module Tests.HTTP1Parse where
 
 
-import qualified Data.ByteString                  as B
-import           Data.Maybe                       (isJust)
+import qualified Data.ByteString                     as B
+import           Data.Maybe                          (isJust)
 
 import           Test.HUnit
 
-import           SecondTransfer                   (Headers)
-import           SecondTransfer.Http1.Internal    
+import           SecondTransfer                      (Headers)
+import           SecondTransfer.Http1.Internal.Parse
 
 
 testParse :: Test

@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings #-}
 
-module SecondTransfer.Http1.Internal(
+module SecondTransfer.Http1.Internal.Parse(
     newIncrementalHttp1Parser
     ,addBytes
 

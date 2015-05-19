@@ -6,9 +6,9 @@ import qualified Data.ByteString                  as B
 
 import           Test.HUnit
 
-import           SecondTransfer                   (Headers)
+import           SecondTransfer                         (Headers)
 import           SecondTransfer.Utils.HTTPHeaders 
-import           SecondTransfer.Http1.Internal    (locateCRLFs)
+import           SecondTransfer.Http1.Internal.Parse    (locateCRLFs)
 
 
 testLowercaseHeaders :: Test
