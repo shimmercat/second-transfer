@@ -22,7 +22,6 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , PushedStream
     , DataAndConclusion
     , InputDataStream
-    , StreamCancelledException (..)
     ) where 
 
 import           Control.Exception
@@ -83,16 +82,6 @@ type DataAndConclusion = ConduitM () B.ByteString IO Footers
 --   starts arriving to the server. 
 type CoherentWorker = Request -> IO PrincipalStream
 
--- | This exception will be raised inside a `CoherentWorker` when the underlying 
--- stream is cancelled (STREAM_RESET in HTTP\/2). Do any necessary cleanup
--- in a handler, or simply use the fact that the exception is asynchronously
--- delivered 
--- to your CoherentWorker Haskell thread, giving you an opportunity to 
--- interrupt any blocked operations.
-data StreamCancelledException = StreamCancelledException
-    deriving (Show, Typeable)
-
-instance Exception StreamCancelledException
 
 -- | A list of pushed streams 
 type PushedStreams = [ IO PushedStream ]

@@ -14,10 +14,12 @@ module SecondTransfer.Exception (
     -- * Exceptions related to the IO layer
     ,IOProblem(..)
     ,GenericIOProblem(..)
+    ,StreamCancelledException(..)
 	) where 
 
 import           Control.Exception
 import           Data.Typeable
+
 
 
 -- | Abstract exception. All HTTP/2 exceptions derive from here 
@@ -130,3 +132,15 @@ instance Exception GenericIOProblem where
     fromException x = do 
         IOProblem a <- fromException x 
         cast a
+
+
+-- | This exception will be raised inside a `CoherentWorker` when the underlying 
+-- stream is cancelled (STREAM_RESET in HTTP\/2). Do any necessary cleanup
+-- in a handler, or simply use the fact that the exception is asynchronously
+-- delivered 
+-- to your CoherentWorker Haskell thread, giving you an opportunity to 
+-- interrupt any blocked operations.
+data StreamCancelledException = StreamCancelledException
+    deriving (Show, Typeable)
+
+instance Exception StreamCancelledException
