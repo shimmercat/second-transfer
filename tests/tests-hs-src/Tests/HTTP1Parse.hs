@@ -28,3 +28,18 @@ testParse = TestCase $ do
     assertEqual "testParse.NoLeftovers" leftovers ""
     assertEqual "testParse.YesLeftovers" l2 "p"
     assertEqual "testParse.FinishWellSeen" (UseBodyLength_BSC 1) cond0
+
+testGenerate :: Test 
+testGenerate = TestCase $ do 
+    let 
+        headers_list :: Headers
+        headers_list = [
+            (":status", "200"),
+            ("host", "www.example.com"),
+            ("etag", "afrh")
+            ]
+        fragments = ["hello world"]
+        serialized = serializeHTTPResponse headers_list fragments 
+    assertEqual "testGenerate.1" 
+        "HTTP/1.1 200 OK\r\ncontent-length: 11\r\netag: afrh\r\nhost: www.example.com\r\n\r\nhello world"
+        serialized 

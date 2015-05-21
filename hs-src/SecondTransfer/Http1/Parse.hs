@@ -9,14 +9,14 @@ module SecondTransfer.Http1.Parse(
     ,locateCRLFs
     ,splitByColon
     ,stripBs
+    ,headerListToHTTP11Text
+    ,serializeHTTPResponse
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
     ,BodyStopCondition(..)
     ) where 
 
--- TODO: Move this to SecondTransfer.Http1.Internal, and leave this module
---       only for high level exports.
 
 
 import           Control.Exception                      (throw)
@@ -25,6 +25,7 @@ import qualified Control.Lens                           as L
 import           Control.Applicative
 
 import qualified Data.ByteString                        as B
+import           Data.List                              (foldl')
 import qualified Data.ByteString.Builder                as Bu
 import           Data.ByteString.Char8                  (pack, unpack)
 import qualified Data.ByteString.Char8                  as Ch8
@@ -32,12 +33,15 @@ import qualified Data.ByteString.Lazy                   as Lb
 import           Data.Char                              (toLower)
 import           Data.Maybe                             (isJust)
 import           Data.Monoid                            (mappend,
-                                                         mempty)
+                                                         mempty,
+                                                         mconcat)
 import qualified Data.Attoparsec.ByteString             as Ap
 
 import           Data.Foldable                          (find)
 import           Data.Word                              (Word8)
+import qualified Data.Map                               as M
 
+import qualified SecondTransfer.Utils.HTTPHeaders       as E
 import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
@@ -78,6 +82,9 @@ data Http1ParserCompletion =
     --   to stop receiving the body, the third is leftovers from 
     --   parsing the headers.
     |HeadersAndBody_H1PC   Headers BodyStopCondition B.ByteString
+    -- | Some requests are mal-formed. We can check those cases 
+    --   here.
+    |RequestIsMalformed_H1PC 
     deriving Show
 
 
@@ -88,7 +95,7 @@ data Http1ParserCompletion =
 --  HTTP/1.1, uploads will need it.
 data BodyStopCondition = 
      UseBodyLength_BSC Int 
-     deriving (Show,Eq)
+     deriving (Show, Eq)
 
 
 data RequestOrResponseLine = 
@@ -151,6 +158,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
             no_cont_positions
         )
 
+    -- TODO: We must reject header names ending in space.
     headers_0 = map splitByColon $ tail headers_pre
 
     -- The first line is not actually a header, but contains the method, the version
@@ -324,6 +332,133 @@ responseLine =
 
 httpFirstLine :: Ap.Parser RequestOrResponseLine
 httpFirstLine = requestLine <|> responseLine
+
+
+headerListToHTTP11Text :: Headers -> Bu.Builder
+headerListToHTTP11Text headers = 
+    case headers of 
+        -- According to the specs, :status can be only 
+        -- the first header
+        (hn,hv): rest | hn == ":status" ->
+            (
+                (first_line . read . unpack $ hv)
+                `mappend`
+                (go rest)
+            )
+
+        rest -> 
+            (
+                (first_line 200)
+                `mappend`
+                (go rest)
+            )
+  where 
+    go [] = mempty
+    go ((hn,hv):rest) = 
+        (Bu.byteString hn) `mappend` ":" `mappend` " " `mappend` (Bu.byteString hv) 
+                           `mappend` "\r\n" `mappend` (go rest)
+
+    first_line :: Int -> Bu.Builder
+    first_line code = mconcat [
+        (Bu.byteString "HTTP/1.1"), " ",
+        (Bu.string7 . show $ code), " ",
+        (M.findWithDefault "OK" code httpStatusTable),
+        "\r\n"
+        ]
+
+
+
+serializeHTTPResponse :: Headers -> [B.ByteString] -> Lb.ByteString
+serializeHTTPResponse response_headers fragments = 
+  let
+    -- So got some data in an answer. Now there are three ways to go about 
+    -- the returned data: to force a chunked transfer-encoding, to read all
+    -- the data and add/set the Content-Length header, or to let the user 
+    -- decide which one she prefers.
+    --
+    -- Right now I'm going for the second one, until somebody complains
+    -- This is equivalent to a lazy byte-string...but I just need the 
+    -- length 
+    -- I promised to minimize the number of interventions of the library,
+    -- so it could be a good idea to remove this one further down the 
+    -- road. 
+    h2 = E.lowercaseHeaders response_headers
+    data_size = foldl' (\ n bs -> n + B.length bs) 0 fragments
+    headers_editor = E.fromList h2
+    content_length_header_lens = E.headerLens "content-length"
+    he2 = L.set 
+        content_length_header_lens 
+        (Just (pack . show $ data_size)) 
+        headers_editor 
+    h3 = E.toList he2
+    -- Next, I must serialize the headers....
+    headers_text_as_builder = headerListToHTTP11Text h3
+
+    -- We dump the headers first... unfortunately when talking 
+    -- HTTP/1.1 the most efficient way to write those bytes is 
+    -- to create a big buffer and pass it on to OpenSSL.
+    -- However the Builder generating the headers above says 
+    -- it generates fragments between 4k and 32 kb, I checked it
+    -- and it is true, so we can use it
+
+    -- Now we need to insert an extra \r\n, even it the response is 
+    -- empty
+
+    -- And then we use the builder to re-format the fragments returned
+    -- by the coherent worker 
+    -- TODO: This could be a good place to introduce chunked responses.
+    body_builder = mconcat $ map Bu.byteString fragments
+
+
+
+  in Bu.toLazyByteString $ headers_text_as_builder `mappend` "\r\n" `mappend`
+                    body_builder
+
+
+httpStatusTable :: M.Map Int Bu.Builder
+httpStatusTable = M.fromList
+    [
+        (100, "Continue"),
+        (101, "Switching Protocols"),
+        (200, "OK"),
+        (201, "Created"),
+        (202, "Accepted"),
+        (203, "Non-Authoritative Information"),
+        (204, "No Content"),
+        (205, "Reset Content"),
+        (206, "Partial Content"),
+        (300, "Multiple Choices"),
+        (301, "Moved Permanently"),
+        (302, "Found"),
+        (303, "See Other"),
+        (304, "Not Modified"),
+        (305, "Use Proxy"),
+        (307, "Temporary Redirect"),
+        (400, "Bad Request"),
+        (401, "Unauthorized"),
+        (402, "Payment Required"),
+        (403, "Forbidden"),
+        (404, "Not Found"),
+        (405, "Method Not Allowed"),
+        (406, "Not Acceptable"),
+        (407, "Proxy Authentication Required"),
+        (408, "Request Timeout"),
+        (409, "Conflict"),
+        (410, "Gone"),
+        (411, "Length Required"),
+        (412, "Precondition Failed"),
+        (413, "Request Entity Too Large"),
+        (414, "Request-URI Too Long"),
+        (415, "Unsupported Media Type"),
+        (416, "Requested Range Not Satisfiable"),
+        (417, "Expectation Failed"),
+        (500, "Internal Server Error"),
+        (501, "Not Implemented"),
+        (502, "Bad Gateway"),
+        (503, "Service Unavailable"),
+        (504, "Gateway Timeout"),
+        (505, "HTTP Version Not Supported")
+    ]
 
 -- For testing purposes... --------------------------------------------------------------
 -----------------------------------------------------------------------------------------

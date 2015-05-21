@@ -68,6 +68,7 @@ headersAreValidHTTP2 headers =
         True
         headers
 
+
 -- | Looks for a given header
 fetchHeader :: Headers -> B.ByteString -> Maybe B.ByteString
 fetchHeader headers header_name = 
@@ -88,6 +89,7 @@ instance Ord Autosorted where
   compare (Autosorted a) (Autosorted b) | (B.head a) == colon, (B.head b) /= colon = LT 
   compare (Autosorted a) (Autosorted b) | (B.head a) /= colon, (B.head b) == colon = GT 
   compare (Autosorted a) (Autosorted b)  = compare a b
+
 
 -- | Abstract data-type. Use `fromList` to get one of these from `Headers`. 
 -- The underlying representation admits better asymptotics.

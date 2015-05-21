@@ -1,13 +1,66 @@
-
+{-# LANGUAGE OverloadedStrings #-}
 module SecondTransfer.Http1.Session(
     http11Attendant
     ) where 
 
 
-import SecondTransfer.SessionsConfig(SessionsContext)
-import SecondTransfer.MainLoop.CoherentWorker(CoherentWorker)
-import SecondTransfer.MainLoop.PushPullType(Attendant)
+-- import qualified Control.Lens                           as L
+-- import           Control.Lens                           ( (^.) )
+
+-- import qualified Data.ByteString                        as B
+-- import qualified Data.ByteString.Lazy                   as LB
+-- import           Data.ByteString.Char8                  (pack)
+-- import qualified Data.ByteString.Builder                as Bu
+import           Data.Conduit
+import           Data.Conduit.List                      (consume)
+-- import           Data.Monoid                            (mconcat, mappend)
+
+import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker,)
+import           SecondTransfer.MainLoop.PushPullType   (Attendant)
+import           SecondTransfer.SessionsConfig          (SessionsContext)
+-- import qualified SecondTransfer.Utils.HTTPHeaders       as E
+
+import           SecondTransfer.Http1.Parse
+
 
 
 http11Attendant :: SessionsContext -> CoherentWorker -> Attendant
-http11Attendant sessions_context coherent_worker = error "Not implemented yet"
+http11Attendant sessions_context coherent_worker 
+                push_action pull_action close_action 
+    = do 
+        go ""
+  where 
+
+    go leftovers = do 
+        request_leftovers <- add_data newIncrementalHttp1Parser leftovers
+        go request_leftovers
+
+    add_data parser bytes = do 
+        let 
+            completion = addBytes parser bytes 
+        case completion of 
+
+            MustContinue_H1PC new_parser -> do 
+                new_bytes <- pull_action 
+                add_data new_parser new_bytes 
+
+            OnlyHeaders_H1PC headers leftovers -> do 
+                -- Ready for action...
+                -- ATTENTION: Not use for pushed streams here....
+                -- We must decide what to do if the user return those
+                -- anyway.
+                (response_headers, _, data_and_conclusion) <- coherent_worker (headers, Nothing)
+                (_, fragments) <- runConduit $ fuseBoth data_and_conclusion consume 
+                let 
+                    response_text =
+                        serializeHTTPResponse response_headers fragments
+
+                -- TODO: This is forcing not such a good framing after all...
+                push_action response_text
+                return leftovers
+
+            HeadersAndBody_H1PC _headers _stopcondition _recv_leftovers -> do
+                -- Let's see if I can go through the basic movements first, then through 
+                -- more complicated things.
+                close_action
+                error "NotImplemented requests with bodies"
