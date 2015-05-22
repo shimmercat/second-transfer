@@ -1,15 +1,12 @@
 {-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell, OverloadedStrings #-}
-module SecondTransfer.SessionsConfig(
+module SecondTransfer.Sessions.Config(
     sessionId
     ,defaultSessionsConfig
-    ,makeSessionsContext
-    ,sessionsConfig 
     ,sessionsCallbacks
     ,reportErrorCallback
-    ,nextSessionId
+
 
     ,SessionComponent(..)
-    ,SessionsContext(..)
     ,SessionCoordinates(..)
     ,SessionsCallbacks(..)
     ,SessionsConfig(..)
@@ -17,9 +14,9 @@ module SecondTransfer.SessionsConfig(
     ) where 
 
 
-import Control.Exception(SomeException)
-import Control.Lens(makeLenses, Lens')
-import Control.Concurrent.MVar(MVar, newMVar)
+-- import           Control.Concurrent.MVar (MVar)
+import           Control.Exception       (SomeException)
+import           Control.Lens            (Lens', makeLenses)
 
 
 -- | Information used to identify a particular session. 
@@ -50,7 +47,9 @@ data SessionComponent =
     |SessionHeadersOutputThread_HTTP2SessionComponent
     |SessionDataOutputThread_HTTP2SessionComponent
     |Framer_HTTP2SessionComponent
+    |Session_HTTP11
     deriving Show
+
 
 
 -- | Used by this session engine to report an error at some component, in a particular
@@ -83,19 +82,6 @@ sessionsCallbacks  f (
     }) = fmap (\ s' -> SessionsConfig {_sessionsCallbacks = s'}) (f s)
 
 
--- | Contains information that applies to all 
---   sessions created in the program. Use the lenses 
---   interface to access members of this struct. 
--- 
-data SessionsContext = SessionsContext {
-     _sessionsConfig  :: SessionsConfig
-    ,_nextSessionId   :: MVar Int
-    }
-
-
-makeLenses ''SessionsContext
-
-
 -- | Creates a default sessions context. Modify as needed using 
 --   the lenses interfaces
 defaultSessionsConfig :: SessionsConfig
@@ -105,12 +91,3 @@ defaultSessionsConfig = SessionsConfig {
         }
     }
 
-
--- Adds runtime data to a context, and let it work.... 
-makeSessionsContext :: SessionsConfig -> IO SessionsContext
-makeSessionsContext sessions_config = do 
-    next_session_id_mvar <- newMVar 1 
-    return $ SessionsContext {
-        _sessionsConfig = sessions_config,
-        _nextSessionId = next_session_id_mvar
-        }
