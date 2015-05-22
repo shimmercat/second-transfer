@@ -141,6 +141,7 @@ module SecondTransfer(
     
     -- ** How to couple bidirectional data channels to sessions
     ,Attendant
+    ,http11Attendant
     ,http2Attendant
     -- * High level OpenSSL functions. 
     -- 
@@ -162,7 +163,8 @@ module SecondTransfer(
     ,enableConsoleLogging
 	) where 
 
-import SecondTransfer.MainLoop.CoherentWorker 
-import SecondTransfer.MainLoop
-import SecondTransfer.Types
-import SecondTransfer.Http2.MakeAttendant(http2Attendant)
+import           SecondTransfer.Http1                   (http11Attendant)
+import           SecondTransfer.Http2.MakeAttendant     (http2Attendant)
+import           SecondTransfer.MainLoop
+import           SecondTransfer.MainLoop.CoherentWorker
+import           SecondTransfer.Types
