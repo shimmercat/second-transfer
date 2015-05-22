@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http1.Session(
     http11Attendant
     ) where 
@@ -23,9 +24,10 @@ import           SecondTransfer.SessionsConfig          (SessionsContext)
 import           SecondTransfer.Http1.Parse
 
 
-
+-- | Session attendant that speaks HTTP/1.1
+-- 
 http11Attendant :: SessionsContext -> CoherentWorker -> Attendant
-http11Attendant sessions_context coherent_worker 
+http11Attendant _sessions_context coherent_worker 
                 push_action pull_action close_action 
     = do 
         go ""
@@ -55,12 +57,12 @@ http11Attendant sessions_context coherent_worker
                     response_text =
                         serializeHTTPResponse response_headers fragments
 
-                -- TODO: This is forcing not such a good framing after all...
                 push_action response_text
                 return leftovers
 
             HeadersAndBody_H1PC _headers _stopcondition _recv_leftovers -> do
                 -- Let's see if I can go through the basic movements first, then through 
                 -- more complicated things.
+                -- TODO: Implement posts and other requests with bodies....
                 close_action
                 error "NotImplemented requests with bodies"
