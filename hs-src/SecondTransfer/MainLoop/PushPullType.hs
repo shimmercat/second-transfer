@@ -33,15 +33,19 @@ type CloseAction = IO ()
 
 -- | A function which takes three arguments: the first one says 
 --   how to send data (on a socket or similar transport), and the second one how 
---   to receive data on said socket. The third argument encapsulates 
+--   to receive data on the transport. The third argument encapsulates 
 --   the sequence of steps needed for a clean shutdown. 
 --
 --   You can implement one of these to let somebody else  supply the 
---   push, pull and close callbacks. In this library we supply callbacks
---   for TLS sockets, so that you don't need to go through the drudgery 
---   of managing those yourself.
+--   push, pull and close callbacks. For example, 'tlsServeWithALPN' will 
+--   supply these arguments to an 'Attendant'. 
 --
 --   Attendants encapsulate all the session book-keeping functionality,
---   which for HTTP/2 is quite complicated. You use the function `http2Attendant`
---   to create one of these from a `CoherentWorker`.
+--   which for HTTP/2 is quite complicated. You use the functions 
+--   http**Attendant
+--   to create one of these from a 'SecondTransfer.Types.CoherentWorker'.
+--
+--   This library supplies two of such Attendant factories,
+--   'SecondTransfer.Http1.http11Attendant' for 
+--   HTTP 1.1 sessions, and 'SecondTransfer.Http2.http2Attendant' for HTTP/2 sessions.
 type Attendant = PushAction -> PullAction -> CloseAction -> IO () 

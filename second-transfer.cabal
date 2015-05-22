@@ -53,7 +53,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.3.0.4
+  tag:      0.4.0.0
 
 library
 
@@ -136,7 +136,7 @@ library
   -- cc-options: -g3 -O0
 
   -- ghc-options: -O2
-
+ 
   extra-libraries: ssl crypto
 
   -- NOTICE: Please fill-in with an-up-to date library path here

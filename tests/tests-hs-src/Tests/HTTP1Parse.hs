@@ -10,7 +10,7 @@ import           Test.HUnit
 import           SecondTransfer                      (Headers)
 import           SecondTransfer.Http1.Parse
 
-
+ 
 testParse :: Test
 testParse = TestCase $ do 
     let 
@@ -28,6 +28,7 @@ testParse = TestCase $ do
     assertEqual "testParse.NoLeftovers" leftovers ""
     assertEqual "testParse.YesLeftovers" l2 "p"
     assertEqual "testParse.FinishWellSeen" (UseBodyLength_BSC 1) cond0
+
 
 testGenerate :: Test 
 testGenerate = TestCase $ do 
