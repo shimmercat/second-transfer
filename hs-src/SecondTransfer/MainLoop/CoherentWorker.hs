@@ -83,7 +83,11 @@ type DataAndConclusion = ConduitM () B.ByteString IO Footers
 type CoherentWorker = Request -> IO PrincipalStream
 
 
--- | A list of pushed streams 
+-- | A list of pushed streams. 
+--   Notice that a list of IO computations is required here. These computations
+--   only happen when and if the streams are pushed to the client. 
+--   The lazy nature of Haskell helps to avoid unneeded computations if the 
+--   streams are not going to be sent to the client.
 type PushedStreams = [ IO PushedStream ]
 
 -- | A pushed stream, represented by a list of request headers, 

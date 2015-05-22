@@ -7,32 +7,32 @@ Stability   : experimental
 Portability : POSIX
 
 This library implements enough of the HTTP/2  to build 
-compliant HTTP/2 servers. 
+compliant HTTP/2 servers. It also implements enough of 
+HTTP/1.1 so you can actually use it to build polyglot web-servers.
 
-Frame encoding and decoding is done with 
-Kazu Yamamoto's <http://hackage.haskell.org/package/http2 http2> package, our goal
-here is to sort the HTTP/2 frames according to the protocol. 
+For HTTP/2, frame encoding and decoding is done with 
+Kazu Yamamoto's <http://hackage.haskell.org/package/http2 http2> package.
+This library just takes care of making sense of sent and received
+frames.
 
 You can find more detailed information about this library at the page 
-<https://www.httptwo.com/second-transfer/> (but notice that the site uses
-the library and doesn't yet talk HTTP/1.1, so use a modern browser).
+<https://www.httptwo.com/second-transfer/>.
 
 The library
 
   * Is concurrent, meaning that you can use amazing Haskell lightweight threads to 
     process the requests. 
 
-  * Obeys HTTP/2 flow control aspects.
+  * Obeys HTTP/2 flow control aspects, when talking HTTP/2.
 
   * And gives you freedom to (ab)use the HTTP/2 protocol in all the ways envisioned 
     by the standard. In particular you should be able to process streaming requests 
     (long uploads in POST or PUT requests) and to deliver streaming responses. You
     should even be able to do both simultaneously. 
 
-Setting up TLS for HTTP/2 correctly is enough of a shore, so I have bundled here the
+Setting up TLS for HTTP/2 correctly is a shore, so I have bundled here the
 TLS setup logic. Before you read any further, ATTENTION: enable always the threaded 
 ghc runtime in your final programs if you want TLS to work.
-
 
 
 Here is how you create a very basic HTTP/2 webserver:
@@ -45,8 +45,9 @@ import SecondTransfer(
     , DataAndConclusion
     , tlsServeWithALPN
     , http2Attendant
+    , http11Attendant
     )
-import SecondTransfer.SessionsConfig(
+import SecondTransfer.Sessions(
       makeSessionsContext
     , defaultSessionsConfig
     )
@@ -83,14 +84,17 @@ main = do
     sessions_context <- makeSessionsContext defaultSessionsConfig
     let 
         http2_attendant = http2Attendant sessions_context helloWorldWorker
+        http11_attendant = http11Attendant sessions_context helloWorldWorker
     tlsServeWithALPN
         "tests\/support\/servercert.pem"   -- Server certificate
         "tests\/support\/privkey.pem"      -- Certificate private key
         "127.0.0.1"                      -- On which interface to bind
         [
-            ("h2-14", http2_attendant),  -- Protocols present in the ALPN negotiation
-            ("h2",    http2_attendant)   -- they may be slightly different, but for this 
-                                         -- test it doesn't matter.
+            ("h2-14", http2_attendant),    -- Protocols present in the ALPN negotiation
+            ("h2",    http2_attendant),    -- they may be slightly different, but for this 
+                                           -- test it doesn't matter.
+
+            ("http/1.1", http11_attendant) -- Let's talk HTTP/1.1 if everything else fails.
         ]
         8000 
 @
@@ -119,12 +123,12 @@ module SecondTransfer(
     -- * Types related to coherent workers
     --
     -- | A coherent worker is an abstraction that can dance at the 
-    --   tune of  HTTP/2. That is, it should be able to take
-    --   headers request first, and then a source of data coming in the 
+    --   tune of  HTTP/2 and HTTP/1.1. That is, it should be able to take
+    --   headers from a request first, then a source of data coming in the 
     --   request (for example, POST data). Even before exhausting the source, 
-    --   the coherent worker can post the response headers, and then create 
+    --   the coherent worker can post the response headers and
     --   its source for the response data. A coherent worker can also present
-    --   create streams to push to the client. 
+    --   streams to push to the client. 
 	  Headers
     , HeaderName
     , HeaderValue
