@@ -414,11 +414,15 @@ static connection_t *sslStart (
     int result;
     connection_t *c;
 
+    // Ok, here it is in the open, for everybody 
+    // to see:
+    signal(SIGPIPE, SIG_IGN);
+
     if (! threads_are_up)
     {
         threads_are_up = 1;
         thread_setup();
-    }
+    } 
 
     c = malloc (sizeof (connection_t));
     c->sslContext = NULL;
