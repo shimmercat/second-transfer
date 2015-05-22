@@ -5,7 +5,7 @@ module SecondTransfer.Http2.MakeAttendant (
 
 
 import           SecondTransfer.Http2.Framer            (wrapSession)
-import           SecondTransfer.Http2.Session           (SessionsContext)
+import           SecondTransfer.Sessions.Internal       (SessionsContext)
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.PushPullType   (
 														 --CloseAction,

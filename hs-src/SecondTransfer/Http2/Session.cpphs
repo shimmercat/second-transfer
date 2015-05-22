@@ -8,22 +8,12 @@ module SecondTransfer.Http2.Session(
     ,getFrameFromSession
     ,sendFrameToSession
     ,sendCommandToSession
-    ,defaultSessionsConfig
-    ,sessionId
-    ,reportErrorCallback
-    ,sessionsCallbacks
-    ,nextSessionId
-    ,makeSessionsContext
-    ,sessionsConfig
-    ,sessionExceptionHandler
-    ,sessionIdAtSession
 
     ,CoherentSession
     ,SessionInput(..)
     ,SessionInputCommand(..)
     ,SessionOutput(..)
     ,SessionOutputCommand(..)
-    ,SessionsContext(..)
     ,SessionCoordinates(..)
     ,SessionComponent(..)
     ,SessionsCallbacks(..)
@@ -67,7 +57,8 @@ import           System.Log.Logger
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
-import           SecondTransfer.SessionsConfig
+import           SecondTransfer.Sessions.Config
+import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, SessionsContext)
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 
@@ -761,20 +752,3 @@ dataOutputThread input_chan session_output_mvar = forever $ do
         ) fragments
 
 
-
-sessionExceptionHandler :: E.Exception e => SessionComponent -> Int -> SessionsContext -> e -> IO ()
-sessionExceptionHandler session_component session_id sessions_context e = do 
-    let
-        getit = ( sessionsConfig . sessionsCallbacks . reportErrorCallback ) 
-        maybe_error_callback = sessions_context ^. getit 
-        error_tuple = (
-            session_component,
-            SessionCoordinates session_id, 
-            E.toException e
-            )
-    case maybe_error_callback of 
-        Nothing -> 
-            errorM "HTTP2.Session" (show (e))
-
-        Just callback -> 
-            callback error_tuple

@@ -520,7 +520,7 @@ connection_t* make_connection(char* certificate_filename, char* privkey_filename
     const int len = strlen(hostname);
     if ( len > 0 && hostname[len-1] == '\n' )
     { 
-        printf("HELLO THERE. I'M A FLIMSY C FUNCTION AND I CAN NOT REMOVE THE END-OF-LINE IN THE PROVIDED HOST NAME WITHOUT A TON OF LINES. I'M GOING TO SEGFAULT NOW. BYE.\n");
+        printf("HELLO THERE. I found some weird characters\n");
         *( (int*) 0) = 42; // <-- This is the answer
     }
 

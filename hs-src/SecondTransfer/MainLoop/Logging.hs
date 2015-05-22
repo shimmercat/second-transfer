@@ -37,7 +37,7 @@ configureLoggingToConsole = do
 setLoggerLevels :: (LogHandler s) => s -> IO () 
 setLoggerLevels s = do
     updateGlobalLogger rootLoggerName removeHandler
-    updateGlobalLogger "HTTP2.Session" (
+    updateGlobalLogger "Session" (
         setHandlers [s] .  
         setLevel INFO  
         )
@@ -45,7 +45,11 @@ setLoggerLevels s = do
         setHandlers [s] .  
         setLevel DEBUG  
         )
-    updateGlobalLogger "HTTP2.Framer" (
+    updateGlobalLogger "HTTP1" (
+        setHandlers [s] . 
+        setLevel DEBUG
+        )
+    updateGlobalLogger "HTTP2" (
         setHandlers [s] . 
         setLevel DEBUG
         )

@@ -36,6 +36,7 @@ import           System.Log.Logger
 
 import qualified Data.HashTable.IO                      as H
 
+import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, nextSessionId, SessionsContext)
 import           SecondTransfer.Http2.Session           
 import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker)
 import qualified SecondTransfer.MainLoop.Framer         as F

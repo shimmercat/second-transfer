@@ -4,13 +4,15 @@ module SecondTransfer.Http1.Session(
     http11Attendant
     ) where 
 
-
+ 
 -- import qualified Control.Lens                           as L
 -- import           Control.Lens                           ( (^.) )
+import           Control.Exception                     (catch)
+import           Control.Concurrent                    (forkIO)
 
--- import qualified Data.ByteString                        as B
+import qualified Data.ByteString                        as B
 -- import qualified Data.ByteString.Lazy                   as LB
--- import           Data.ByteString.Char8                  (pack)
+-- import           Data.ByteString.Char8                  (unpack)
 -- import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Conduit.List                      (consume)
@@ -18,35 +20,64 @@ import           Data.Conduit.List                      (consume)
 
 import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker,)
 import           SecondTransfer.MainLoop.PushPullType   (Attendant)
-import           SecondTransfer.SessionsConfig          (SessionsContext)
--- import qualified SecondTransfer.Utils.HTTPHeaders       as E
+import           SecondTransfer.Sessions.Internal       (SessionsContext, acquireNewSessionTag)
+
+-- Logging utilities
+import           System.Log.Logger                      
 
 import           SecondTransfer.Http1.Parse
+import           SecondTransfer.Exception                (IOProblem)
+
+-- import           Debug.Trace                             (traceShow)
 
 
 -- | Session attendant that speaks HTTP/1.1
 -- 
 http11Attendant :: SessionsContext -> CoherentWorker -> Attendant
-http11Attendant _sessions_context coherent_worker 
+http11Attendant sessions_context coherent_worker 
                 push_action pull_action close_action 
     = do 
-        go ""
+        new_session_tag <- acquireNewSessionTag sessions_context
+        infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
+        forkIO $ go new_session_tag (Just "")
+        return ()
   where 
+    go :: Int -> Maybe B.ByteString -> IO ()
+    go session_tag (Just leftovers) = do 
+        infoM "Session.Session_HTTP11" $ "(Re)Using session with tag: " ++(show session_tag)
+        maybe_leftovers <- add_data newIncrementalHttp1Parser leftovers session_tag
+        go session_tag maybe_leftovers
 
-    go leftovers = do 
-        request_leftovers <- add_data newIncrementalHttp1Parser leftovers
-        go request_leftovers
+    go _ Nothing = 
+        return ()
 
-    add_data parser bytes = do 
+    add_data :: IncrementalHttp1Parser  -> B.ByteString -> Int -> IO (Maybe B.ByteString)
+    add_data parser bytes session_tag = do 
         let 
             completion = addBytes parser bytes 
+            -- completion = addBytes parser $ traceShow ("At session " ++ (show session_tag) ++ " Received: " ++ (unpack bytes) ) bytes
         case completion of 
 
             MustContinue_H1PC new_parser -> do 
-                new_bytes <- pull_action 
-                add_data new_parser new_bytes 
+                -- print "MustContinue_H1PC"
+                catch 
+                    (do
+                        new_bytes <- pull_action
+                        r <- add_data new_parser new_bytes session_tag
+                        return r
+                    )
+                    ( (\ _e -> do
+                        -- This is a pretty harmless condition that happens 
+                        -- often when the remote peer closes the connection
+                        debugM "Session.HTTP1" "Could not receive data"
+                        close_action
+                        return Nothing
+                    ) :: IOProblem -> IO (Maybe B.ByteString) )
+
+                
 
             OnlyHeaders_H1PC headers leftovers -> do 
+                -- print "OnlyHeaders_H1PC"
                 -- Ready for action...
                 -- ATTENTION: Not use for pushed streams here....
                 -- We must decide what to do if the user return those
@@ -57,10 +88,19 @@ http11Attendant _sessions_context coherent_worker
                     response_text =
                         serializeHTTPResponse response_headers fragments
 
-                push_action response_text
-                return leftovers
+                catch 
+                    (do
+                        push_action response_text
+                        return $ Just leftovers
+                    )
+                    ((\ _e -> do
+                        debugM "Session.HTTP1" "Session abandoned"
+                        close_action
+                        return Nothing
+                    ) :: IOProblem -> IO (Maybe B.ByteString) )
 
             HeadersAndBody_H1PC _headers _stopcondition _recv_leftovers -> do
+                -- print "HeadersAndBody_H1PC"
                 -- Let's see if I can go through the basic movements first, then through 
                 -- more complicated things.
                 -- TODO: Implement posts and other requests with bodies....

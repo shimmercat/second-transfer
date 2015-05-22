@@ -171,13 +171,14 @@ elaborateHeaders full_text crlf_positions last_headers_position =
 
         Request_RoRL uri method -> 
           let
-            lc_method = bsToLower method
-            has_body' = case lc_method of 
-                "post"   -> True 
-                "put"    -> True 
+            -- No lowercase, methods are case sensitive
+            -- lc_method = bsToLower method
+            has_body' = case method of 
+                "POST"   -> True 
+                "PUT"    -> True 
                 _        -> False
           in 
-            ( (":path", uri):(":method",lc_method):headers_1, has_body' )
+            ( (":path", uri):(":method",method):headers_1, has_body' )
 
         Response_RoRL status -> 
           let 

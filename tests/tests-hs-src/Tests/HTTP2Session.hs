@@ -9,7 +9,7 @@ import           Control.Concurrent.MVar
 import           Control.Lens
 
 import           SecondTransfer.Http2             (http2Attendant)
-import           SecondTransfer.SessionsConfig
+import           SecondTransfer.Sessions
 import           SecondTransfer.Test.DecoySession
 import           SecondTransfer.Types
 

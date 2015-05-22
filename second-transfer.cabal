@@ -44,7 +44,7 @@ extra-source-files: macros/Logging.cpphs
 
 Flag debug 
   Description: Enable debug support 
-  Default:     False
+  Default:     True
 
 source-repository head
   type:     git
@@ -69,14 +69,16 @@ library
                   -- from the documentation.
                   , SecondTransfer.MainLoop.Internal
                   , SecondTransfer.MainLoop.OpenSSL_TLS
-                  , SecondTransfer.SessionsConfig
+                  , SecondTransfer.Sessions
+                  , SecondTransfer.Sessions.Config
                   , SecondTransfer.Http1.Parse
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
-                , SecondTransfer.MainLoop.Logging                
+                , SecondTransfer.MainLoop.Logging   
+                , SecondTransfer.Sessions.Internal             
 
                 , SecondTransfer.Utils
 
@@ -132,6 +134,8 @@ library
   c-sources: cbits/tlsinc.c
 
   -- cc-options: -fPIC -pthread -g -O0
+  if flag(debug)
+      cc-options: -O0 -g3
 
   -- cc-options: -g3 -O0
 

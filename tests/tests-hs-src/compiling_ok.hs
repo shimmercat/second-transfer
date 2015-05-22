@@ -8,7 +8,7 @@ import SecondTransfer(
 	, http11Attendant
 	, FinishRequest(..)
 	)
-import SecondTransfer.SessionsConfig(
+import SecondTransfer.Sessions(
 	  makeSessionsContext
 	, defaultSessionsConfig
 	)
