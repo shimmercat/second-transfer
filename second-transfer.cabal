@@ -68,7 +68,6 @@ library
                   -- here for the sake of the test suite. They are hidden 
                   -- from the documentation.
                   , SecondTransfer.MainLoop.Internal
-                  , SecondTransfer.MainLoop.OpenSSL_TLS
                   , SecondTransfer.Sessions
                   , SecondTransfer.Sessions.Config
                   , SecondTransfer.Http1.Parse
@@ -80,6 +79,7 @@ library
                 , SecondTransfer.MainLoop.Logging   
                 , SecondTransfer.Sessions.Internal             
 
+                , SecondTransfer.MainLoop.OpenSSL_TLS
                 , SecondTransfer.Utils
 
                 , SecondTransfer.Http2.Framer
