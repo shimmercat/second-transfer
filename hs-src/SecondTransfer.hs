@@ -90,6 +90,9 @@ main = do
         "tests\/support\/privkey.pem"      -- Certificate private key
         "127.0.0.1"                      -- On which interface to bind
         [
+            ("no-protocol", http11_attendant), -- The first protocol in the list is used when 
+                                               -- when no ALPN negotiation happens, and the
+                                               -- name is really a filler.
             ("h2-14", http2_attendant),    -- Protocols present in the ALPN negotiation
             ("h2",    http2_attendant),    -- they may be slightly different, but for this 
                                            -- test it doesn't matter.
