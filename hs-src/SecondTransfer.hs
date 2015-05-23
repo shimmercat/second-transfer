@@ -129,7 +129,7 @@ module SecondTransfer(
     --   the coherent worker can post the response headers and
     --   its source for the response data. A coherent worker can also present
     --   streams to push to the client. 
-	  Headers
+      Headers
     , HeaderName
     , HeaderValue
     , Header
@@ -165,7 +165,7 @@ module SecondTransfer(
     -- need to configure the loggers. The function `enableConsoleLogging` 
     -- configures them to output a lot of information to standard output.
     ,enableConsoleLogging
-	) where 
+    ) where 
 
 import           SecondTransfer.Http1                   (http11Attendant)
 import           SecondTransfer.Http2.MakeAttendant     (http2Attendant)

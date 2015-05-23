@@ -3,10 +3,10 @@
 Module      : SecondTransfer.Exception
 -}
 module SecondTransfer.Exception (
-	-- * Exceptions thrown by the HTTP/2 sessions
-	HTTP2SessionException (..)
-	,FramerException (..)
-	,BadPrefaceException (..)
+    -- * Exceptions thrown by the HTTP/2 sessions
+    HTTP2SessionException (..)
+    ,FramerException (..)
+    ,BadPrefaceException (..)
     ,HTTP11Exception (..)
     ,HTTP11SyntaxException (..)
     ,ContentLengthMissingException (..)
@@ -15,7 +15,7 @@ module SecondTransfer.Exception (
     ,IOProblem(..)
     ,GenericIOProblem(..)
     ,StreamCancelledException(..)
-	) where 
+    ) where 
 
 import           Control.Exception
 import           Data.Typeable

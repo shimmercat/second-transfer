@@ -4,9 +4,9 @@ module SecondTransfer.MainLoop.Framer(
     ,readNextChunkAndContinue
     ,readLength
 
-	,Framer
+    ,Framer
     ,LengthCallback
-	) where
+    ) where
 
 
 import           Control.Monad.Trans.Class (lift)

@@ -1,11 +1,11 @@
 {-# LANGUAGE DeriveDataTypeable, ExistentialQuantification #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
-	PushAction
-	,PullAction
-	,Attendant
+    PushAction
+    ,PullAction
+    ,Attendant
     ,CloseAction
-	) where 
+    ) where 
 
 
 import qualified Data.ByteString              as B

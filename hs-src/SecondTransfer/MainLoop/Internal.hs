@@ -1,10 +1,10 @@
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.Internal(
-	readNextChunkAndContinue
-	,http2FrameLength
-	,OutputFrame
+    readNextChunkAndContinue
+    ,http2FrameLength
+    ,OutputFrame
     ,InputFrame
-	) where 
+    ) where 
 
 
 import SecondTransfer.MainLoop.Framer(readNextChunkAndContinue)

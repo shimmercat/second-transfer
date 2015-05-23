@@ -1,8 +1,8 @@
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.Logging (
-	-- | Simple, no fuss enable logging
-	enableConsoleLogging
-	) where
+    -- | Simple, no fuss enable logging
+    enableConsoleLogging
+    ) where
 
 import           System.IO                 (stderr)
 

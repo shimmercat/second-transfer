@@ -4,19 +4,19 @@
 {-# OPTIONS_HADDOCK hide #-}
 
 module SecondTransfer.MainLoop.Tokens(
-	packHeaderTuples
-	,unpackHeaderTuples
+    packHeaderTuples
+    ,unpackHeaderTuples
     ,getHeader
     ,actionIsForAssociatedStream
 
-	,UnpackedNameValueList (..)
-	,StreamInputToken      (..)
-	,StreamOutputAction    (..)
-	,StreamWorker
+    ,UnpackedNameValueList (..)
+    ,StreamInputToken      (..)
+    ,StreamOutputAction    (..)
+    ,StreamWorker
     ,StreamWorkerClass     (..)
     ,LocalStreamId
     ,GlobalStreamId
-	) where 
+    ) where 
 
 
 

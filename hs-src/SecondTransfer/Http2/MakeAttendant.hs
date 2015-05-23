@@ -8,7 +8,7 @@ import           SecondTransfer.Http2.Framer            (wrapSession)
 import           SecondTransfer.Sessions.Internal       (SessionsContext)
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.PushPullType   (
-														 --CloseAction,
+                                                         --CloseAction,
                                                          --PullAction, 
                                                          --PushAction,
                                                          Attendant
