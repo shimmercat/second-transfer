@@ -27,12 +27,14 @@ module SecondTransfer.Utils.HTTPHeaders (
     ,replaceHeaderValue
     -- ** HTTP utilities
     ,replaceHostByAuthority
+    ,introduceDateHeader
     ) where 
-
+ 
 import qualified Control.Lens                           as L
 import           Control.Lens                           ( (^.) )
 
 import qualified Data.ByteString                        as B
+import           Data.ByteString.Char8                  (pack)
 import           Data.Char                              (isUpper)
 import           Data.List                              (find)
 import           Data.Text                              (toLower)
@@ -40,6 +42,9 @@ import qualified Data.Text                              as T
 import           Data.Text.Encoding                     (decodeUtf8, encodeUtf8)
 import qualified Data.Map.Strict                        as Ms
 import           Data.Word                              (Word8)
+
+import           Data.Time.Format                       (formatTime, defaultTimeLocale)
+import           Data.Time.Clock                        (UTCTime,getCurrentTime)
 
 import           Control.Applicative                    ((<$>))
 
@@ -146,6 +151,19 @@ replaceHostByAuthority  headers =
     maybe_host_header = headers ^. host_lens
     no_hosts = L.set host_lens Nothing headers
   in 
-    case maybe_host_header of 
+    case maybe_host_header of  
         Nothing -> headers 
         Just host -> L.set authority_lens (Just host) no_hosts
+
+
+-- | Given a header editor, introduces a "Date" header. This function has 
+-- a side-effect: to get the current time
+introduceDateHeader :: HeaderEditor -> IO HeaderEditor
+introduceDateHeader header_editor = do
+    current_time <- getCurrentTime
+    let 
+        date_header_lens = headerLens "date"
+        formatted_date = Just . pack $
+            formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" current_time
+        new_editor = L.set date_header_lens formatted_date header_editor 
+    return new_editor
