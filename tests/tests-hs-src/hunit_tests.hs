@@ -13,14 +13,14 @@ import Tests.HTTP1Parse
 
 
 tests = TestList [
-	TestLabel "testPrefaceChecks" testPrefaceChecks,
-	TestLabel "testPrefaceChecks2" testPrefaceChecks2,
+    TestLabel "testPrefaceChecks" testPrefaceChecks,
+    TestLabel "testPrefaceChecks2" testPrefaceChecks2,
     TestLabel "testLowercaseHeaders" testLowercaseHeaders,
     TestLabel "testCRLFLocate" testCRLFLocate,
     TestLabel "testHTTP1Parse" testParse,
     TestLabel "testGenerate" testGenerate,
     TestLabel "testReplaceHostByAuthority" testReplaceHostByAuthority
-	]
+    ]
 
 
 main = do 

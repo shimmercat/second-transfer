@@ -18,7 +18,7 @@ import qualified Data.ByteString.Builder   as Bu
 import qualified Data.ByteString.Lazy      as LB
 import           Data.Conduit
 
-import           Data.Monoid               (mappend, mempty)
+-- import           Data.Monoid               (mappend, mempty)
 
 
 type Framer m =        LB.ByteString                        -- Input left overs
