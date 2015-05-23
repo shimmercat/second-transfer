@@ -455,10 +455,10 @@ static connection_t *sslStart (
 
         // Now I set a few options....
         /*SSL_CTX_set_verify(c->sslContext, NULL );*/
-        // const long flags = 
-        //   SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
         const long flags = 
-            SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
+          SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
+        // const long flags = 
+        //     SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
         SSL_CTX_set_options(c->sslContext, flags);
         setup_dh_parms( c->sslContext );
         SSL_CTX_set_ecdh_auto (c->sslContext, 1);
@@ -467,9 +467,15 @@ static connection_t *sslStart (
         SSL_CTX_set_tlsext_servername_callback(c->sslContext, ssl_servername_cb);
 
 
-
         // The only cipher supported by HTTP/2 ... sort of.
-        result = SSL_CTX_set_cipher_list(c->sslContext, "ECDHE-RSA-AES128-GCM-SHA256");
+        result = SSL_CTX_set_cipher_list(c->sslContext, 
+            "ECDHE-RSA-AES256-GCM-SHA384"  // <-- Good for Chrome and firefox
+            ":ECDHE-RSA-AES128-GCM-SHA256" //  --  ibidem
+            // ---- These suites will fail HTTP/2
+            ":ECDHE-RSA-AES128-SHA256"     //  -- Not good for HTTP/2
+            ":ECDHE-RSA-AES-128-CBC-SHA256"
+            ":ECDHE-ECDSA-AES256-SHA384"
+            );
         /*result = SSL_CTX_set_cipher_list(c->sslContext, "DEFAULT");*/
 
         // Be sure we are able to do ALPN
