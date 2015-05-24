@@ -350,6 +350,9 @@ sessionInputThread  = do
                   else do 
                     return Nothing
 
+                -- TODO: Handle the cases where a request tries to send data 
+                -- even if the method doesn't allow for data.
+
                 -- I'm clear to start the worker, in its own thread
                 liftIO $ do 
                     thread_id <- forkIO $ runReaderT 
@@ -590,6 +593,10 @@ workerThread req coherent_worker =
     headers_output <- view headersOutput
     stream_id      <- view streamId
 
+    -- TODO: Handle exceptions here: what happens if the coherent worker
+    --       throws an exception signaling that the request is ill-formed
+    --       and should be dropped? That could happen in a couple of occassions,
+    --       but really most cases should be handled here in this file...
     (headers, _, data_and_conclussion) <- liftIO $ coherent_worker req
 
     -- Now I send the headers, if that's possible at all
