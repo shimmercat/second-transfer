@@ -15,6 +15,9 @@ module SecondTransfer.Exception (
     ,IOProblem(..)
     ,GenericIOProblem(..)
     ,StreamCancelledException(..)
+
+    -- * Internal exceptions
+    ,HTTP2ProtocolException(..)
     ) where 
 
 import           Control.Exception
@@ -39,6 +42,14 @@ getHTTP2SessionExceptionFromException x = do
     HTTP2SessionException a <- fromException x
     cast a
 
+-- | Concrete exception. Used internally to signal that the client violated
+--   the protocol. Clients of the library shall never see this exception.
+data HTTP2ProtocolException = HTTP2ProtocolException
+    deriving (Typeable, Show)
+
+instance Exception HTTP2ProtocolException where
+    toException   = convertHTTP2SessionExceptionToException
+    fromException = getHTTP2SessionExceptionFromException
 
 
 -- | Abstract exception. Thrown when encoding/decoding of a frame fails

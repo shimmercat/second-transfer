@@ -181,7 +181,12 @@ data SessionData = SessionData {
     -- While I'm receiving headers, anything which 
     -- is not a header should end in the connection being 
     -- closed 
-    ,_receivingHeaders           :: MVar Bool
+    ,_receivingHeaders           :: MVar (Maybe Int)
+    -- _lastGoodStream is used both to report the last good stream in the 
+    -- GoAwayFrame and to keep track of streams oppened by the client. In 
+    -- other words, it contains the stream_id of the last valid client 
+    -- stream and is updated as soon as the first frame of that stream is 
+    -- received.
     ,_lastGoodStream             :: MVar Int
 
     -- Used for decoding the headers
@@ -243,7 +248,7 @@ http2Session coherent_worker session_id sessions_context =   do
     stream2workerthread       <- H.new
     last_good_stream          <- newMVar (-1)
 
-    receiving_headers         <- newMVar False
+    receiving_headers         <- newMVar Nothing
     session_settings          <- newMVar $ SessionSettings { _pushEnabled = True }
 
     -- What about stream cancellation?
@@ -340,20 +345,51 @@ sessionInputThread  = do
             -- We do not continue here, but instead let it finish
             return ()
 
-        Right frame | Just (stream_id, bytes) <- frameIsHeaderOfStream frame -> do 
+        -- The block below will process both HEADERS and CONTINUATION frames. 
+        -- TODO: As it stands now, the server will happily start a new stream with 
+        -- a CONTINUATION frame instead of a HEADERS frame. That's against the 
+        -- protocol.
+        Right frame | Just (stream_id, bytes) <- isAboutHeaders frame -> do 
             -- Just append the frames to streamRequestHeaders
-            headers_open_streams <- appendHeaderFragmentBlock stream_id bytes
+            opens_stream <- appendHeaderFragmentBlock stream_id bytes
 
-            if headers_open_streams then 
-                liftIO $ do
-                    rcv_headers <- takeMVar receiving_headers_mvar
-                    if rcv_headers then 
-                        -- Bad client
-                        sendStreamReset 
+            if opens_stream 
+              then do 
+                maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
+                case maybe_rcv_headers_of of 
+                  Just _ ->
+                    -- Bad client, it is already sending headers 
+                    -- and trying to open another one
+                    closeConnectionBecauseIsInvalid NH2.ProtocolError
+                    -- An exception will be thrown above, so to not complicate
+                    -- control flow here too much.
+                  Nothing -> do 
+                    -- Signal that we are receiving headers now, for this stream
+                    liftIO $ putMVar receiving_headers_mvar (Just stream_id)
+                    -- And go to check if the stream id is valid
+                    last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
+                    if (odd stream_id ) && (stream_id > last_good_stream) 
+                      then do 
+                        -- We are golden, set the new good stream
+                        liftIO $ putMVar last_good_stream_mvar (stream_id)
+                      else do 
+                        -- We are not golden
+                        closeConnectionBecauseIsInvalid NH2.ProtocolError
+              else do 
+                maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
+                case maybe_rcv_headers_of of 
+                    Just a_stream_id | a_stream_id == stream_id -> do 
+                        -- Nothing to complain about 
+                        liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
 
+                    Nothing -> error "InternalError, this should be set"
 
             if frameEndsHeaders frame then 
               do
+                -- Ok, let it be known that we are not receiving more headers 
+                liftIO $ modifyMVar_ 
+                    receiving_headers_mvar
+                    (\ _ -> return Nothing ) 
                 -- Let's decode the headers
                 let for_worker_thread     = set streamId stream_id for_worker_thread_uns 
                 headers_bytes             <- getHeaderBytes stream_id
@@ -368,9 +404,19 @@ sessionInputThread  = do
                 -- TODO: Validate headers, abort session if the headers are invalid.
                 -- Otherwise other invariants will break!!
                 -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
+                let 
+                    headers_editor = He.fromList header_list 
+
+                maybe_good_headers_editor <- validateIncomingHeaders headers_editor
+
+                good_headers <- case maybe_good_headers_editor of 
+                    Just yes_they_are_good -> return yes_they_are_good
+                    Nothing -> closeConnectionBecauseIsInvalid NH2.ProtocolError
 
                 -- Add any extra headers, on demand
-                modified_header_list      <- addExtraHeaders header_list
+                headers_extra_good      <- addExtraHeaders good_headers
+                let 
+                    header_list_after = He.toList headers_extra_good
 
                 -- If the headers end the request.... 
                 post_data_source <- if not (frameEndsStream frame)
@@ -387,7 +433,7 @@ sessionInputThread  = do
                 -- I'm clear to start the worker, in its own thread
                 liftIO $ do 
                     thread_id <- forkIO $ runReaderT 
-                        (workerThread (modified_header_list, post_data_source) coherent_worker)
+                        (workerThread (header_list_after, post_data_source) coherent_worker)
                         for_worker_thread 
                     H.insert stream2workerthread stream_id thread_id
 
@@ -419,7 +465,8 @@ sessionInputThread  = do
 
             continue 
 
-        Right frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) -> do 
+        Right frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) 
+          -> unlessReceivingHeaders $ do 
             -- So I got data to process
             -- TODO: Handle end of stream
             let stream_id = NH2.fromStreamIdentifier nh2_stream_id
@@ -507,22 +554,22 @@ sessionInputThread  = do
             continue 
 
   where 
-
     continue = sessionInputThread
 
-    sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload -> ReaderT SessionData IO ()
-    sendOutFrame encode_info payload = do 
-        session_output_mvar <- view sessionOutput 
 
-        session_output <- liftIO $ takeMVar session_output_mvar
-        liftIO $ writeChan session_output $ Right (encode_info, payload)
-        liftIO $ putMVar session_output_mvar session_output
+sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload -> ReaderT SessionData IO ()
+sendOutFrame encode_info payload = do 
+    session_output_mvar <- view sessionOutput 
+
+    session_output <- liftIO $ takeMVar session_output_mvar
+    liftIO $ writeChan session_output $ Right (encode_info, payload)
+    liftIO $ putMVar session_output_mvar session_output
 
 
 -- TODO: This function, but using the headers editor, triggers 
 --       some renormalization of the header order. A good thing, if 
 --       I get that order well enough....
-addExtraHeaders :: HeaderEditor -> ReaderT SessionData IO HeaderEditor
+addExtraHeaders :: He.HeaderEditor -> ReaderT SessionData IO He.HeaderEditor
 addExtraHeaders headers_editor = do
     let 
         enriched_lens = (sessionsContext . sessionsConfig .sessionsEnrichedHeaders )
@@ -543,7 +590,7 @@ addExtraHeaders headers_editor = do
         else return headers_editor
 
 
-validateIncomingHeaders :: HeaderEditor -> ReaderT SessionData IO (Maybe HeaderEditor)
+validateIncomingHeaders :: He.HeaderEditor -> ReaderT SessionData IO (Maybe He.HeaderEditor)
 validateIncomingHeaders headers_editor = do 
     -- Check that the headers block comes with all mandatory headers. 
     -- Right now I'm not checking that they come in the mandatory order though...
@@ -571,9 +618,14 @@ validateIncomingHeaders headers_editor = do
             return Nothing 
 
 
-closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
+-- Sends a GO_AWAY frame and raises an exception, effectively terminating the input 
+-- thread of the session. 
+closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO a
 closeConnectionBecauseIsInvalid error_code = do 
-    last_good_stream
+    last_good_stream_mvar <- view lastGoodStream
+    last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
+    session_output_mvar <- view sessionOutput 
+    stream2workerthread <- view stream2WorkerThread
     sendOutFrame
         (NH2.EncodeInfo
             NH2.defaultFlags
@@ -581,8 +633,29 @@ closeConnectionBecauseIsInvalid error_code = do
             Nothing
         )
         (NH2.GoAwayFrame
-            (fromIntegral (B.length somebytes))
-        )   
+            (NH2.toStreamIdentifier last_good_stream)
+            error_code
+            ""
+        ) 
+    
+    liftIO $ do 
+        -- Close all active threads for this session
+        H.mapM_
+            ( \(_stream_id, thread_id) -> 
+                    throwTo thread_id StreamCancelledException
+            )
+            stream2workerthread
+
+        -- Notify the framer that the session is closing, so 
+        -- that it stops accepting frames from connected sources 
+        -- (Streams?)
+        session_output <- takeMVar session_output_mvar
+        writeChan session_output $ Left CancelSession_SOC
+        putMVar session_output_mvar session_output
+
+        -- And unwind the input thread in the session, so that the 
+        -- exception handler runs.... 
+        E.throw HTTP2ProtocolException
 
 
 frameEndsStream :: InputFrame -> Bool 
@@ -592,7 +665,16 @@ frameEndsStream (NH2.Frame (NH2.FrameHeader _ flags _) _)  = NH2.testEndStream f
 -- Executes its argument, unless receiving 
 -- headers, in which case the connection is closed.
 unlessReceivingHeaders :: ReaderT SessionData IO a -> ReaderT SessionData IO a
-
+unlessReceivingHeaders comp = do 
+    receiving_headers_mvar    <- view receivingHeaders
+    -- First check if we are receiving headers
+    maybe_recv_headers <- liftIO $ readMVar receiving_headers_mvar
+    if isJust maybe_recv_headers 
+      then 
+        -- So, this frame is highly illegal
+        closeConnectionBecauseIsInvalid NH2.ProtocolError
+      else 
+        comp
 
 
 createMechanismForStream :: GlobalStreamId -> ReaderT SessionData IO PostInputMechanism
@@ -742,12 +824,12 @@ getHeaderBytes global_stream_id = do
     return $ Bl.toStrict $ Bu.toLazyByteString bytes
 
 
-frameIsHeaderOfStream :: InputFrame -> Maybe (GlobalStreamId, B.ByteString)
-frameIsHeaderOfStream (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame _ block_fragment   ) )
+isAboutHeaders :: InputFrame -> Maybe (GlobalStreamId, B.ByteString)
+isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame _ block_fragment   ) )
     = Just (NH2.fromStreamIdentifier stream_id, block_fragment)
-frameIsHeaderOfStream (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.ContinuationFrame block_fragment) )
+isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.ContinuationFrame block_fragment) )
     = Just (NH2.fromStreamIdentifier stream_id, block_fragment)
-frameIsHeaderOfStream _                                       
+isAboutHeaders _                                       
     = Nothing 
 
 

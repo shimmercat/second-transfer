@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.5.2.2
+version     :              0.5.3.0
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -44,7 +44,7 @@ extra-source-files: macros/Logging.cpphs
 
 Flag debug 
   Description: Enable debug support 
-  Default:     False
+  Default:     True
 
 source-repository head
   type:     git
@@ -53,7 +53,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.5.2.2
+  tag:      0.5.3.0
 
 library
 
@@ -138,6 +138,7 @@ library
   -- cc-options: -fPIC -pthread -g -O0
   if flag(debug)
       cc-options: -O0 -g3
+      ld-options: -g3
 
   -- cc-options: -g3 -O0
 
