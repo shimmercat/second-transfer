@@ -64,6 +64,7 @@ library
                   , SecondTransfer.Exception
                   , SecondTransfer.Types
                   , SecondTransfer.Utils.HTTPHeaders
+                  , SecondTransfer.Utils.DevNull
                   -- These are really internal modules, but  are exposed 
                   -- here for the sake of the test suite. They are hidden 
                   -- from the documentation.

@@ -80,6 +80,10 @@ type DataAndConclusion = ConduitM () B.ByteString IO Footers
 --   all the headers of a request. For GET requests that's the entire request
 --   basically, but for POST and PUT requests this is just before the data 
 --   starts arriving to the server. 
+--
+--   It is important that you consume the data in the cases where there is an 
+--   input stream, otherwise the memory is lost for the duration of the request,
+--   and a malicious client can use that.
 type CoherentWorker = Request -> IO PrincipalStream
 
 

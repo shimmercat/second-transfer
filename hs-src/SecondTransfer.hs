@@ -69,13 +69,15 @@ saysHello = do
 
 
 helloWorldWorker :: CoherentWorker
-helloWorldWorker request = return (
-    [
-        (":status", "200")
-    ],
-    [], -- No pushed streams
-    saysHello
-    )
+helloWorldWorker (_request_headers, _maybe_post_data) = do 
+    dropIncomingData _maybe_post_data
+    return (
+        [
+            (":status", "200")
+        ],
+        [], -- No pushed streams
+        saysHello
+        )
 
 
 -- For this program to work, it should be run from the top of 
@@ -156,6 +158,7 @@ module SecondTransfer(
     --   HTTP/2 server in a snap.
     ,tlsServeWithALPN
     ,tlsServeWithALPNAndFinishOnRequest
+    ,dropIncomingData
 
     ,TLSLayerGenericProblem(..)
     ,FinishRequest(..)
@@ -175,3 +178,4 @@ import           SecondTransfer.Http2.MakeAttendant     (http2Attendant)
 import           SecondTransfer.MainLoop
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.Types
+import           SecondTransfer.Utils.DevNull           (dropIncomingData)

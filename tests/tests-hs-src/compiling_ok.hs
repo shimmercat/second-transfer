@@ -6,6 +6,7 @@ import SecondTransfer(
     , tlsServeWithALPNAndFinishOnRequest
     , http2Attendant
     , http11Attendant
+    , dropIncomingData
     , FinishRequest(..)
     )
 import SecondTransfer.Sessions(
@@ -25,13 +26,15 @@ saysHello = do
 
 
 helloWorldWorker :: CoherentWorker
-helloWorldWorker request = return (
-    [
-        (":status", "200")
-    ],
-    [], -- No pushed streams
-    saysHello
-    )
+helloWorldWorker (_request_headers, _maybe_post_data) = do 
+    dropIncomingData _maybe_post_data
+    return (
+        [
+            (":status", "200")
+        ],
+        [], -- No pushed streams
+        saysHello
+        )
 
 
 -- For this program to work, it should be run from the top of 
