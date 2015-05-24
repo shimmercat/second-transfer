@@ -126,7 +126,6 @@ getFrameFromSession (SessionOutput chan) = readChan chan
 type HashTable k v = H.CuckooHashTable k v
 
 
--- Blaze builder could be more proper here... 
 type Stream2HeaderBlockFragment = HashTable GlobalStreamId Bu.Builder
 
 
@@ -156,6 +155,13 @@ type CoherentSession = CoherentWorker -> SessionMaker
 
 data PostInputMechanism = PostInputMechanism (Chan (Maybe B.ByteString), InputDataStream)
 
+-- Settings imposed by the peer
+data SessionSettings = SessionSettings {
+    _pushEnabled :: Bool 
+    }
+
+makeLenses ''SessionSettings
+
 
 -- NH2.Frame != Frame
 data SessionData = SessionData {
@@ -172,6 +178,11 @@ data SessionData = SessionData {
     ,_toEncodeHeaders            :: MVar HP.DynamicTable
     -- And used to decode
     ,_toDecodeHeaders            :: MVar HP.DynamicTable
+    -- While I'm receiving headers, anything which 
+    -- is not a header should end in the connection being 
+    -- closed 
+    ,_receivingHeaders           :: MVar Bool
+    ,_lastGoodStream             :: MVar Int
 
     -- Used for decoding the headers
     ,_stream2HeaderBlockFragment :: Stream2HeaderBlockFragment
@@ -196,6 +207,9 @@ data SessionData = SessionData {
 
     -- Use to retrieve/set the session id
     ,_sessionIdAtSession         :: Int
+
+    -- And used to keep peer session settings
+    ,_sessionSettings            :: MVar SessionSettings
     }
 
 
@@ -227,6 +241,10 @@ http2Session coherent_worker session_id sessions_context =   do
 
     stream2postinputmechanism <- H.new 
     stream2workerthread       <- H.new
+    last_good_stream          <- newMVar (-1)
+
+    receiving_headers         <- newMVar False
+    session_settings          <- newMVar $ SessionSettings { _pushEnabled = True }
 
     -- What about stream cancellation?
     cancelled_streams_mvar    <- newMVar $ NS.empty :: IO (MVar NS.IntSet)
@@ -251,6 +269,8 @@ http2Session coherent_worker session_id sessions_context =   do
         ,_stream2PostInputMechanism  = stream2postinputmechanism
         ,_stream2WorkerThread        = stream2workerthread
         ,_sessionIdAtSession         = session_id
+        ,_receivingHeaders           = receiving_headers
+        ,_sessionSettings            = session_settings
         }
 
     let 
@@ -297,6 +317,8 @@ sessionInputThread  = do
 
     for_worker_thread_uns     <- view forWorkerThread
     stream2workerthread       <- view stream2WorkerThread
+    receiving_headers_mvar    <- view receivingHeaders
+    last_good_stream_mvar     <- view lastGoodStream
 
     input                     <- liftIO $ readChan session_input
 
@@ -320,7 +342,15 @@ sessionInputThread  = do
 
         Right frame | Just (stream_id, bytes) <- frameIsHeaderOfStream frame -> do 
             -- Just append the frames to streamRequestHeaders
-            appendHeaderFragmentBlock stream_id bytes
+            headers_open_streams <- appendHeaderFragmentBlock stream_id bytes
+
+            if headers_open_streams then 
+                liftIO $ do
+                    rcv_headers <- takeMVar receiving_headers_mvar
+                    if rcv_headers then 
+                        -- Bad client
+                        sendStreamReset 
+
 
             if frameEndsHeaders frame then 
               do
@@ -559,6 +589,12 @@ frameEndsStream :: InputFrame -> Bool
 frameEndsStream (NH2.Frame (NH2.FrameHeader _ flags _) _)  = NH2.testEndStream flags
 
 
+-- Executes its argument, unless receiving 
+-- headers, in which case the connection is closed.
+unlessReceivingHeaders :: ReaderT SessionData IO a -> ReaderT SessionData IO a
+
+
+
 createMechanismForStream :: GlobalStreamId -> ReaderT SessionData IO PostInputMechanism
 createMechanismForStream stream_id = do 
     (chan, source) <- liftIO $ unfoldChannelAndSource
@@ -682,21 +718,22 @@ sendDataOfStream stream_id headers_sent = do
                 consumer data_output
 
 
-appendHeaderFragmentBlock :: GlobalStreamId -> B.ByteString -> ReaderT SessionData IO ()
+-- Returns if the frame is the first in the stream
+appendHeaderFragmentBlock :: GlobalStreamId -> B.ByteString -> ReaderT SessionData IO Bool
 appendHeaderFragmentBlock global_stream_id bytes = do 
     ht <- view stream2HeaderBlockFragment 
     maybe_old_block <- liftIO $ H.lookup ht global_stream_id
-    new_block <- case maybe_old_block of 
+    (new_block, new_stream) <- case maybe_old_block of 
 
         Nothing -> do
-            INSTRUMENTATION( liftIO $ infoM "HTTP2.Session" $ "Starting stream " ++ (show global_stream_id) )
-            return $ Bu.byteString bytes
+            INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" $ "Starting stream " ++ (show global_stream_id) )
+            return $ (Bu.byteString bytes, True)
 
         Just something -> 
-            return $ something `mappend` (Bu.byteString bytes) 
+            return $ (something `mappend` (Bu.byteString bytes), False)
 
     liftIO $ H.insert ht global_stream_id new_block
-
+    return new_stream
 
 getHeaderBytes :: GlobalStreamId -> ReaderT SessionData IO B.ByteString
 getHeaderBytes global_stream_id = do 
