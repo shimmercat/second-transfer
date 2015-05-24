@@ -44,7 +44,7 @@ import qualified Data.Map.Strict                        as Ms
 import           Data.Word                              (Word8)
 
 import           Data.Time.Format                       (formatTime, defaultTimeLocale)
-import           Data.Time.Clock                        (UTCTime,getCurrentTime)
+import           Data.Time.Clock                        (getCurrentTime)
 
 import           Control.Applicative                    ((<$>))
 
