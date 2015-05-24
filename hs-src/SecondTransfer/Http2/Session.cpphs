@@ -58,9 +58,10 @@ import           System.Log.Logger
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
 import           SecondTransfer.Sessions.Config
-import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, SessionsContext)
+import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, SessionsContext, sessionsConfig)
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
+import qualified SecondTransfer.Utils.HTTPHeaders       as He
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to 
 -- use :-( 
@@ -326,7 +327,7 @@ sessionInputThread  = do
                 let for_worker_thread     = set streamId stream_id for_worker_thread_uns 
                 headers_bytes             <- getHeaderBytes stream_id
                 dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
-                (new_table, header_list ) <- liftIO $ {-# SCC "decodeHeader" #-} HP.decodeHeader dyn_table headers_bytes
+                (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here 
                 liftIO $ do 
@@ -336,6 +337,9 @@ sessionInputThread  = do
                 -- TODO: Validate headers, abort session if the headers are invalid.
                 -- Otherwise other invariants will break!!
                 -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
+
+                -- Add any extra headers, on demand
+                modified_header_list      <- addExtraHeaders header_list
 
                 -- If the headers end the request.... 
                 post_data_source <- if not (frameEndsStream frame)
@@ -349,7 +353,7 @@ sessionInputThread  = do
                 -- I'm clear to start the worker, in its own thread
                 liftIO $ do 
                     thread_id <- forkIO $ runReaderT 
-                        (workerThread (header_list, post_data_source) coherent_worker)
+                        (workerThread (modified_header_list, post_data_source) coherent_worker)
                         for_worker_thread 
                     H.insert stream2workerthread stream_id thread_id
 
@@ -478,6 +482,35 @@ sessionInputThread  = do
         session_output <- liftIO $ takeMVar session_output_mvar
         liftIO $ writeChan session_output $ Right (encode_info, payload)
         liftIO $ putMVar session_output_mvar session_output
+
+
+-- TODO: This function, but using the headers editor, triggers 
+--       some renormalization of the header order. A good thing, if 
+--       I get that order well enough....
+addExtraHeaders :: Headers -> ReaderT SessionData IO Headers 
+addExtraHeaders headers = do
+    let 
+        enriched_lens = (sessionsContext . sessionsConfig .sessionsEnrichedHeaders )
+        -- Haskell laziness here!
+        headers_editor = He.fromList headers 
+        -- TODO: Figure out which is the best way to put this contact in the 
+        --       source code
+        protocol_lens = He.headerLens "second-transfer-eh--used-protocol"
+
+    add_used_protocol <- view (enriched_lens . addUsedProtocol )
+
+    let 
+        he1 = if add_used_protocol 
+            then set protocol_lens (Just "HTTP/2") headers_editor
+            else headers_editor
+    let 
+        result = He.toList he1 
+
+    if add_used_protocol 
+        -- Nothing will be computed here if the headers are not modified.
+        then return result 
+        else return headers 
+
 
 
 frameEndsStream :: InputFrame -> Bool 

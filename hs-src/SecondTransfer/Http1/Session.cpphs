@@ -5,28 +5,30 @@ module SecondTransfer.Http1.Session(
     ) where 
 
  
--- import qualified Control.Lens                           as L
--- import           Control.Lens                           ( (^.) )
-import           Control.Exception                     (catch)
-import           Control.Concurrent                    (forkIO)
+import           Control.Lens
+import           Control.Exception                       (catch)
+import           Control.Concurrent                      (forkIO)
 
-import qualified Data.ByteString                        as B
+import qualified Data.ByteString                         as B
 -- import qualified Data.ByteString.Lazy                   as LB
 -- import           Data.ByteString.Char8                  (unpack)
 -- import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
-import           Data.Conduit.List                      (consume)
+import           Data.Conduit.List                       (consume)
 -- import           Data.Monoid                            (mconcat, mappend)
 
-import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker,)
-import           SecondTransfer.MainLoop.PushPullType   (Attendant)
-import           SecondTransfer.Sessions.Internal       (SessionsContext, acquireNewSessionTag)
+import           SecondTransfer.MainLoop.CoherentWorker  (CoherentWorker,Headers)
+import           SecondTransfer.MainLoop.PushPullType    (Attendant)
+import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag)
 
 -- Logging utilities
 import           System.Log.Logger                      
 
 import           SecondTransfer.Http1.Parse
 import           SecondTransfer.Exception                (IOProblem)
+import           SecondTransfer.Sessions.Config
+import           SecondTransfer.Sessions.Internal        (sessionsConfig)
+import qualified SecondTransfer.Utils.HTTPHeaders        as He
 
 -- import           Debug.Trace                             (traceShow)
 
@@ -73,7 +75,6 @@ http11Attendant sessions_context coherent_worker
                         close_action
                         return Nothing
                     ) :: IOProblem -> IO (Maybe B.ByteString) )
-
                 
 
             OnlyHeaders_H1PC headers leftovers -> do 
@@ -82,7 +83,12 @@ http11Attendant sessions_context coherent_worker
                 -- ATTENTION: Not use for pushed streams here....
                 -- We must decide what to do if the user return those
                 -- anyway.
-                (response_headers, _, data_and_conclusion) <- coherent_worker (headers, Nothing)
+                let 
+                    modified_headers = addExtraHeaders sessions_context headers
+                (response_headers, _, data_and_conclusion) <- coherent_worker (
+                        modified_headers, 
+                        Nothing
+                    )
                 (_, fragments) <- runConduit $ fuseBoth data_and_conclusion consume 
                 let 
                     response_text =
@@ -106,3 +112,25 @@ http11Attendant sessions_context coherent_worker
                 -- TODO: Implement posts and other requests with bodies....
                 close_action
                 error "NotImplemented requests with bodies"
+
+
+addExtraHeaders :: SessionsContext -> Headers -> Headers 
+addExtraHeaders sessions_context headers = 
+  let 
+    enriched_lens :: Lens' SessionsContext SessionsEnrichedHeaders
+    enriched_lens = (sessionsConfig . sessionsEnrichedHeaders)
+    -- Haskell laziness here!
+    headers_editor = He.fromList headers 
+    -- TODO: Figure out which is the best way to put this contact in the 
+    --       source code
+    protocol_lens = He.headerLens "second-transfer-eh--used-protocol"
+    add_used_protocol = sessions_context ^. (enriched_lens . addUsedProtocol )
+    he1 = if add_used_protocol 
+        then set protocol_lens (Just "HTTP/1.1") headers_editor
+        else headers_editor
+    result = He.toList he1 
+
+  in if add_used_protocol 
+        -- Nothing will be computed here if the headers are not modified.
+        then result 
+        else headers 
