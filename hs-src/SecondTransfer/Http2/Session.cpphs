@@ -43,7 +43,7 @@ import qualified Data.ByteString.Lazy                   as Bl
 import           Data.Conduit
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
-import           Data.Monoid                            as Mo
+-- import           Data.Monoid                            as Mo
 
 import           Control.Lens
  

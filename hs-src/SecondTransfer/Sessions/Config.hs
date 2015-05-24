@@ -1,14 +1,24 @@
 {-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell, OverloadedStrings #-}
+{- | Configuration and settings for the server. All constructor names are 
+     exported, but notice that they start with an underscore. 
+     They also have an equivalent lens without the 
+     underscore. Please prefer to use the lens interface.
+-}
 module SecondTransfer.Sessions.Config(
     sessionId
     ,defaultSessionsConfig
+    ,defaultSessionsEnrichedHeaders
     ,sessionsCallbacks
+    ,sessionsEnrichedHeaders
     ,reportErrorCallback
+    ,addUsedProtocol
 
 
     ,SessionComponent(..)
     ,SessionCoordinates(..)
     ,SessionsCallbacks(..)
+    ,SessionsEnrichedHeaders(..)
+    -- ,UsedProtocol(..)
     ,SessionsConfig(..)
     ,ErrorCallback
     ) where 
@@ -16,7 +26,7 @@ module SecondTransfer.Sessions.Config(
 
 -- import           Control.Concurrent.MVar (MVar)
 import           Control.Exception       (SomeException)
-import           Control.Lens            (Lens', makeLenses)
+import           Control.Lens            (makeLenses)
 
 
 -- | Information used to identify a particular session. 
@@ -38,7 +48,6 @@ sessionId f (SessionCoordinates session_id) =
     fmap (\ s' -> (SessionCoordinates s')) (f session_id)
 
 
-
 -- | Components at an individual session. Used to report
 --   where in the session an error was produced. This interface is likely 
 --   to change in the future, as we add more metadata to exceptions
@@ -51,6 +60,10 @@ data SessionComponent =
     deriving Show
 
 
+-- Which protocol a session is using... no need for this right now
+-- data UsedProtocol = 
+--      HTTP11_UsP
+--     |HTTP2_UsP
 
 -- | Used by this session engine to report an error at some component, in a particular
 --   session. 
@@ -66,20 +79,40 @@ data SessionsCallbacks = SessionsCallbacks {
 makeLenses ''SessionsCallbacks
 
 
+-- | This is a temporal interface, but an useful one nonetheless. 
+--   By setting some values here to True, second-transfer will add
+--   some headers to inbound requests, and some headers to outbound 
+--   requests. 
+data SessionsEnrichedHeaders = SessionsEnrichedHeaders {
+    -- | Adds a second-transfer-eh--used-protocol header
+    --   to inbound requests. Default: False
+    _addUsedProtocol :: Bool
+    }
+
+makeLenses ''SessionsEnrichedHeaders
+
+-- | Don't insert any extra-headers by default. 
+defaultSessionsEnrichedHeaders :: SessionsEnrichedHeaders
+defaultSessionsEnrichedHeaders = SessionsEnrichedHeaders {
+    _addUsedProtocol = False
+    }
+
+
 -- | Configuration information you can provide to the session maker.
 data SessionsConfig = SessionsConfig {
     -- | Session callbacks
     _sessionsCallbacks :: SessionsCallbacks
+    ,_sessionsEnrichedHeaders :: SessionsEnrichedHeaders
 }
 
--- makeLenses ''SessionsConfig
+makeLenses ''SessionsConfig
 
--- | Lens to access sessionsCallbacks in the `SessionsConfig` object.
-sessionsCallbacks :: Lens' SessionsConfig SessionsCallbacks
-sessionsCallbacks  f (
-    SessionsConfig {
-        _sessionsCallbacks= s 
-    }) = fmap (\ s' -> SessionsConfig {_sessionsCallbacks = s'}) (f s)
+-- -- | Lens to access sessionsCallbacks in the `SessionsConfig` object.
+-- sessionsCallbacks :: Lens' SessionsConfig SessionsCallbacks
+-- sessionsCallbacks  f (
+--     SessionsConfig {
+--         _sessionsCallbacks= s 
+--     }) = fmap (\ s' -> SessionsConfig {_sessionsCallbacks = s'}) (f s)
 
 
 -- | Creates a default sessions context. Modify as needed using 
@@ -88,6 +121,7 @@ defaultSessionsConfig :: SessionsConfig
 defaultSessionsConfig = SessionsConfig {
     _sessionsCallbacks = SessionsCallbacks {
             _reportErrorCallback = Nothing
-        }
+        },
+    _sessionsEnrichedHeaders = defaultSessionsEnrichedHeaders
     }
 
