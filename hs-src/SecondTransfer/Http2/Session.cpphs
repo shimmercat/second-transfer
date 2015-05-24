@@ -43,6 +43,7 @@ import qualified Data.ByteString.Lazy                   as Bl
 import           Data.Conduit
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
+import           Data.Maybe                             (isJust)
 -- import           Data.Monoid                            as Mo
 
 import           Control.Lens
@@ -378,7 +379,8 @@ sessionInputThread  = do
                 maybe_thread_id <- H.lookup stream2workerthread stream_id
                 case maybe_thread_id  of 
                     Nothing -> 
-                        -- This is actually more like an internal error
+                        -- This is actually more like an internal error, when this 
+                        -- happend, cancell the session
                         error "InterruptingUnexistentStream"
 
                     Just thread_id -> do
@@ -490,12 +492,10 @@ sessionInputThread  = do
 -- TODO: This function, but using the headers editor, triggers 
 --       some renormalization of the header order. A good thing, if 
 --       I get that order well enough....
-addExtraHeaders :: Headers -> ReaderT SessionData IO Headers 
-addExtraHeaders headers = do
+addExtraHeaders :: HeaderEditor -> ReaderT SessionData IO HeaderEditor
+addExtraHeaders headers_editor = do
     let 
         enriched_lens = (sessionsContext . sessionsConfig .sessionsEnrichedHeaders )
-        -- Haskell laziness here!
-        headers_editor = He.fromList headers 
         -- TODO: Figure out which is the best way to put this contact in the 
         --       source code
         protocol_lens = He.headerLens "second-transfer-eh--used-protocol"
@@ -506,14 +506,53 @@ addExtraHeaders headers = do
         he1 = if add_used_protocol 
             then set protocol_lens (Just "HTTP/2") headers_editor
             else headers_editor
-    let 
-        result = He.toList he1 
 
     if add_used_protocol 
         -- Nothing will be computed here if the headers are not modified.
-        then return result 
-        else return headers 
+        then return he1
+        else return headers_editor
 
+
+validateIncomingHeaders :: HeaderEditor -> ReaderT SessionData IO (Maybe HeaderEditor)
+validateIncomingHeaders headers_editor = do 
+    -- Check that the headers block comes with all mandatory headers. 
+    -- Right now I'm not checking that they come in the mandatory order though...
+    -- 
+    -- Notice that this function will transform a "host" header to an ":authority"
+    -- one.
+    let 
+        h1 = He.replaceHostByAuthority headers_editor
+        -- Check that headers are lowercase
+        headers_are_lowercase = He.headersAreLowercaseAtHeaderEditor headers_editor
+        -- Check that we have mandatory headers 
+        maybe_authority = h1 ^. (He.headerLens ":authority")
+        maybe_method    = h1 ^. (He.headerLens ":method")
+        maybe_scheme    = h1 ^. (He.headerLens ":scheme")
+        maybe_path      = h1 ^. (He.headerLens ":path")
+
+    if 
+        (isJust maybe_authority) && 
+        (isJust maybe_method) && 
+        (isJust maybe_scheme) && 
+        (isJust maybe_path ) 
+        then 
+            return (Just h1)
+        else 
+            return Nothing 
+
+
+closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
+closeConnectionBecauseIsInvalid error_code = do 
+    last_good_stream
+    sendOutFrame
+        (NH2.EncodeInfo
+            NH2.defaultFlags
+            (NH2.toStreamIdentifier 0)
+            Nothing
+        )
+        (NH2.GoAwayFrame
+            (fromIntegral (B.length somebytes))
+        )   
 
 
 frameEndsStream :: InputFrame -> Bool 

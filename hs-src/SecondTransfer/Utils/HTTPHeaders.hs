@@ -10,7 +10,8 @@ module SecondTransfer.Utils.HTTPHeaders (
     -- | These transformations are simple enough that don't require
     --   going away from the list representation (see type `Headers`) 
     lowercaseHeaders
-    ,headersAreValidHTTP2
+    ,headersAreLowercase
+    ,headersAreLowercaseAtHeaderEditor
     ,fetchHeader
     -- * Transformations based on maps
     --
@@ -63,15 +64,22 @@ lowercaseHeaders = map (\(h,v) -> (low h, v))
 
 
 -- | Checks that headers are lowercase
-headersAreValidHTTP2 :: Headers -> Bool 
-headersAreValidHTTP2 headers = 
-  let 
-    isOk a_header = not . T.any isUpper . decodeUtf8 . fst $ a_header
-  in 
+headersAreLowercase :: Headers -> Bool 
+headersAreLowercase headers = 
     foldl
-        (\ prev e -> (flip (&&)) (isOk  e) $! prev)
+        (\ prev (hn, _) -> (flip (&&)) (aTitleIsLowercase  hn) $! prev)
         True
         headers
+
+headersAreLowercaseAtHeaderEditor :: HeaderEditor -> Bool 
+headersAreLowercaseAtHeaderEditor header_editor = 
+    Ms.foldlWithKey'
+        (\ prev hn _ -> (flip (&&)) (aTitleIsLowercase . toFlatBs $ hn) $! prev)
+        True
+        (innerMap header_editor)
+
+aTitleIsLowercase :: B.ByteString -> Bool 
+aTitleIsLowercase a_title = not . T.any isUpper . decodeUtf8 $ a_title
 
 
 -- | Looks for a given header

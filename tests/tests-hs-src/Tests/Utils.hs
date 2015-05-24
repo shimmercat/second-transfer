@@ -23,8 +23,8 @@ testLowercaseHeaders = TestCase $ do
         ("a", "B"),
         ("c-d", "D")
         ]
-    assertEqual "test-lowercase-1" (headersAreValidHTTP2 irregular) False
-    assertEqual "test-lowercase-2" (headersAreValidHTTP2 regular) True
+    assertEqual "test-lowercase-1" (headersAreLowercase irregular) False
+    assertEqual "test-lowercase-2" (headersAreLowercase regular) True
 
 
 testCRLFLocate :: Test 

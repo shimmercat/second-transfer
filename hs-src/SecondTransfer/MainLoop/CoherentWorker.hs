@@ -84,6 +84,10 @@ type DataAndConclusion = ConduitM () B.ByteString IO Footers
 --   It is important that you consume the data in the cases where there is an 
 --   input stream, otherwise the memory is lost for the duration of the request,
 --   and a malicious client can use that.
+--
+--   Also, notice that when handling requests your worker can be interrupted with
+--   an asynchronous exception of type 'StreamCancelledException', if the peer
+--   cancels the stream
 type CoherentWorker = Request -> IO PrincipalStream
 
 
