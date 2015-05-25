@@ -246,7 +246,7 @@ http2Session coherent_worker session_id sessions_context =   do
 
     stream2postinputmechanism <- H.new 
     stream2workerthread       <- H.new
-    last_good_stream          <- newMVar (-1)
+    last_good_stream_mvar     <- newMVar (-1)
 
     receiving_headers         <- newMVar Nothing
     session_settings          <- newMVar $ SessionSettings { _pushEnabled = True }
@@ -276,13 +276,19 @@ http2Session coherent_worker session_id sessions_context =   do
         ,_sessionIdAtSession         = session_id
         ,_receivingHeaders           = receiving_headers
         ,_sessionSettings            = session_settings
+        ,_lastGoodStream             = last_good_stream_mvar
         }
 
     let 
         exc_handler :: SessionComponent -> HTTP2SessionException -> IO () 
         exc_handler component e = sessionExceptionHandler component session_id sessions_context e
         exc_guard :: SessionComponent -> IO () -> IO ()
-        exc_guard component action = E.catch action $ exc_handler component
+        exc_guard component action = E.catch 
+            action 
+            (\e -> do 
+                INSTRUMENTATION( errorM "HTTP2.Session" "Exception processed" )
+                exc_handler component e 
+            )
 
     -- Create an input thread that decodes frames...
     forkIO $ exc_guard SessionInputThread_HTTP2SessionComponent 
@@ -327,7 +333,7 @@ sessionInputThread  = do
 
     input                     <- liftIO $ readChan session_input
 
-    INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" $ "Got a frame or a command: " ++ (show input) )
+    -- INSTRUMENTATION( liftIO $ infoM "HTTP2.Session" $ "Got a frame or a command: " ++ (show input) )
 
     case input of 
 
@@ -338,7 +344,7 @@ sessionInputThread  = do
                 H.mapM_
                     (\ (_, thread_id) -> do
                         throwTo thread_id StreamCancelledException
-                        infoM "HTTP2.Session" $ "Stream successfully interrupted"
+                        return ()
                     )
                     stream2workerthread
 
@@ -357,7 +363,8 @@ sessionInputThread  = do
               then do 
                 maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
                 case maybe_rcv_headers_of of 
-                  Just _ ->
+                  Just _ -> do 
+                    -- INSTRUMENTATION( liftIO $ errorM "HTTP2.Session" "headers being received")
                     -- Bad client, it is already sending headers 
                     -- and trying to open another one
                     closeConnectionBecauseIsInvalid NH2.ProtocolError
@@ -374,6 +381,7 @@ sessionInputThread  = do
                         liftIO $ putMVar last_good_stream_mvar (stream_id)
                       else do 
                         -- We are not golden
+                        INSTRUMENTATION( liftIO $ errorM "HTTP2.Session" "Protocol error: bad stream id")
                         closeConnectionBecauseIsInvalid NH2.ProtocolError
               else do 
                 maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
@@ -460,8 +468,8 @@ sessionInputThread  = do
                         error "InterruptingUnexistentStream"
 
                     Just thread_id -> do
-                        throwTo thread_id StreamCancelledException
                         INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
+                        throwTo thread_id StreamCancelledException
 
             continue 
 
@@ -546,7 +554,7 @@ sessionInputThread  = do
             continue 
 
 
-        Right somethingelse -> do 
+        Right somethingelse ->  unlessReceivingHeaders $ do 
             -- An undhandled case here....
             INSTRUMENTATION( liftIO $ errorM "HTTP2.Session" $  "Received problematic frame: " )
             liftIO $ errorM "HTTP2.Session" $  "..  " ++ (show somethingelse)
@@ -622,6 +630,7 @@ validateIncomingHeaders headers_editor = do
 -- thread of the session. 
 closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO a
 closeConnectionBecauseIsInvalid error_code = do 
+    liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput 
@@ -808,7 +817,8 @@ appendHeaderFragmentBlock global_stream_id bytes = do
     (new_block, new_stream) <- case maybe_old_block of 
 
         Nothing -> do
-            INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" $ "Starting stream " ++ (show global_stream_id) )
+            -- TODO: Make the commented message below more informative
+            -- INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" $ "Starting stream " ++ (show global_stream_id) )
             return $ (Bu.byteString bytes, True)
 
         Just something -> 
@@ -867,7 +877,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
         (\ session_output -> do
             writeIndividualHeaderFrames session_output stream_id bs_chunks True
             -- And say that the headers for this thread are out 
-            INSTRUMENTATION( infoM "HTTP2.Session" $ "Headers were output for stream " ++ (show stream_id) )
+            -- INSTRUMENTATION( debugM "HTTP2.Session" $ "Headers were output for stream " ++ (show stream_id) )
             putMVar headers_ready_mvar HeadersSent
             ) 
   where 
@@ -918,7 +928,6 @@ dataOutputThread input_chan session_output_mvar = forever $ do
     case maybe_contents of 
         Nothing -> do
             liftIO $ do
-                INSTRUMENTATION( debugM "HTTP2.Session" "End-of-stream flag set " )
                 withLockedSessionOutput
                     (\ session_output ->    writeChan session_output $ Right ( NH2.EncodeInfo {
                              NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags

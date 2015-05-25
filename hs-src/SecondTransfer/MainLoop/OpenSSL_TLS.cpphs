@@ -27,7 +27,7 @@ import           Data.ByteString.Char8      (pack)
 import qualified Data.ByteString.Lazy       as LB
 import qualified Data.ByteString.Unsafe     as BU
 
-import           System.Log.Logger
+-- import           System.Log.Logger
 
 import           SecondTransfer.MainLoop.PushPullType
 import           SecondTransfer.Exception
@@ -144,7 +144,6 @@ tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the serve
 tlsServeWithALPN certificate_filename key_filename interface_name attendants interface_port = do 
 
     let protocols_bs = protocolsToWire $ fmap (\ (s,_) -> pack s) attendants
-    INSTRUMENTATION( infoM "OpenSSL" "Entering tlsServeWithALPN" )
     withCString certificate_filename $ \ c_certfn -> withCString key_filename $ \ c_keyfn -> withCString interface_name $ \ c_iname -> do 
 
         connection_ptr <- BU.unsafeUseAsCStringLen protocols_bs $ \ (pchar, len) ->
@@ -158,10 +157,8 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
         if connection_ptr == nullPtr 
           then do
-            INSTRUMENTATION( errorM "OpenSSL" "Could not create listening socket" )
             throwIO $ TLSLayerGenericProblem "Could not create listening end"
           else do
-            INSTRUMENTATION( infoM "OpenSSL" "Listening socket created" )
             return ()
 
         forever $ do 
@@ -173,7 +170,6 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                             r = case result_code of  
                                 re  | re == allOk        -> do 
                                         p <- peek wired_ptr_ptr
-                                        INSTRUMENTATION( infoM "OpenSSL" "A connection was accepted" )
                                         return $ Right  p
                                     | re == timeoutReached -> tryOnce 
                                     | re == badHappened  -> return $ Left ("A wait for connection failed" :: String)
@@ -184,42 +180,13 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
 -- Disable a warning
                 Left _msg -> do 
-                    INSTRUMENTATION( errorM "OpenSSL" $ ".. wait for connection failed. " ++ _msg )
                     return ()
 
                 Right wired_ptr -> do 
-                    already_closed_mvar <- newMVar False
-                    let 
-                        pushAction datum = BU.unsafeUseAsCStringLen (LB.toStrict datum) $ \ (pchar, len) -> do 
-                            result <- sendData wired_ptr pchar (fromIntegral len)
-                            case result of  
-                                r | r == allOk           -> return ()
-                                  | r == badHappened     -> throwIO $ TLSLayerGenericProblem "Could not send data"
-                        pullAction = do 
-                            allocaBytes useBufferSize $ \ pcharbuffer -> 
-                                alloca $ \ data_recvd_ptr -> do 
-                                    result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
-                                    INSTRUMENTATION( debugM "OpenSSL" "Received data" )
-                                    recvd_bytes <- case result of 
-                                        r | r == allOk       -> peek data_recvd_ptr
-                                          | r == badHappened -> throwIO $ TLSLayerGenericProblem "Could not receive data"
 
-                                    B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
-
-                        -- Ensure that the socket and the struct are only closed once
-                        closeAction = do
-                            -- debugM "OpenSSL" "About to close connection"
-                            b <- readMVar already_closed_mvar
-                            if not b 
-                              then do
-                                modifyMVar_ already_closed_mvar (\ _ -> return True)
-                                disposeWiredSession wired_ptr
-                                -- debugM "OpenSSL" "dispose clalled"
-                              else 
-                                return ()
+                    (push_action, pull_action, close_action) <- provideActions wired_ptr 
 
                     use_protocol <- getSelectedProtocol wired_ptr
-                    INSTRUMENTATION( infoM "OpenSSL" $ "Selected protocol:" ++ (show use_protocol))
 
                     let 
                         maybe_session_attendant = case fromIntegral use_protocol of 
@@ -231,9 +198,8 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
                         Just session_attendant -> 
                             E.catch 
-                                (session_attendant pushAction pullAction closeAction)
+                                (session_attendant push_action pull_action close_action)
                                 ((\ e -> do 
-                                    INSTRUMENTATION( errorM "OpenSSL" " ** Session ended by TLSLayerGenericProblem (well handled)")
                                     throwIO e
                                 )::TLSLayerGenericProblem -> IO () )
 
@@ -295,43 +261,14 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
                 -- With the potentially obtained SSL session do...
                 case either_wired_ptr of 
 
-                    Left_I msg -> do 
-                        errorM "OpenSSL" $ ".. wait for connection failed. " ++ msg
-
+                    Left_I _msg -> do 
                         -- // .. //
                         recursion
 
                     Right_I wired_ptr -> do 
-                        already_closed_mvar <- newMVar False
-                        let 
-                            pushAction datum = BU.unsafeUseAsCStringLen (LB.toStrict datum) $ \ (pchar, len) -> do 
-                                result <- sendData wired_ptr pchar (fromIntegral len)
-                                case result of  
-                                    r | r == allOk           -> return ()
-                                      | r == badHappened     -> throwIO $ TLSLayerGenericProblem "Could not send data"
-                            pullAction = do 
-                                allocaBytes useBufferSize $ \ pcharbuffer -> 
-                                    alloca $ \ data_recvd_ptr -> do 
-                                        result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
-                                        recvd_bytes <- case result of 
-                                            r | r == allOk       -> peek data_recvd_ptr
-                                              | r == badHappened -> throwIO $ TLSLayerGenericProblem "Could not receive data"
-
-                                        B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
-                            closeAction = do
-                                -- debugM "OpenSSL" "Close action about to be invoked"
-                                b <- readMVar already_closed_mvar
-                                if not b 
-                                  then do
-                                    modifyMVar_ already_closed_mvar (\ _ -> return True)
-                                    disposeWiredSession wired_ptr
-                                    -- debugM "OpenSSL" "Close action invoked"
-                                  else 
-                                    return ()
+                        (push_action, pull_action, close_action) <- provideActions wired_ptr 
 
                         use_protocol <- getSelectedProtocol wired_ptr
-
-                        infoM "OpenSSL" $ ".. Using protocol: " ++ (show use_protocol)
 
                         let 
                             maybe_session_attendant = case fromIntegral use_protocol of 
@@ -341,7 +278,7 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
                         case maybe_session_attendant of 
 
                             Just session_attendant -> 
-                                session_attendant pushAction pullAction closeAction
+                                session_attendant push_action pull_action close_action
 
                             Nothing ->
                                 return ()
@@ -350,7 +287,6 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
                         recursion 
 
                     Interrupted -> do
-                        infoM "OpenSSL" "Connection closed"
                         closeConnection connection_ptr
 
         -- Start the loop defined above...
@@ -363,3 +299,52 @@ defaultWaitTime = 200000
 -- Okej, more responsiviness needed 
 smallWaitTime :: CInt 
 smallWaitTime = 50000
+
+provideActions :: Wired_Ptr -> IO (LB.ByteString -> IO (), IO B.ByteString, IO ())
+provideActions wired_ptr = do
+    already_closed_mvar <- newMVar False
+    let
+        pushAction :: LB.ByteString -> IO ()
+        pushAction datum = do 
+            already_closed <- readMVar already_closed_mvar
+            if already_closed 
+              then do
+                throwIO $ TLSLayerGenericProblem "Tried to send data on closed handle"
+              else do
+                BU.unsafeUseAsCStringLen (LB.toStrict datum) $ \ (pchar, len) -> do 
+                    result <- sendData wired_ptr pchar (fromIntegral len)
+                    case result of  
+                        r | r == allOk           -> do 
+                                return ()
+                          | r == badHappened     -> do 
+                                throwIO $ TLSLayerGenericProblem "Could not send data"
+
+        pullAction :: IO B.ByteString
+        pullAction =  do
+            already_closed <- readMVar already_closed_mvar
+            if already_closed 
+              then do 
+                throwIO $ TLSLayerGenericProblem "Tried to receive on closed handle"
+              else 
+                allocaBytes useBufferSize $ \ pcharbuffer -> 
+                    alloca $ \ data_recvd_ptr -> do 
+                        result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
+                        recvd_bytes <- case result of 
+                            r | r == allOk       -> peek data_recvd_ptr
+                              | r == badHappened -> do 
+                                    throwIO $ TLSLayerGenericProblem "Could not receive data"
+
+                        B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
+
+        closeAction :: IO ()
+        -- Ensure that the socket and the struct are only closed once
+        closeAction = do
+            b <- readMVar already_closed_mvar
+            if not b 
+              then do
+                modifyMVar_ already_closed_mvar (\ _ -> return True)
+                disposeWiredSession wired_ptr
+                -- debugM "OpenSSL" "dispose clalled"
+              else 
+                return ()
+    return (pushAction, pullAction, closeAction)

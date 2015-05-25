@@ -44,7 +44,7 @@ extra-source-files: macros/Logging.cpphs
 
 Flag debug 
   Description: Enable debug support 
-  Default:     True
+  Default:     False
 
 source-repository head
   type:     git

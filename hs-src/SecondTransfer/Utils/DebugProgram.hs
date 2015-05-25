@@ -1,4 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
+module Main where
+
+
 import SecondTransfer(
     CoherentWorker
     , Footers
@@ -8,6 +11,7 @@ import SecondTransfer(
     , http11Attendant
     , dropIncomingData
     , FinishRequest(..)
+    , enableConsoleLogging
     )
 import SecondTransfer.Sessions(
       makeSessionsContext
@@ -17,9 +21,11 @@ import SecondTransfer.Sessions(
 import Data.Conduit
 import Control.Concurrent         (threadDelay, forkIO)
 import Control.Concurrent.MVar    
+import           Control.Monad.IO.Class                 (liftIO)
 
 saysHello :: DataAndConclusion
 saysHello = do 
+    liftIO $ putStrLn "Did say it!"
     yield "Hello world!"
     -- No footers
     return []
@@ -40,6 +46,7 @@ helloWorldWorker (_request_headers, _maybe_post_data) = do
 -- For this program to work, it should be run from the top of 
 -- the developement directory.
 main = do 
+    enableConsoleLogging
     sessions_context <- makeSessionsContext defaultSessionsConfig
     finish <- newEmptyMVar
     -- Make the server work only for small amount of time, so that 

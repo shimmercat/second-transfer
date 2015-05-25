@@ -469,9 +469,9 @@ static connection_t *sslStart (
 
         // The only cipher supported by HTTP/2 ... sort of.
         result = SSL_CTX_set_cipher_list(c->sslContext, 
-            "ECDHE-RSA-AES256-GCM-SHA384"  // <-- Good for Chrome and firefox
-            ":ECDHE-RSA-AES128-GCM-SHA256" //  --  ibidem
-            // ---- These suites will fail HTTP/2
+            "ECDHE-RSA-AES128-GCM-SHA256" //  --  ibidem
+            ":ECDHE-RSA-AES256-GCM-SHA384"  // <-- Good for Chrome and firefox
+             // ---- These suites will fail HTTP/2
             ":ECDHE-RSA-AES128-SHA256"     //  -- Not good for HTTP/2
             ":ECDHE-RSA-AES-128-CBC-SHA256"
             ":ECDHE-ECDSA-AES256-SHA384"
