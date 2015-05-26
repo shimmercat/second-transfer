@@ -47,7 +47,9 @@ import           Data.Word                              (Word8)
 import           Data.Time.Format                       (formatTime, defaultTimeLocale)
 import           Data.Time.Clock                        (getCurrentTime)
 
+#ifndef IMPLICIT_MONOID
 import           Control.Applicative                    ((<$>))
+#endif
 
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 

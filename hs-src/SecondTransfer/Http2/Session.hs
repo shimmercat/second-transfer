@@ -425,6 +425,7 @@ sessionInputThread  = do
                 headers_extra_good      <- addExtraHeaders good_headers
                 let 
                     header_list_after = He.toList headers_extra_good
+                -- liftIO $ putStrLn $ "header list after " ++ (show header_list_after)
 
                 -- If the headers end the request.... 
                 post_data_source <- if not (frameEndsStream frame)
@@ -586,6 +587,8 @@ addExtraHeaders headers_editor = do
         protocol_lens = He.headerLens "second-transfer-eh--used-protocol"
 
     add_used_protocol <- view (enriched_lens . addUsedProtocol )
+
+    -- liftIO $ putStrLn $ "AAA" ++ (show add_used_protocol)
 
     let 
         he1 = if add_used_protocol 
@@ -858,7 +861,6 @@ headersOutputThread :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
                        -> ReaderT SessionData IO ()
 headersOutputThread input_chan session_output_mvar = forever $ do 
     (stream_id, headers_ready_mvar, headers) <- liftIO $ readChan input_chan
-    -- liftIO $ putStrLn $ "Output headers: " ++ (show headers)
 
     -- First encode the headers using the table
     encode_dyn_table_mvar <- view toEncodeHeaders

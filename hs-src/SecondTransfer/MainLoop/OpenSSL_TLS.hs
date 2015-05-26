@@ -9,13 +9,13 @@ module SecondTransfer.MainLoop.OpenSSL_TLS(
     ,FinishRequest(..)
     ) where 
 
-
-
 import           Control.Monad
 import           Control.Concurrent.MVar    
 import           Control.Exception  
 import qualified Control.Exception  as      E
+#ifndef IMPLICIT_APPLICATIVE_FOLDABLE
 import           Data.Foldable              (foldMap)
+#endif
 import           Data.Typeable              
 import           Data.Monoid                ()
 import           Foreign
