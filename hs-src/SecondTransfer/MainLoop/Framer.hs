@@ -18,8 +18,10 @@ import qualified Data.ByteString.Builder   as Bu
 import qualified Data.ByteString.Lazy      as LB
 import           Data.Conduit
 
+#ifndef IMPLICIT_MONOID
 import           Data.Monoid               
-import           Prelude
+#endif
+
 
 
 type Framer m =        LB.ByteString                        -- Input left overs

@@ -92,12 +92,17 @@ library
 
   build-tools: cpphs
 
+  default-extensions: CPP
+
   if flag(debug)
     CPP-Options: -DENABLE_DEBUG
     if !os(windows)
       CC-Options: "-DDEBUG"
     else
       CC-Options: "-DNDEBUG"
+
+  if impl(ghc >= 7.10)
+    CPP-Options: -DIMPLICIT_MONOID -DIMPLICIT_APPLICATIVE_FOLDABLE
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:    
@@ -142,7 +147,8 @@ library
 
   -- cc-options: -g3 -O0
 
-  -- ghc-options: -O2
+  -- ghc-options: -O2 -cpp  -pgmPcpphs  -optP--cpp
+  ghc-options: -pgmPcpphs  -optP--cpp
  
   extra-libraries: ssl crypto
 
