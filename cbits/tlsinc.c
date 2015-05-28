@@ -456,7 +456,7 @@ static connection_t *sslStart (
         // Now I set a few options....
         /*SSL_CTX_set_verify(c->sslContext, NULL );*/
         const long flags = 
-          SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
+          SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
         // const long flags = 
         //     SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
         SSL_CTX_set_options(c->sslContext, flags);
