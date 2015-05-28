@@ -8,6 +8,7 @@
 
 module SecondTransfer.MainLoop.CoherentWorker(
     getHeaderFromFlatList
+    , nullFooter
 
     , HeaderName
     , HeaderValue
@@ -22,6 +23,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , PushedStream
     , DataAndConclusion
     , InputDataStream
+
     ) where 
 
 
@@ -111,3 +113,18 @@ getHeaderFromFlatList unvl bs =
 
         Nothing                -> Nothing  
 
+
+-- | If you want to skip the footers, i.e., they are empty, use this 
+--   function to convert an ordinary Source to a DataAndConclusion.
+nullFooter :: Source IO B.ByteString -> DataAndConclusion
+nullFooter s = s =$= go 
+  where 
+    go = do 
+        i <- await 
+        case i of 
+            Nothing -> 
+                return []
+
+            Just ii -> do
+                yield ii 
+                go 
