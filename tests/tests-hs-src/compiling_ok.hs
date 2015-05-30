@@ -46,7 +46,7 @@ main = do
     -- continue running other tests
     forkIO $ do 
         threadDelay 1000000
-        -- putMVar finish FinishRequest 
+        putMVar finish FinishRequest 
     let 
         http2_attendant = http2Attendant sessions_context helloWorldWorker
         http11_attendant = http11Attendant sessions_context helloWorldWorker
