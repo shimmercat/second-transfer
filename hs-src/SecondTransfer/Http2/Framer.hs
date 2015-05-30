@@ -147,10 +147,15 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         -- TODO: Dodgy exception handling here...
         close_on_error session_id session_context comp = 
             E.finally (
-                E.catch
-                    comp
-                    (exc_handler session_id session_context)
+                E.catch(
+                    (
+                        E.catch
+                            comp
+                            (exc_handler session_id session_context)
+                            )
                     )
+                    (io_exc_handler session_id session_context)
+                )
                 close_action
 
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
@@ -158,6 +163,13 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
             modifyMVar_ output_is_forbidden (\ _ -> return True) 
             errorM "HTTP2.Framer" "Exception went up"
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
+
+        io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
+        io_exc_handler x y e = do
+            modifyMVar_ output_is_forbidden (\ _ -> return True) 
+            -- !!! These exceptions are way too common for we to care....
+            -- errorM "HTTP2.Framer" "Exception went up"
+            -- sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
 
     forkIO 
