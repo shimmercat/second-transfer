@@ -2,7 +2,9 @@ module SecondTransfer.Utils.ConcatConduit(
     concatConduit
     ) where 
 
+#ifndef IMPLICIT_MONOID
 import Data.Monoid(mappend, mempty)
+#endif
 import Data.Conduit 
 import qualified Data.ByteString as B 
 import qualified Data.ByteString.Lazy as LB

@@ -32,9 +32,11 @@ import qualified Data.ByteString.Char8                  as Ch8
 import qualified Data.ByteString.Lazy                   as Lb
 import           Data.Char                              (toLower)
 import           Data.Maybe                             (isJust)
+#ifndef IMPLICIT_MONOID
 import           Data.Monoid                            (mappend,
                                                          mempty,
                                                          mconcat)
+#endif
 import qualified Data.Attoparsec.ByteString             as Ap
 
 import           Data.Foldable                          (find)

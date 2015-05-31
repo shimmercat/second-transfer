@@ -44,7 +44,9 @@ import           Data.Conduit
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
 import           Data.Maybe                             (isJust)
--- import           Data.Monoid                            as Mo
+#ifndef IMPLICIT_MONOID
+import           Data.Monoid                            (mappend)
+#endif
 
 import           Control.Lens
  
