@@ -44,7 +44,7 @@ import           SecondTransfer.MainLoop.PushPullType   (Attendant, CloseAction,
                                                          PullAction, PushAction)
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
-
+import           SecondTransfer.MainLoop.Logging        (logWithExclusivity)
 
 #include "Logging.cpphs"
 
@@ -161,11 +161,11 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True) 
-            errorM "HTTP2.Framer" "Exception went up"
+            INSTRUMENTATION( errorM "HTTP2.Framer" "Exception went up" )
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
         io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
-        io_exc_handler x y e = do
+        io_exc_handler _x _y _e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True) 
             -- !!! These exceptions are way too common for we to care....
             -- errorM "HTTP2.Framer" "Exception went up"
@@ -183,12 +183,13 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
 
 
 http2FrameLength :: F.LengthCallback
-http2FrameLength bs | (B.length bs) >= 3     = let
-    word24 = decode input_as_lbs :: Word24
-    input_as_lbs = LB.fromStrict bs
-  in 
-    Just $ (word24ToInt word24) + 9 -- Nine bytes that the frame header always uses
-http2FrameLength _ = Nothing
+http2FrameLength bs 
+    | (B.length bs) >= 3     = let
+        word24 = decode input_as_lbs :: Word24
+        input_as_lbs = LB.fromStrict bs
+      in 
+        Just $ (word24ToInt word24) + 9 -- Nine bytes that the frame header always uses
+    | otherwise = Nothing
 
 
 addCapacity :: 
@@ -236,20 +237,27 @@ inputGatherer pull_action session_input = do
         liftIO $ do 
             -- We just the the GoAway frame, although this is awfully early
             -- and probably wrong
-            INSTRUMENTATION( errorM "HTTP2.Framer" "Invalid prologue")
             throwIO BadPrefaceException
       else 
-        INSTRUMENTATION( liftIO $ debugM "HTTP2.Framer" "Prologue validated" )
+        INSTRUMENTATION(  debugM "HTTP2.Framer" "Prologue validated" )
     let 
         source::Source FramerSession B.ByteString
         source = transPipe liftIO $ F.readNextChunk http2FrameLength remaining pull_action
-    ( source $$ consume)
+    ( source $$ consume True)
   where 
 
-    consume :: Sink B.ByteString FramerSession ()
-    consume = do 
+    sendToSession :: Bool -> InputFrame -> IO ()
+    sendToSession starting frame = if starting 
+      then do
+        sendFirstFrameToSession session_input frame 
+      else do
+        sendMiddleFrameToSession session_input frame
+
+    consume_continue = consume False
+
+    consume :: Bool -> Sink B.ByteString FramerSession ()
+    consume starting = do 
         maybe_bytes <- await 
-        -- Deserialize
 
         case maybe_bytes of 
 
@@ -265,7 +273,7 @@ inputGatherer pull_action session_input = do
                         -- Got an error from the decoder... meaning that a frame could 
                         -- not be decoded.... in this case we send a cancel session command 
                         -- to the session. 
-                        liftIO $ errorM "HTTP2.Framer" "CouldNotDecodeFrame"
+                        INSTRUMENTATION( errorM "HTTP2.Framer" "CouldNotDecodeFrame" )
                         -- Send frames like GoAway and such...
                         lift $ sendGoAwayFrame NH2.ProtocolError
                         -- Inform the session that it can tear down itself
@@ -312,7 +320,7 @@ inputGatherer pull_action session_input = do
 
                                 -- And send the frame down to the session, so that session specific settings
                                 -- can be applied. 
-                                liftIO $ sendFrameToSession session_input frame
+                                liftIO $ sendToSession starting frame
 
 
                             a_frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) _ )   -> do 
@@ -320,9 +328,10 @@ inputGatherer pull_action session_input = do
                                 lift $ updateLastStream $ NH2.fromStreamIdentifier stream_id
 
                                 -- Send frame to the session
-                                liftIO $ sendFrameToSession session_input a_frame
+                                liftIO $ sendToSession starting a_frame
+
                         -- tail recursion: go again...
-                        consume 
+                        consume_continue
 
             Nothing    -> 
                 -- We may as well exit this thread
@@ -348,14 +357,12 @@ outputGatherer session_output = do
 
     loopPart :: FramerSession ()
     loopPart = do 
-
         command_or_frame  <- liftIO $ getFrameFromSession session_output
-
         case command_or_frame of 
 
             Left CancelSession_SOC -> do 
                 -- The session wants to cancel things
-                INSTRUMENTATION( liftIO $ debugM "HTTP2.Framer" "CancelSession_SOC processed")
+                INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
                 releaseFramer
 
             Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _) ) -> do

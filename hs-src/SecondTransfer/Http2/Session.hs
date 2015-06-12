@@ -6,7 +6,8 @@
 module SecondTransfer.Http2.Session(
     http2Session
     ,getFrameFromSession
-    ,sendFrameToSession
+    ,sendFirstFrameToSession
+    ,sendMiddleFrameToSession
     ,sendCommandToSession
 
     ,CoherentSession
@@ -65,6 +66,7 @@ import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
+import           SecondTransfer.MainLoop.Logging        (logWithExclusivity)
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to 
 -- use :-( 
@@ -112,12 +114,15 @@ type Session = (SessionInput, SessionOutput)
 
 -- From outside, one can only write to this one ... the newtype is to enforce 
 --    this.
-newtype SessionInput = SessionInput ( Chan (Either SessionInputCommand InputFrame) )
-sendFrameToSession :: SessionInput  -> InputFrame -> IO ()
-sendFrameToSession (SessionInput chan) frame = writeChan chan $ Right frame
+newtype SessionInput = SessionInput ( Chan SessionInputCommand )
+sendMiddleFrameToSession :: SessionInput  -> InputFrame -> IO ()
+sendMiddleFrameToSession (SessionInput chan) frame = writeChan chan $ MiddleFrame_SIC frame
+
+sendFirstFrameToSession :: SessionInput -> InputFrame -> IO ()
+sendFirstFrameToSession (SessionInput chan) frame = writeChan chan $ FirstFrame_SIC frame
 
 sendCommandToSession :: SessionInput  -> SessionInputCommand -> IO ()
-sendCommandToSession (SessionInput chan) command = writeChan chan $ Left command
+sendCommandToSession (SessionInput chan) command = writeChan chan command
 
 -- From outside, one can only read from this one 
 newtype SessionOutput = SessionOutput ( Chan (Either SessionOutputCommand OutputFrame) )
@@ -137,7 +142,9 @@ type WorkerMonad = ReaderT WorkerThreadEnvironment IO
 -- Have to figure out which are these...but I would expect to have things
 -- like unexpected aborts here in this type.
 data SessionInputCommand = 
-    CancelSession_SIC
+    FirstFrame_SIC InputFrame -- This frame is special
+    |MiddleFrame_SIC InputFrame -- Ordinary frame
+    |CancelSession_SIC
   deriving Show 
 
 
@@ -170,7 +177,7 @@ data SessionData = SessionData {
     -- ATTENTION: Ignore the warning coming from here for now
     _sessionsContext             :: SessionsContext 
 
-    ,_sessionInput               :: Chan (Either SessionInputCommand InputFrame)
+    ,_sessionInput               :: Chan SessionInputCommand
 
     -- We need to lock this channel occassionally so that we can order multiple 
     -- header frames properly.... 
@@ -265,7 +272,7 @@ http2Session coherent_worker session_id sessions_context =   do
 
     let session_data  = SessionData {
         _sessionsContext             = sessions_context
-        ,_sessionInput                = session_input 
+        ,_sessionInput               = session_input 
         ,_sessionOutput              = session_output_mvar
         ,_toDecodeHeaders            = decode_headers_table_mvar
         ,_toEncodeHeaders            = encode_headers_table_mvar
@@ -316,7 +323,7 @@ http2Session coherent_worker session_id sessions_context =   do
 --- more robust.
 sessionInputThread :: ReaderT SessionData IO ()
 sessionInputThread  = do 
-    INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" "Entering sessionInputThread" )
+    INSTRUMENTATION( debugM "HTTP2.Session" "Entering sessionInputThread" )
 
     -- This is an introductory and declarative block... all of this is tail-executed
     -- every time that  a packet needs to be processed. It may be a good idea to abstract
@@ -335,11 +342,29 @@ sessionInputThread  = do
 
     input                     <- liftIO $ readChan session_input
 
-    -- INSTRUMENTATION( liftIO $ infoM "HTTP2.Session" $ "Got a frame or a command: " ++ (show input) )
-
     case input of 
 
-        Left CancelSession_SIC -> do 
+        FirstFrame_SIC (NH2.Frame 
+            (NH2.FrameHeader _ 1 null_stream_id ) _ )| NH2.toStreamIdentifier 0 == null_stream_id  -> do 
+            -- This is a SETTINGS ACK frame, which is okej to have,
+            -- do nothing here
+            continue 
+
+        FirstFrame_SIC 
+            (NH2.Frame 
+                (NH2.FrameHeader _ 0 null_stream_id ) 
+                (NH2.SettingsFrame settings_list) 
+            ) | NH2.toStreamIdentifier 0 == null_stream_id  -> do 
+            -- Good, handle 
+            handleSettingsFrame settings_list
+            continue 
+
+        FirstFrame_SIC _ -> do 
+            -- Bad, incorrect id or god knows only what .... 
+            closeConnectionBecauseIsInvalid NH2.ProtocolError
+            return ()
+
+        CancelSession_SIC -> do 
             -- Good place to tear down worker threads... Let the rest of the finalization
             -- to the framer
             liftIO $ do 
@@ -357,7 +382,7 @@ sessionInputThread  = do
         -- TODO: As it stands now, the server will happily start a new stream with 
         -- a CONTINUATION frame instead of a HEADERS frame. That's against the 
         -- protocol.
-        Right frame | Just (stream_id, bytes) <- isAboutHeaders frame -> do 
+        MiddleFrame_SIC frame | Just (stream_id, bytes) <- isAboutHeaders frame -> do 
             -- Just append the frames to streamRequestHeaders
             opens_stream <- appendHeaderFragmentBlock stream_id bytes
 
@@ -366,7 +391,6 @@ sessionInputThread  = do
                 maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
                 case maybe_rcv_headers_of of 
                   Just _ -> do 
-                    -- INSTRUMENTATION( liftIO $ errorM "HTTP2.Session" "headers being received")
                     -- Bad client, it is already sending headers 
                     -- and trying to open another one
                     closeConnectionBecauseIsInvalid NH2.ProtocolError
@@ -383,7 +407,7 @@ sessionInputThread  = do
                         liftIO $ putMVar last_good_stream_mvar (stream_id)
                       else do 
                         -- We are not golden
-                        INSTRUMENTATION( liftIO $ errorM "HTTP2.Session" "Protocol error: bad stream id")
+                        INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
                         closeConnectionBecauseIsInvalid NH2.ProtocolError
               else do 
                 maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
@@ -456,7 +480,7 @@ sessionInputThread  = do
                 
             continue 
 
-        Right frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
+        MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             liftIO $ do 
                 INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream reset: " ++ (show _error_code_id) )
@@ -467,7 +491,7 @@ sessionInputThread  = do
                 case maybe_thread_id  of 
                     Nothing -> 
                         -- This is actually more like an internal error, when this 
-                        -- happend, cancell the session
+                        -- happend, cancel the session
                         error "InterruptingUnexistentStream"
 
                     Just thread_id -> do
@@ -476,7 +500,7 @@ sessionInputThread  = do
 
             continue 
 
-        Right frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) 
+        MiddleFrame_SIC frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) 
           -> unlessReceivingHeaders $ do 
             -- So I got data to process
             -- TODO: Handle end of stream
@@ -522,13 +546,13 @@ sessionInputThread  = do
 
             continue 
 
-        Right (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _)) | NH2.testAck flags-> do 
+        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _)) | NH2.testAck flags-> do 
             -- Deal with pings: this is an Ack, so do nothing
             continue 
 
-        Right (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do 
+        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do 
             -- Deal with pings: NOT an Ack, so answer
-            INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" "Ping processed" )
+            INSTRUMENTATION( debugM "HTTP2.Session" "Ping processed" )
             sendOutFrame
                 (NH2.EncodeInfo
                     (NH2.setAck NH2.defaultFlags)
@@ -539,33 +563,38 @@ sessionInputThread  = do
 
             continue 
 
-        Right (NH2.Frame frame_header (NH2.SettingsFrame _)) | isSettingsAck frame_header -> do 
+        MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame _)) | isSettingsAck frame_header -> do 
             -- Frame was received by the peer, do nothing here...
             continue 
 
         -- TODO: Do something with these settings!!
-        Right (NH2.Frame _ (NH2.SettingsFrame settings_list))  -> do 
-            INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" $ "Received settings: " ++ (show settings_list) )
+        MiddleFrame_SIC (NH2.Frame _ (NH2.SettingsFrame settings_list))  -> do 
+            INSTRUMENTATION( debugM "HTTP2.Session" $ "Received settings: " ++ (show settings_list) )
             -- Just acknowledge the frame.... for now 
-            sendOutFrame 
-                (NH2.EncodeInfo
-                    (NH2.setAck NH2.defaultFlags)
-                    (NH2.toStreamIdentifier 0)
-                    Nothing )
-                (NH2.SettingsFrame [])
-
+            handleSettingsFrame settings_list
             continue 
 
-
-        Right somethingelse ->  unlessReceivingHeaders $ do 
+        MiddleFrame_SIC somethingelse ->  unlessReceivingHeaders $ do 
             -- An undhandled case here....
-            INSTRUMENTATION( liftIO $ errorM "HTTP2.Session" $  "Received problematic frame: " )
-            liftIO $ errorM "HTTP2.Session" $  "..  " ++ (show somethingelse)
+            INSTRUMENTATION( errorM "HTTP2.Session" $  "Received problematic frame: " )
+            INSTRUMENTATION( errorM "HTTP2.Session" $  "..  " ++ (show somethingelse) )
 
             continue 
 
   where 
     continue = sessionInputThread
+
+    -- TODO: Do use the settings!!!
+    handleSettingsFrame :: NH2.SettingsList -> ReaderT SessionData IO ()
+    handleSettingsFrame _settings_list = 
+        sendOutFrame 
+            (NH2.EncodeInfo
+                (NH2.setAck NH2.defaultFlags)
+                (NH2.toStreamIdentifier 0)
+                Nothing )
+            (NH2.SettingsFrame [])
+
+
 
 
 sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload -> ReaderT SessionData IO ()
@@ -635,7 +664,7 @@ validateIncomingHeaders headers_editor = do
 -- thread of the session. 
 closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO a
 closeConnectionBecauseIsInvalid error_code = do 
-    liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
+    -- liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput 
@@ -785,7 +814,7 @@ workerThread req coherent_worker =
         -- liftIO ( data_and_conclussion $$ (_sendDataOfStream stream_id) )
         -- 
         -- This threadlet should block here waiting for the headers to finish going
-        (maybe_footers, _) <- runConduit $
+        (_maybe_footers, _) <- runConduit $
             (transPipe liftIO data_and_conclussion) 
             `fuseBothMaybe` 
             (sendDataOfStream stream_id headers_sent)
@@ -823,7 +852,6 @@ appendHeaderFragmentBlock global_stream_id bytes = do
 
         Nothing -> do
             -- TODO: Make the commented message below more informative
-            -- INSTRUMENTATION( liftIO $ debugM "HTTP2.Session" $ "Starting stream " ++ (show global_stream_id) )
             return $ (Bu.byteString bytes, True)
 
         Just something -> 

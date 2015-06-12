@@ -2,7 +2,7 @@
 
 #ifdef ENABLE_DEBUG
 
-#define INSTRUMENTATION(x)   (x)
+#define INSTRUMENTATION(x)   (liftIO $ logWithExclusivity (x))
 
 #else
 

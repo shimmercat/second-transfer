@@ -2,6 +2,7 @@
 module SecondTransfer.MainLoop.Logging (
     -- | Simple, no fuss enable logging
     enableConsoleLogging
+    ,logWithExclusivity
     ) where
 
 import           System.IO                 (stderr)
@@ -13,11 +14,27 @@ import           System.Log.Handler        (setFormatter, LogHandler)
 import           System.Log.Handler.Simple
 -- import           System.Log.Handler.Syslog (Facility (..), Option (..), openlog)
 import           System.Log.Logger
+import           System.IO.Unsafe          (unsafePerformIO)
+
+import           Control.Concurrent.MVar 
 
 
 -- | Activates logging to terminal
 enableConsoleLogging :: IO ()
 enableConsoleLogging = configureLoggingToConsole
+
+
+-- | Protect logging with a mutex... that is to say,
+--   this is a horrible hack and you should try to log
+--   as little as possible or nothing at all. This just 
+--   works for instrumentation locks...
+globallyLogWell :: MVar ()
+{-# NOINLINE globallyLogWell #-}
+globallyLogWell = unsafePerformIO (newMVar () )
+
+-- | Used internally to avoid garbled logs
+logWithExclusivity :: IO () -> IO ()
+logWithExclusivity a = withMVar globallyLogWell (\_ -> a )
 
 
 configureLoggingToConsole :: IO ()

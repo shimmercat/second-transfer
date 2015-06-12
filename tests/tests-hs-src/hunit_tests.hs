@@ -6,6 +6,7 @@ import System.Exit
 import Test.HUnit
 
 import SecondTransfer.Test.DecoySession
+import SecondTransfer
 
 import Tests.HTTP2Session
 import Tests.Utils
@@ -19,7 +20,10 @@ tests = TestList [
     TestLabel "testCRLFLocate" testCRLFLocate,
     TestLabel "testHTTP1Parse" testParse,
     TestLabel "testGenerate" testGenerate,
-    TestLabel "testReplaceHostByAuthority" testReplaceHostByAuthority
+    TestLabel "testReplaceHostByAuthority" testReplaceHostByAuthority,
+    TestLabel "testFirstFrameIsSettings" testFirstFrameMustBeSettings,
+    TestLabel "testFirstFrameIsSettings2" testFirstFrameMustBeSettings2,
+    TestLabel "testFirstFrameIsSettings3" testFirstFrameMustBeSettings3
     ]
 
 

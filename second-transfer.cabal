@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.5.3.1
+version     :              0.5.3.2
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -35,7 +35,7 @@ build-type  :              Simple
 
 -- Extra files to be distributed with the package-- such as examples or a 
 -- README.
-extra-source-files:  README.md
+extra-source-files:  README.md changelog.md
 
 -- Constraint on the version of Cabal needed to build this package.
 cabal-version:       >=1.10
@@ -53,7 +53,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.5.3.1
+  tag:      0.5.3.2
 
 library
 
@@ -125,7 +125,7 @@ library
                  hslogger >= 1.2.6,
                  hashable >= 1.2,
                  attoparsec >= 0.12,
-                 time >= 1.4.0
+                 time >= 1.5.0 && < 1.8
   
   -- Directories containing source files.
   hs-source-dirs: hs-src

@@ -11,12 +11,13 @@ module SecondTransfer.MainLoop.Framer(
 
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.IO.Class    (MonadIO
-                                           -- , liftIO
+                                            -- , liftIO
                                            )
 import qualified Data.ByteString           as B
 import qualified Data.ByteString.Builder   as Bu
 import qualified Data.ByteString.Lazy      as LB
 import           Data.Conduit
+-- import           Debug.Trace               (trace)
 
 #ifndef IMPLICIT_MONOID
 import           Data.Monoid               
