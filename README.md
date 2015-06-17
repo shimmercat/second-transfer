@@ -29,6 +29,15 @@ Running the tests
 
     $ cabal test
 
+
+Debugging complicated scenarios
+-------------------------------
+
+To access full debugging capabilities, for example from the test suite, use the 
+following command from the project's directory:
+
+    $ cabal exec -- ghci -ihs-src -itests/tests-hs-src -itests/support -XCPP -Imacros/ dist/build/cbits/tlsinc.o
+
 Example
 -------
 
