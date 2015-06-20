@@ -1,26 +1,28 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Tests.HTTP2Session where 
 
+
 import           Data.Typeable
 
-import           Test.HUnit
-import qualified Network.HTTP2                    as NH2
 import           Control.Concurrent               (threadDelay)
-import qualified Control.Concurrent               as C(yield)
+import qualified Control.Concurrent               as C (yield)
 import           Control.Concurrent.MVar
-import           Control.Lens
 import           Control.Exception
-
+import           Control.Lens
+import           Control.Monad.IO.Class           (liftIO)
+import qualified Network.HTTP2                    as NH2
+import           Test.HUnit
+import           SecondTransfer.Exception
 import           SecondTransfer.Http2             (http2Attendant)
 import           SecondTransfer.Sessions
 import           SecondTransfer.Test.DecoySession
 import           SecondTransfer.Types
-import           SecondTransfer.Exception
 import           SecondTransfer.Utils.HTTPHeaders (fetchHeader)
 
 
 
-import Data.Conduit(yield)
+import           Data.Conduit                     (yield)
+
 
 
 saysHello :: DataAndConclusion
@@ -48,6 +50,20 @@ instance Exception Internal500Exception where
 
 throwingWorker :: CoherentWorker
 throwingWorker _ = throwIO Internal500Exception
+
+throwingWorker2 :: CoherentWorker
+throwingWorker2 _req = return (
+        [
+            -- These headers will be already sent by the time
+            -- the exception is discovered... 
+            (":status", "200")
+        ],
+        [], -- No pushed streams
+        do 
+            yield "Error coming down"
+            liftIO $ throwIO Internal500Exception
+            return []
+    )
 
 
 setError :: MVar Bool -> ErrorCallback
@@ -208,7 +224,10 @@ testIGet500Status = TestCase $ do
     f2 <- recvFrameFromSession decoy_session
     seen3 <- frameIsStatus500 decoy_session seen f2
 
-    return ()
+    if not seen3 then do 
+        assertFailure "Didn't see that 500"
+    else 
+        return ()
 
 
 frameIsStatus500 :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool 
@@ -223,6 +242,66 @@ frameIsStatus500 decoy_session prev maybe_frame =
                         maybe_status = fetchHeader headers ":status"
                     case maybe_status of 
                         Just x | x == "500" -> return True 
+                        _                   -> return False
+
+                _ ->
+                    return False
+
+
+testSessionBreaksOnLateError :: Test 
+testSessionBreaksOnLateError = TestCase $ do 
+    errors_mvar <- newMVar False 
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let 
+        attendant = http2Attendant sessions_context throwingWorker2
+    decoy_session <- createDecoySession attendant
+
+    -- Send the prologue
+    sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
+    -- Send a settings frame now, otherwise the session will bark....
+    sendFrameToSession 
+        decoy_session 
+        ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
+          (NH2.SettingsFrame []) )
+
+    -- Now perform a simple, mocking request
+    performRequestSimple decoy_session 1 [
+        (":method", "get"),
+        (":scheme", "https"),
+        (":authority", "www.example.com"),
+        (":path", "/hi")
+        ]
+
+    -- Now we read a few frames
+    seen <- return False 
+    f0 <- recvFrameFromSession decoy_session 
+    seen1 <- frameIsGoAwayBecauseInternalError decoy_session seen f0
+
+    f1 <- recvFrameFromSession decoy_session
+    seen2 <- frameIsGoAwayBecauseInternalError decoy_session seen1 f1
+
+    f2 <- recvFrameFromSession decoy_session
+    seen3 <- frameIsGoAwayBecauseInternalError decoy_session seen2 f2
+
+    f3 <- recvFrameFromSession decoy_session
+    seen4 <- frameIsGoAwayBecauseInternalError decoy_session seen3 f3
+
+    if not seen4 then do 
+        assertFailure "Didn't see GoAwayFrame"
+    else 
+        return ()
+
+
+frameIsGoAwayBecauseInternalError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool 
+frameIsGoAwayBecauseInternalError decoy_session prev maybe_frame = do 
+    case prev of 
+        True -> return True 
+        False -> 
+            case maybe_frame of 
+                Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do 
+                    case ec of 
+                        NH2.InternalError   -> return True
                         _                   -> return False
 
                 _ ->

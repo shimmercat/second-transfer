@@ -143,9 +143,10 @@ type WorkerMonad = ReaderT WorkerThreadEnvironment IO
 -- Have to figure out which are these...but I would expect to have things
 -- like unexpected aborts here in this type.
 data SessionInputCommand = 
-    FirstFrame_SIC InputFrame -- This frame is special
-    |MiddleFrame_SIC InputFrame -- Ordinary frame
-    |CancelSession_SIC
+    FirstFrame_SIC InputFrame       -- This frame is special
+    |MiddleFrame_SIC InputFrame     -- Ordinary frame
+    |InternalAbort_SIC              -- Internal abort from the session itself
+    |CancelSession_SIC              -- Cancel request from the framer
   deriving Show 
 
 
@@ -367,7 +368,9 @@ sessionInputThread  = do
 
         CancelSession_SIC -> do 
             -- Good place to tear down worker threads... Let the rest of the finalization
-            -- to the framer
+            -- to the framer.
+            --
+            -- This message is normally got from the Framer
             liftIO $ do 
                 H.mapM_
                     (\ (_, thread_id) -> do
@@ -377,6 +380,12 @@ sessionInputThread  = do
                     stream2workerthread
 
             -- We do not continue here, but instead let it finish
+            return ()
+
+        InternalAbort_SIC -> do 
+            -- Message triggered because the worker failed to behave. 
+            -- When this is sent, the connection is closed 
+            closeConnectionBecauseIsInvalid NH2.InternalError 
             return ()
 
         -- The block below will process both HEADERS and CONTINUATION frames. 
@@ -467,10 +476,25 @@ sessionInputThread  = do
                 -- even if the method doesn't allow for data.
 
                 -- I'm clear to start the worker, in its own thread
+                -- 
+                -- NOTE: Some late internal errors from the worker thread are 
+                --       handled here by clossing the session.
+                --
+                -- TODO: Log exceptions handled here.
                 liftIO $ do 
-                    thread_id <- forkIO $ runReaderT 
-                        (workerThread (header_list_after, post_data_source) coherent_worker)
-                        for_worker_thread 
+                    thread_id <- forkIO $ E.catch 
+                        (runReaderT 
+                            (workerThread (header_list_after, post_data_source) coherent_worker)
+                            for_worker_thread 
+                        )
+                        ( 
+                            (   \ _ ->  do 
+                                -- Actions to take when the thread breaks....
+                                writeChan session_input InternalAbort_SIC
+                            ) 
+                            :: HTTP500PrecursorException -> IO () 
+                        )
+
                     H.insert stream2workerthread stream_id thread_id
 
                 return ()
@@ -839,6 +863,8 @@ workerThread req coherent_worker =
         -- liftIO ( data_and_conclussion $$ (_sendDataOfStream stream_id) )
         -- 
         -- This threadlet should block here waiting for the headers to finish going
+        -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException 
+        -- are let to bubble and managed in this thread fork point...
         (_maybe_footers, _) <- runConduit $
             (transPipe liftIO data_and_conclussion) 
             `fuseBothMaybe` 
