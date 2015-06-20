@@ -9,6 +9,7 @@ module SecondTransfer.Exception (
     ,BadPrefaceException (..)
     ,HTTP11Exception (..)
     ,HTTP11SyntaxException (..)
+    ,HTTP500PrecursorException (..)
     ,ContentLengthMissingException (..)
 
     -- * Exceptions related to the IO layer
@@ -72,7 +73,6 @@ getFramerExceptionFromException x = do
     cast a
 
 
-
 -- | Thrown when the HTTP/2 connection prefix doesn't 
 --   match the expected prefix.
 data BadPrefaceException = BadPrefaceException
@@ -85,7 +85,7 @@ instance Exception BadPrefaceException where
 
 -- | Abstract exception. All HTTP/1.1 related exceptions derive from here.
 --   Notice that this includes a lot of logical errors and they can be
---   raised when handling HTTP/2 sessions also
+--   raised when handling HTTP/2 sessions as well
 data HTTP11Exception = forall e . Exception e => HTTP11Exception e
     deriving Typeable
 
@@ -102,9 +102,30 @@ getHTTP11ExceptionFromException x = do
     HTTP2SessionException a <- fromException x
     cast a
 
+-- | Abstract exception. It is an error if an exception of this type bubbles
+--   to this library, but we will do our best to handle it gracefully. 
+--   All internal error precursors at the workers can thus inherit from here
+--   to have a fallback option in case they forget to handle the error.
+--   This exception inherits from HTTP11Exception
+data HTTP500PrecursorException = forall e . Exception e => HTTP500PrecursorException e
+    deriving Typeable
+
+instance Show HTTP500PrecursorException where 
+    show (HTTP500PrecursorException e) = show e
+
+instance Exception HTTP500PrecursorException 
+
+convertHTTP500PrecursorExceptionToException :: Exception e => e -> SomeException
+convertHTTP500PrecursorExceptionToException = toException . HTTP500PrecursorException
+
+getHTTP500PrecursorExceptionFromException :: Exception e => SomeException -> Maybe e
+getHTTP500PrecursorExceptionFromException x = do
+    HTTP11Exception a <- fromException x
+    cast a
+
 -- | Thrown with HTTP/1.1 over HTTP/1.1 sessions when the response body
 --   or the request body doesn't include a Content-Length header field,
---   even if it should have included it 
+--   given that should have included it 
 data ContentLengthMissingException = ContentLengthMissingException 
     deriving (Typeable, Show)
 
