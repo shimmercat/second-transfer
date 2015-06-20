@@ -20,6 +20,7 @@ module SecondTransfer.Utils.HTTPHeaders (
     --   doing a set of operations on that representation.
     --
     ,HeaderEditor
+    ,Headers
     -- ** Introducing and removing the `HeaderEditor`
     ,fromList 
     ,toList 
