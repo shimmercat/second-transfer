@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Tests.HTTP2Session where 
 
+import           Data.Typeable
 
 import           Test.HUnit
 import qualified Network.HTTP2                    as NH2
@@ -8,12 +9,14 @@ import           Control.Concurrent               (threadDelay)
 import qualified Control.Concurrent               as C(yield)
 import           Control.Concurrent.MVar
 import           Control.Lens
+import           Control.Exception
 
 import           SecondTransfer.Http2             (http2Attendant)
 import           SecondTransfer.Sessions
 import           SecondTransfer.Test.DecoySession
 import           SecondTransfer.Types
-
+import           SecondTransfer.Exception
+import           SecondTransfer.Utils.HTTPHeaders (fetchHeader)
 
 
 
@@ -35,6 +38,16 @@ simpleWorker request = return (
     [], -- No pushed streams
     saysHello
     )
+
+data Internal500Exception = Internal500Exception
+    deriving (Typeable, Show)
+
+instance Exception Internal500Exception where 
+    toException = convertHTTP500PrecursorExceptionToException
+    fromException = getHTTP500PrecursorExceptionFromException
+
+throwingWorker :: CoherentWorker
+throwingWorker _ = throwIO Internal500Exception
 
 
 setError :: MVar Bool -> ErrorCallback
@@ -143,16 +156,10 @@ testFirstFrameMustBeSettings3 = TestCase $ do
     let d2 = ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
           (NH2.PingFrame "01234567") )
 
-    -- Receive a frame from the session, otherwise it won't even move
-
     -- Send a ping frame now, so that we get an error
     sendFrameToSession 
         decoy_session 
         d2
-
-    -- sendFrameToSession 
-    --     decoy_session 
-    --     d2
 
     -- We need to give some time to the framework to react to problems
     threadDelay 20000
@@ -162,4 +169,61 @@ testFirstFrameMustBeSettings3 = TestCase $ do
     if not got_error then do 
         assertFailure "Exception didn't raise properly"
     else
-        return ()        
+        return ()
+
+
+testIGet500Status :: Test 
+testIGet500Status = TestCase $ do 
+    errors_mvar <- newMVar False 
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let 
+        attendant = http2Attendant sessions_context throwingWorker
+    decoy_session <- createDecoySession attendant
+
+    -- Send the prologue
+    sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
+    -- Send a settings frame now, otherwise the session will bark....
+    sendFrameToSession 
+        decoy_session 
+        ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
+          (NH2.SettingsFrame []) )
+
+    -- Now perform a simple, mocking request
+    performRequestSimple decoy_session 1 [
+        (":method", "get"),
+        (":scheme", "https"),
+        (":authority", "www.example.com"),
+        (":path", "/hi")
+        ]
+
+    -- Now we read a few frames
+    seen <- return False 
+    f0 <- recvFrameFromSession decoy_session 
+    seen1 <- frameIsStatus500 decoy_session seen f0
+
+    f1 <- recvFrameFromSession decoy_session
+    seen2 <- frameIsStatus500 decoy_session seen f1
+
+    f2 <- recvFrameFromSession decoy_session
+    seen3 <- frameIsStatus500 decoy_session seen f2
+
+    return ()
+
+
+frameIsStatus500 :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool 
+frameIsStatus500 decoy_session prev maybe_frame = 
+    case prev of 
+        True -> return True 
+        False -> 
+            case maybe_frame of 
+                Just (NH2.Frame _  (NH2.HeadersFrame _ bs ) ) -> do 
+                    headers <- decodeHeadersForSession decoy_session bs
+                    let 
+                        maybe_status = fetchHeader headers ":status"
+                    case maybe_status of 
+                        Just x | x == "500" -> return True 
+                        _                   -> return False
+
+                _ ->
+                    return False

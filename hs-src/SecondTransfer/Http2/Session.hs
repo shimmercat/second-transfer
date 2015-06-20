@@ -36,6 +36,7 @@ import qualified Control.Exception                      as E
 import           Control.Monad                          (forever)
 import           Control.Monad.IO.Class                 (liftIO)
 import           Control.Monad.Trans.Reader
+-- import           Control.Monad.Catch                    (throwM)
 
 import           Control.Concurrent.MVar
 import qualified Data.ByteString                        as B
@@ -786,6 +787,20 @@ isStreamCancelled stream_id = do
     return $ NS.member stream_id cancelled_streams
 
 
+sendPrimitive500Error :: IO PrincipalStream
+sendPrimitive500Error = 
+  return (
+        [
+            (":status", "500")
+        ],
+        [],
+        do 
+            yield "Internal server error\n"
+            -- No footers
+            return []
+    )
+
+
 
 workerThread :: Request -> CoherentWorker -> WorkerMonad ()
 workerThread req coherent_worker =
@@ -797,14 +812,24 @@ workerThread req coherent_worker =
     --       throws an exception signaling that the request is ill-formed
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
-    (headers, _, data_and_conclussion) <- liftIO $ coherent_worker req
+    (headers, _, data_and_conclussion) <- 
+        liftIO $ E.catch 
+            ( do 
+                (h, x, d) <- coherent_worker req 
+                return $! (h,x,d)
+            )
+            ( 
+                (\ _ -> sendPrimitive500Error ) 
+                :: HTTP500PrecursorException -> IO (Headers, PushedStreams, DataAndConclusion) 
+            )
 
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO $ newEmptyMVar
     liftIO $ writeChan headers_output (stream_id, headers_sent, headers)
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
-    -- commiting to the work of sending addtitional data
+    -- commiting to the work of sending addtitional data... this is important for pushed 
+    -- streams
     is_stream_cancelled <- isStreamCancelled stream_id
     if not is_stream_cancelled
 

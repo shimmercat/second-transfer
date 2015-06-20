@@ -12,6 +12,7 @@ import           Control.Lens            (view, (^.))
 import qualified Control.Lens            as L
 
 import qualified Network.HTTP2           as NH2
+import qualified Network.HPACK           as HP
 
 import qualified Data.ByteString         as B 
 import qualified Data.ByteString.Lazy    as LB
@@ -29,6 +30,8 @@ data DecoySession = DecoySession {
     ,_nh2Settings       :: NH2.Settings
     ,_sessionThrowed    :: MVar Bool
     ,_waiting           :: MVar ThreadId 
+    ,_encodeHeadersHere :: MVar HP.DynamicTable
+    ,_decodeHeadersHere :: MVar HP.DynamicTable
     }
 
 
@@ -49,6 +52,10 @@ createDecoySession attendant = do
         close_action = do
             return ()
 
+    dtable_for_encoding <- HP.newDynamicTableForEncoding 4096
+    dtable_for_encoding_mvar <- newMVar dtable_for_encoding
+    dtable_for_decoding <- HP.newDynamicTableForDecoding 4096
+    dtable_for_decoding_mvar <- newMVar dtable_for_decoding
 
     waiting_mvar <- newEmptyMVar
         
@@ -71,8 +78,9 @@ createDecoySession attendant = do
         _sessionThread     = thread_id,
         _remainingOutputBit= remaining_output_bit,
         _nh2Settings       = NH2.defaultSettings,
-        _waiting           = waiting_mvar
-
+        _waiting           = waiting_mvar,
+        _encodeHeadersHere = dtable_for_encoding_mvar,
+        _decodeHeadersHere = dtable_for_decoding_mvar
         }
     return session
 
@@ -116,6 +124,30 @@ recvFrameFromSession decoy_session = do
         Right  frame  -> return $ Just frame
 
 
+-- Encode headers to send to the session 
+-- TODO: There is an important bug here... we are using the default encoding
+-- strategy everywhere
+encodeHeadersForSession :: DecoySession -> Headers -> IO B.ByteString
+encodeHeadersForSession decoy_session headers = 
+  do 
+    let 
+        mv = (decoy_session ^. encodeHeadersHere )
+    dtable <- takeMVar mv
+    (dtable', bs ) <- HP.encodeHeader HP.defaultEncodeStrategy dtable headers 
+    putMVar mv dtable'
+    return bs
+
+-- Decode headers to receive them from the session 
+decodeHeadersForSession :: DecoySession -> B.ByteString -> IO Headers 
+decodeHeadersForSession decoy_session bs = 
+  do 
+    let 
+        mv = (decoy_session ^. decodeHeadersHere )
+    dtable <- takeMVar mv 
+    (dtable', headers) <- HP.decodeHeader dtable bs
+    putMVar mv dtable'
+    return headers
+
 -- Send raw data to a session 
 sendRawDataToSession :: DecoySession -> B.ByteString -> IO ()
 sendRawDataToSession decoy_session data_to_send = do
@@ -128,6 +160,23 @@ sendRawDataToSession decoy_session data_to_send = do
     writeChan input_data_channel data_to_send
     takeMVar waiting_for_write
     return ()
+
+
+-- Send a headers frame to the session that ends the stream...
+performRequestSimple :: DecoySession -> Int -> Headers -> IO ()
+performRequestSimple decoy_session stream_id headers = do 
+    headers_data <- encodeHeadersForSession decoy_session headers 
+    let 
+        frame = NH2.HeadersFrame 
+            Nothing  -- No priority
+            headers_data 
+        frame_data_ei = NH2.EncodeInfo {
+            NH2.encodeFlags = NH2.setEndStream . NH2.setEndHeader $ NH2.defaultFlags,
+            NH2.encodeStreamId = NH2.toStreamIdentifier stream_id,
+            NH2.encodePadding = Nothing
+            }
+    
+    sendFrameToSession decoy_session (frame_data_ei,frame)
 
 
 -- Read raw data from a session. Normally blocks until data be available.

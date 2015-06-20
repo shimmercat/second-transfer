@@ -10,12 +10,15 @@ module SecondTransfer.Exception (
     ,HTTP11Exception (..)
     ,HTTP11SyntaxException (..)
     ,HTTP500PrecursorException (..)
+    ,convertHTTP500PrecursorExceptionToException
+    ,getHTTP500PrecursorExceptionFromException
     ,ContentLengthMissingException (..)
 
     -- * Exceptions related to the IO layer
     ,IOProblem(..)
     ,GenericIOProblem(..)
     ,StreamCancelledException(..)
+
 
     -- * Internal exceptions
     ,HTTP2ProtocolException(..)
@@ -92,14 +95,14 @@ data HTTP11Exception = forall e . Exception e => HTTP11Exception e
 instance Show HTTP11Exception where
     show (HTTP11Exception e) = show e
 
-instance  Exception HTTP11Exception 
+instance Exception HTTP11Exception
 
 convertHTTP11ExceptionToException :: Exception e => e -> SomeException
 convertHTTP11ExceptionToException = toException . HTTP11Exception
 
 getHTTP11ExceptionFromException :: Exception e => SomeException -> Maybe e
 getHTTP11ExceptionFromException x = do
-    HTTP2SessionException a <- fromException x
+    HTTP11Exception a <- fromException x
     cast a
 
 -- | Abstract exception. It is an error if an exception of this type bubbles
@@ -113,15 +116,22 @@ data HTTP500PrecursorException = forall e . Exception e => HTTP500PrecursorExcep
 instance Show HTTP500PrecursorException where 
     show (HTTP500PrecursorException e) = show e
 
-instance Exception HTTP500PrecursorException 
-
+-- | Use the traditional idiom if you need to derive from 'HTTP500PrecursorException',
+--   this is one of the helpers
 convertHTTP500PrecursorExceptionToException :: Exception e => e -> SomeException
 convertHTTP500PrecursorExceptionToException = toException . HTTP500PrecursorException
 
+-- | Use the traditional idiom if you need to derive from 'HTTP500PrecursorException',
+--   this is one of the helpers
 getHTTP500PrecursorExceptionFromException :: Exception e => SomeException -> Maybe e
 getHTTP500PrecursorExceptionFromException x = do
-    HTTP11Exception a <- fromException x
+    HTTP500PrecursorException a <- fromException x
     cast a
+
+-- Here we say how we go with these exceptions.... 
+instance Exception HTTP500PrecursorException where
+    toException = convertHTTP11ExceptionToException
+    fromException = getHTTP11ExceptionFromException
 
 -- | Thrown with HTTP/1.1 over HTTP/1.1 sessions when the response body
 --   or the request body doesn't include a Content-Length header field,
@@ -132,7 +142,6 @@ data ContentLengthMissingException = ContentLengthMissingException
 instance Exception ContentLengthMissingException where 
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
-
 
 data HTTP11SyntaxException = HTTP11SyntaxException String 
     deriving (Typeable, Show)
@@ -145,7 +154,6 @@ instance Exception HTTP11SyntaxException where
 --   to have the HTTP/2 session to terminate gracefully. 
 data IOProblem = forall e . Exception e => IOProblem e 
     deriving Typeable
-
 
 instance  Show IOProblem where
     show (IOProblem e) = show e 

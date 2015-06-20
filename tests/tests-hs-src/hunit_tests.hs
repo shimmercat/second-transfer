@@ -23,7 +23,8 @@ tests = TestList [
     TestLabel "testReplaceHostByAuthority" testReplaceHostByAuthority,
     TestLabel "testFirstFrameIsSettings" testFirstFrameMustBeSettings,
     TestLabel "testFirstFrameIsSettings2" testFirstFrameMustBeSettings2,
-    TestLabel "testFirstFrameIsSettings3" testFirstFrameMustBeSettings3
+    TestLabel "testFirstFrameIsSettings3" testFirstFrameMustBeSettings3,
+    TestLabel "testIGet500Status" testIGet500Status
     ]
 
 
