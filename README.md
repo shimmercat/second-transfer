@@ -62,3 +62,10 @@ Pending:
 - Epoll I/O management
 
 - Benchmarking.
+
+Internal
+--------
+
+Uploading documentation (provided you have access to the package):
+
+    $ ./hackage-upload-docs.sh second-transfer 0.5.4.0 <hackage-user> <hackage-password>
