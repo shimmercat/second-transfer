@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.5.3.2
+version     :              0.5.4.0
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -53,7 +53,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.5.3.2
+  tag:      0.5.4.0
 
 library
 
@@ -183,5 +183,6 @@ Test-Suite hunit-tests
                     ,HUnit >= 1.2 && < 1.5
                     ,bytestring >= 0.10.4.0
                     ,http2 == 0.9.1
+                    ,transformers >= 0.3
   ghc-options     : -threaded
   other-modules   : SecondTransfer.Test.DecoySession
