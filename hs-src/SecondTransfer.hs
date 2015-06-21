@@ -152,17 +152,20 @@ module SecondTransfer(
     ,Attendant
     ,http11Attendant
     ,http2Attendant
+
+#ifndef DISABLE_OPENSSL_TLS
     -- * High level OpenSSL functions. 
     -- 
     -- | Use these functions to create your TLS-compliant 
     --   HTTP/2 server in a snap.
     ,tlsServeWithALPN
     ,tlsServeWithALPNAndFinishOnRequest
-    ,dropIncomingData
 
     ,TLSLayerGenericProblem(..)
     ,FinishRequest(..)
+#endif -- DISABLE_OPENSSL_TLS
 
+    ,dropIncomingData
     -- * Logging 
     --
     -- | The library uses hslogger for its logging. Since logging is 
