@@ -197,24 +197,20 @@ http2FrameLength bs
 addCapacity ::
         GlobalStreamId ->
         Int           ->
-        FramerSession ()
+        FramerSession Bool
+addCapacity 0         delta_cap =
+    -- TODO: Implement session flow control
+    return True
 addCapacity stream_id delta_cap =
-    unless (stream_id == 0) $ do
+    do
         table <- view stream2flow
         val <- liftIO $ H.lookup table stream_id
         case val of
-            Nothing -> do
-                -- TODO: There is a very important compliance note here. Fix this, otherwise
-                -- a peer can create a memory overflow by sending WindowUpdate on unexistent
-                -- streams.
-                liftIO $ putStrLn $ "Tried to update window of unexistent stream (creating): " ++ show stream_id
-                (_, command_chan) <- startStreamOutputQueue stream_id
-                -- And try again
-                liftIO $ writeChan command_chan $ AddBytes_FCM delta_cap
+            Nothing -> return False
 
-
-            Just command_chan ->
+            Just command_chan -> do
                 liftIO $ writeChan command_chan $ AddBytes_FCM delta_cap
+                return True
 
 
 -- This works by pulling bytes from the input side of the pipeline and converting them to frames.
@@ -251,6 +247,15 @@ inputGatherer pull_action session_input = do
         else
           sendMiddleFrameToSession session_input frame
 
+    abortSession :: Sink B.ByteString FramerSession ()
+    abortSession =
+      lift $ do
+        sendGoAwayFrame NH2.ProtocolError
+        -- Inform the session that it can tear down itself
+        liftIO $ sendCommandToSession session_input CancelSession_SIC
+        -- Any resources remaining here can be disposed
+        releaseFramer
+
     consume_continue = consume False
 
     consume :: Bool -> Sink B.ByteString FramerSession ()
@@ -273,12 +278,7 @@ inputGatherer pull_action session_input = do
                         -- to the session.
                         INSTRUMENTATION( errorM "HTTP2.Framer" "CouldNotDecodeFrame" )
                         -- Send frames like GoAway and such...
-                        lift $ sendGoAwayFrame NH2.ProtocolError
-                        -- Inform the session that it can tear down itself
-                        liftIO $ sendCommandToSession session_input CancelSession_SIC
-                        -- Any resources remaining here can be disposed
-                        lift  releaseFramer
-                        -- And end this thread
+                        abortSession
 
                     Right right_frame -> do
                         case right_frame of
@@ -286,8 +286,8 @@ inputGatherer pull_action session_input = do
                             (NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do
                                 -- Bookkeep the increase on bytes on that stream
                                 -- liftIO $ putStrLn $ "Extra capacity for stream " ++ (show stream_id)
-                                lift $ addCapacity (NH2.fromStreamIdentifier stream_id) (fromIntegral credit)
-                                return ()
+                                succeeded <- lift $ addCapacity (NH2.fromStreamIdentifier stream_id) (fromIntegral credit)
+                                unless succeeded abortSession
 
 
                             frame@(NH2.Frame _ (NH2.SettingsFrame settings_list) ) -> do

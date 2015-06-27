@@ -59,7 +59,7 @@ throwingWorker2 _req = return (
             (":status", "200")
         ],
         [], -- No pushed streams
-        do 
+        do
             yield "Error coming down"
             liftIO $ throwIO Internal500Exception
             return []
@@ -67,28 +67,26 @@ throwingWorker2 _req = return (
 
 
 setError :: MVar Bool -> ErrorCallback
-setError mvar = \ error_info -> do 
-    -- putStrLn $ show error_info
-    modifyMVar_ mvar (\ _ -> return True )
+setError mvar = const $ modifyMVar_ mvar (const $ return True )
 
 
 errorsSessionConfig :: MVar Bool -> SessionsConfig
-errorsSessionConfig mvar = set (sessionsCallbacks . reportErrorCallback) 
+errorsSessionConfig mvar = set (sessionsCallbacks . reportErrorCallback)
     (Just $ setError mvar) defaultSessionsConfig
 
 
 testPrefaceChecks :: Test
-testPrefaceChecks = TestCase $ do 
+testPrefaceChecks = TestCase $ do
     errors_mvar <- newMVar False
     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
-    let 
+    let
         attendant = http2Attendant sessions_context simpleWorker
     decoy_session <- createDecoySession attendant
     -- This should work
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
     threadDelay 1000000
     got_error <- readMVar errors_mvar
-    if got_error then do 
+    if got_error then 
         assertFailure "Exception raised"
     else
         return ()
@@ -306,3 +304,75 @@ frameIsGoAwayBecauseInternalError decoy_session prev maybe_frame = do
 
                 _ ->
                     return False
+
+
+frameIsGoAwayBecauseProtocolError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool 
+frameIsGoAwayBecauseProtocolError decoy_session prev maybe_frame = do 
+    case prev of 
+        True -> return True 
+        False -> 
+            case maybe_frame of 
+                Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do 
+                    case ec of 
+                        NH2.ProtocolError   -> return True
+                        _                   -> return False
+
+                _ ->
+                    return False
+
+
+testUpdateWindowFrameAborts :: Test
+testUpdateWindowFrameAborts = TestCase $ do
+    errors_mvar <- newMVar False
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let
+        attendant = http2Attendant sessions_context simpleWorker
+    decoy_session <- createDecoySession attendant
+    sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+    maybe_frame <- recvFrameFromSession decoy_session
+    case maybe_frame of
+        Nothing ->
+            assertFailure "Waiting a frame, received none"
+        Just (NH2.Frame _ (NH2.SettingsFrame _)) -> -- Ok
+            return ()
+
+        _ ->
+            assertFailure "Waiting a settings frame, received something else"
+
+    -- Send a settings frame now
+    sendFrameToSession
+        decoy_session
+        ( NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing,
+          NH2.SettingsFrame [] )
+
+    -- And now send a WindowUpdate frame
+    sendFrameToSession
+        decoy_session
+        (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 51) Nothing,
+         NH2.WindowUpdateFrame 10 )
+
+    -- Now we read a few frames
+    seen <- return False 
+    f0 <- recvFrameFromSession decoy_session 
+    seen1 <- frameIsGoAwayBecauseProtocolError decoy_session seen f0
+
+    f1 <- recvFrameFromSession decoy_session
+    seen2 <- frameIsGoAwayBecauseInternalError decoy_session seen1 f1
+
+    -- f2 <- recvFrameFromSession decoy_session
+    -- seen3 <- frameIsGoAwayBecauseProtocolError decoy_session seen2 f2
+
+    -- f3 <- recvFrameFromSession decoy_session
+    -- seen4 <- frameIsGoAwayBecauseProtocolError decoy_session seen3 f3
+
+    if not seen2 then do 
+        assertFailure "Didn't see GoAwayFrame"
+    else
+        return ()
+
+    -- Check session is alive
+    got_error <- readMVar errors_mvar
+    if got_error then do 
+        assertFailure "Exception raised unexpectedly"
+    else
+        return ()

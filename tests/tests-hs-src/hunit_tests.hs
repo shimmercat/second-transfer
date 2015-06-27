@@ -25,7 +25,8 @@ tests = TestList [
     TestLabel "testFirstFrameIsSettings2" testFirstFrameMustBeSettings2,
     TestLabel "testFirstFrameIsSettings3" testFirstFrameMustBeSettings3,
     TestLabel "testIGet500Status" testIGet500Status,
-    TestLabel "testSessionBreaksOnLateError" testSessionBreaksOnLateError
+    TestLabel "testSessionBreaksOnLateError" testSessionBreaksOnLateError,
+    TestLabel "WindowUpdate to unexistent stream" testUpdateWindowFrameAborts
     ]
 
 
