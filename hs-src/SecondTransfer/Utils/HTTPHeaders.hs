@@ -45,11 +45,13 @@ import           Data.Text.Encoding                     (decodeUtf8, encodeUtf8)
 import qualified Data.Map.Strict                        as Ms
 import           Data.Word                              (Word8)
 
+
 import           Data.Time.Format                       (formatTime, defaultTimeLocale)
 import           Data.Time.Clock                        (getCurrentTime)
 
 #ifndef IMPLICIT_MONOID
 import           Control.Applicative                    ((<$>))
+import           Data.Monoid
 #endif
 
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
@@ -111,6 +113,10 @@ instance Ord Autosorted where
 -- The underlying representation admits better asymptotics.
 newtype HeaderEditor = HeaderEditor { innerMap :: Ms.Map Autosorted B.ByteString }
 
+-- This is a pretty uninteresting instance
+instance Monoid HeaderEditor where 
+    mempty = HeaderEditor mempty
+    mappend (HeaderEditor x) (HeaderEditor y) = HeaderEditor (x `mappend` y)
 
 -- | /O(n*log n)/ Builds the editor from a list. 
 fromList :: Headers -> HeaderEditor 
