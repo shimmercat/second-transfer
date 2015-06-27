@@ -247,11 +247,13 @@ inputGatherer pull_action session_input = do
   where 
 
     sendToSession :: Bool -> InputFrame -> IO ()
-    sendToSession starting frame = if starting 
-      then do
-        sendFirstFrameToSession session_input frame 
-      else do
-        sendMiddleFrameToSession session_input frame
+    sendToSession starting frame = 
+      -- print(NH2.streamId $ NH2.frameHeader frame)
+      if starting
+        then
+          sendFirstFrameToSession session_input frame 
+        else
+          sendMiddleFrameToSession session_input frame
 
     consume_continue = consume False
 
@@ -324,8 +326,9 @@ inputGatherer pull_action session_input = do
 
 
                             a_frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) _ )   -> do 
-                                -- Update the keep of last stream 
-                                lift $ updateLastStream $ NH2.fromStreamIdentifier stream_id
+                                -- Update the keep of last stream
+                                lift . startStreamOutputQueueIfNotExists $ NH2.fromStreamIdentifier stream_id
+                                lift . updateLastStream $ NH2.fromStreamIdentifier stream_id
 
                                 -- Send frame to the session
                                 liftIO $ sendToSession starting a_frame
@@ -404,6 +407,18 @@ updateLastStream stream_id = do
     last_stream_id_mvar <- view lastStream
     liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
 
+
+startStreamOutputQueueIfNotExists :: GlobalStreamId -> FramerSession ()
+startStreamOutputQueueIfNotExists stream_id = do
+    table <- view stream2flow
+    val <- liftIO $ H.lookup table stream_id
+    case val of
+        Nothing | stream_id /= 0 -> do
+            startStreamOutputQueue stream_id
+            return ()
+
+        _ ->
+            return ()
 
 
 startStreamOutputQueue :: Int -> FramerSession (Chan LB.ByteString, Chan FlowControlCommand)
