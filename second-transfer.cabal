@@ -1,13 +1,13 @@
 
 name        :              second-transfer
 
--- The package version.  See the Haskell package versioning policy (PVP) 
+-- The package version.  See the Haskell package versioning policy (PVP)
 -- for standards guiding when and how versions should be incremented.
 -- http://www.haskell.org/haskellwiki/Package_versioning_policy
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.5.4.0
+version     :              0.5.5.0
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -23,7 +23,7 @@ author      :              Alcides Viamontes Esquivel
 
 maintainer  :              alcidesv@zunzun.se
 
-copyright   :              Copyright 2015, Alcides Viamontes Esquivel  
+copyright   :              Copyright 2015, Alcides Viamontes Esquivel
 
 category    :              Network
 
@@ -33,7 +33,7 @@ bug-reports :              https://github.com/alcidesv/second-transfer/issues
 
 build-type  :              Simple
 
--- Extra files to be distributed with the package-- such as examples or a 
+-- Extra files to be distributed with the package-- such as examples or a
 -- README.
 extra-source-files:  README.md changelog.md
 
@@ -42,8 +42,8 @@ cabal-version:       >=1.10
 
 extra-source-files: macros/Logging.cpphs
 
-Flag debug 
-  Description: Enable debug support 
+Flag debug
+  Description: Enable debug support
   Default:     False
 
 source-repository head
@@ -53,7 +53,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.5.4.0
+  tag:      0.5.5.0
 
 library
 
@@ -65,8 +65,8 @@ library
                   , SecondTransfer.Types
                   , SecondTransfer.Utils.HTTPHeaders
                   , SecondTransfer.Utils.DevNull
-                  -- These are really internal modules, but  are exposed 
-                  -- here for the sake of the test suite. They are hidden 
+                  -- These are really internal modules, but  are exposed
+                  -- here for the sake of the test suite. They are hidden
                   -- from the documentation.
                   , SecondTransfer.MainLoop.Internal
                   , SecondTransfer.Sessions
@@ -77,8 +77,8 @@ library
                 , SecondTransfer.MainLoop.PushPullType
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
-                , SecondTransfer.MainLoop.Logging   
-                , SecondTransfer.Sessions.Internal             
+                , SecondTransfer.MainLoop.Logging
+                , SecondTransfer.Sessions.Internal
 
                 , SecondTransfer.MainLoop.OpenSSL_TLS
                 , SecondTransfer.Utils
@@ -105,8 +105,8 @@ library
     CPP-Options: -DIMPLICIT_MONOID -DIMPLICIT_APPLICATIVE_FOLDABLE
 
   -- LANGUAGE extensions used by modules in this package.
-  -- other-extensions:    
-  
+  -- other-extensions:
+
   -- Other library packages from which modules are imported.
   build-depends: base >= 4.7 && <= 4.9,
                  exceptions >= 0.8 && < 0.9,
@@ -126,16 +126,16 @@ library
                  hashable >= 1.2,
                  attoparsec >= 0.12,
                  time >= 1.5.0 && < 1.8
-  
+
   -- Directories containing source files.
   hs-source-dirs: hs-src
-  
+
   -- Base language which the package is written in.
   default-language: Haskell2010
 
-  -- Very specific directory with the version of openssl 
-  -- that I'm using. As of February 2015-- this one is not 
-  -- commonly installed 
+  -- Very specific directory with the version of openssl
+  -- that I'm using. As of February 2015-- this one is not
+  -- commonly installed
   include-dirs: /opt/openssl-1.0.2/include
 
   c-sources: cbits/tlsinc.c
@@ -149,7 +149,7 @@ library
 
   -- ghc-options: -O2 -cpp  -pgmPcpphs  -optP--cpp
   ghc-options: -pgmPcpphs  -optP--cpp
- 
+
   extra-libraries: ssl crypto
 
   -- NOTICE: Please fill-in with an-up-to date library path here
@@ -176,7 +176,7 @@ Test-Suite hunit-tests
   main-is            : hunit_tests.hs
   hs-source-dirs     : tests/tests-hs-src, hs-src/
   default-language   : Haskell2010
-  build-depends      : base >=4.7 && <= 4.9 
+  build-depends      : base >=4.7 && <= 4.9
                        ,conduit >= 1.2.4
                        ,lens  >= 4.7
                        ,HUnit >= 1.2 && < 1.5
@@ -197,7 +197,7 @@ Test-Suite hunit-tests
                        ,time >= 1.5.0 && < 1.8
   build-tools        : cpphs
   default-extensions : CPP
-  include-dirs       : macros/                    
+  include-dirs       : macros/
   CPP-Options        : -DDISABLE_OPENSSL_TLS
   ghc-options        : -threaded -pgmPcpphs  -optP--cpp
   other-modules      :  SecondTransfer.Test.DecoySession
@@ -217,8 +217,8 @@ Test-Suite hunit-tests
                        , SecondTransfer.MainLoop.PushPullType
                        , SecondTransfer.MainLoop.Tokens
                        , SecondTransfer.MainLoop.Framer
-                       , SecondTransfer.MainLoop.Logging   
-                       , SecondTransfer.Sessions.Internal             
+                       , SecondTransfer.MainLoop.Logging
+                       , SecondTransfer.Sessions.Internal
                        , SecondTransfer.Utils
                        , SecondTransfer.Http2.Framer
                        , SecondTransfer.Http2.MakeAttendant
