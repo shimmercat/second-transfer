@@ -125,6 +125,7 @@ library
                  hslogger >= 1.2.6,
                  hashable >= 1.2,
                  attoparsec >= 0.12,
+                 clock >= 0.4,
                  time >= 1.5.0 && < 1.8
 
   -- Directories containing source files.

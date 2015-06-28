@@ -40,6 +40,7 @@ import           Control.Monad.Trans.Reader
 
 import           Control.Concurrent.MVar
 import qualified Data.ByteString                        as B
+import           Data.ByteString.Char8                  (pack,unpack)
 import qualified Data.ByteString.Builder                as Bu
 import qualified Data.ByteString.Lazy                   as Bl
 import           Data.Conduit
@@ -67,7 +68,7 @@ import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
-import           SecondTransfer.MainLoop.Logging        (logWithExclusivity)
+import           SecondTransfer.MainLoop.Logging        (logWithExclusivity, logit)
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to
 -- use :-(
@@ -430,6 +431,9 @@ sessionInputThread  = do
 
             if frameEndsHeaders frame then
               do
+                -- Mark this time DEBUG
+                liftIO $ logit $ "headers-received " `mappend` (pack . show $ stream_id )
+                -- /DEBUG
                 -- Ok, let it be known that we are not receiving more headers
                 liftIO $ modifyMVar_
                     receiving_headers_mvar

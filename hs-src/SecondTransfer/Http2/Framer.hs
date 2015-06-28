@@ -27,6 +27,7 @@ import           Control.Monad.Trans.Class              (lift)
 import           Control.Monad.Trans.Reader
 import           Data.Binary                            (decode)
 import qualified Data.ByteString                        as B
+import           Data.ByteString.Char8                  (pack)
 import qualified Data.ByteString.Lazy                   as LB
 import           Data.Conduit
 import           Data.Foldable                          (find)
@@ -45,7 +46,7 @@ import           SecondTransfer.MainLoop.PushPullType   (Attendant, CloseAction,
                                                          PullAction, PushAction)
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
-import           SecondTransfer.MainLoop.Logging        (logWithExclusivity)
+import           SecondTransfer.MainLoop.Logging        (logWithExclusivity, logit)
 
 #include "Logging.cpphs"
 
@@ -372,6 +373,7 @@ outputGatherer session_output = do
                 stream_bytes_chan <- case lookup_result of
 
                     Nothing ->  do
+                        -- Actually, this branch should never be taken!!
                         (bc, _) <- startStreamOutputQueue stream_id
                         return bc
 
@@ -381,6 +383,9 @@ outputGatherer session_output = do
                 loopPart
 
             Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
+                -- DEBUG
+                liftIO $ logit $ "headers-out " `mappend` (pack . show . NH2.fromStreamIdentifier . NH2.encodeStreamId $ p1 )
+                -- /DEBUG
                 handleHeadersOfStream p1 p2
                 loopPart
 
@@ -409,6 +414,9 @@ startStreamOutputQueueIfNotExists stream_id = do
     val <- liftIO $ H.lookup table stream_id
     case val of
         Nothing | stream_id /= 0 -> do
+            -- DEBUG
+            liftIO . logit $ "stream-starts " `mappend` (pack . show $ stream_id )
+            -- /DEBUG
             startStreamOutputQueue stream_id
             return ()
 

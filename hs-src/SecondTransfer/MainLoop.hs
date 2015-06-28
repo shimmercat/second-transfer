@@ -13,7 +13,8 @@ module SecondTransfer.MainLoop (
     ,
 #endif
 
-    enableConsoleLogging
+    enableConsoleLogging,
+    logit
 
 #ifndef DISABLE_OPENSSL_TLS
     ,TLSLayerGenericProblem(..)
@@ -28,4 +29,4 @@ module SecondTransfer.MainLoop (
 #ifndef DISABLE_OPENSSL_TLS
 import           SecondTransfer.MainLoop.OpenSSL_TLS
 #endif
-import           SecondTransfer.MainLoop.Logging         (enableConsoleLogging)
+import           SecondTransfer.MainLoop.Logging         (enableConsoleLogging,logit)
