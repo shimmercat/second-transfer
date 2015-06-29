@@ -44,10 +44,10 @@ typedef struct {
 // This is the public API of this server...
 // No arguments, all are wired here somewhere... for now
 connection_t* make_connection();
-// Call when you are done 
+// Call when you are done
 void close_connection(connection_t* conn);
 // Wait for the next one...
-#define ALL_OK  0 
+#define ALL_OK  0
 #define BAD_HAPPENED 1
 #define TIMEOUT_REACHED 3
 // This is also a failed IO with SSL, but this one may be quite
@@ -66,7 +66,7 @@ static int thread_setup(void);
 
 static int threads_are_up = 0;
 
-// Leaky implementation now 
+// Leaky implementation now
 void close_connection(connection_t* conn)
 {
     if (conn->socket)
@@ -123,7 +123,7 @@ static int tcpStart (char* hostname, int portno, int* errorh)
             handle = 0;
             *errorh = BAD_HAPPENED;
         }
-        else 
+        else
         {
             error = listen(handle, 5);
             if ( error != 0 )
@@ -253,7 +253,7 @@ DH *get_dh1024()
 static DH *tmp_dh_callback(SSL *s, int is_export, int keylength);
 
 
-// Setup dh params 
+// Setup dh params
 static void setup_dh_parms(SSL_CTX *sslContext)
 {
     /* Set up ephemeral DH stuff */
@@ -336,13 +336,13 @@ static int protocol_select (
         incursor += (1+sublen);
     }
 
-    // I think this is what should be returned 
+    // I think this is what should be returned
     return -1;
 }
 
 
 int lookup_protocol(
-        char* selected, int selected_len, 
+        char* selected, int selected_len,
         char* myprotocol_list, int mpl_len
         )
 {
@@ -376,7 +376,7 @@ int lookup_protocol(
         stored_cursor += (1+sublen2);
     }
 
-    // I think this is what should be returned 
+    // I think this is what should be returned
     return -1;
 }
 
@@ -414,7 +414,7 @@ static connection_t *sslStart (
     int result;
     connection_t *c;
 
-    // Ok, here it is in the open, for everybody 
+    // Ok, here it is in the open, for everybody
     // to see:
     signal(SIGPIPE, SIG_IGN);
 
@@ -422,7 +422,7 @@ static connection_t *sslStart (
     {
         threads_are_up = 1;
         thread_setup();
-    } 
+    }
 
     c = malloc (sizeof (connection_t));
     c->sslContext = NULL;
@@ -455,9 +455,9 @@ static connection_t *sslStart (
 
         // Now I set a few options....
         /*SSL_CTX_set_verify(c->sslContext, NULL );*/
-        const long flags = 
+        const long flags =
           SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
-        // const long flags = 
+        // const long flags =
         //     SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
         SSL_CTX_set_options(c->sslContext, flags);
         setup_dh_parms( c->sslContext );
@@ -468,7 +468,7 @@ static connection_t *sslStart (
 
 
         // The only cipher supported by HTTP/2 ... sort of.
-        result = SSL_CTX_set_cipher_list(c->sslContext, 
+        result = SSL_CTX_set_cipher_list(c->sslContext,
             "ECDHE-RSA-AES128-GCM-SHA256" //  --  ibidem
             ":ECDHE-RSA-AES256-GCM-SHA384"  // <-- Good for Chrome and firefox
              // ---- These suites will fail HTTP/2
@@ -497,7 +497,7 @@ static connection_t *sslStart (
         // Load a certificate in .pem format.
         SSL_CTX_use_certificate_chain_file(c->sslContext, certificate_filename);
         SSL_CTX_use_PrivateKey_file(c->sslContext,  privkey_filename, SSL_FILETYPE_PEM);
-        // Check the private key 
+        // Check the private key
         result = SSL_CTX_check_private_key(c->sslContext);
         if ( result != 1)
         {
@@ -525,19 +525,19 @@ connection_t* make_connection(char* certificate_filename, char* privkey_filename
 {
     const int len = strlen(hostname);
     if ( len > 0 && hostname[len-1] == '\n' )
-    { 
+    {
         printf("HELLO THERE. I found some weird characters\n");
         *( (int*) 0) = 42; // <-- This is the answer
     }
 
 
     return sslStart(
-            certificate_filename, privkey_filename, hostname, 
-            portno, my_protocol_list, protocol_list_length); 
+            certificate_filename, privkey_filename, hostname,
+            portno, my_protocol_list, protocol_list_length);
 }
 
 int wait_for_connection(
-        connection_t* c, 
+        connection_t* c,
         int microseconds,
         wired_session_t** wired_session)
 {
@@ -549,7 +549,7 @@ int wait_for_connection(
     struct sockaddr_in cli_addr;
     clilen = sizeof(cli_addr);
 
-    // Use select to get "interruptible" accepts 
+    // Use select to get "interruptible" accepts
     fd_set rfds;
 
     int can_go = 0;
@@ -568,10 +568,10 @@ int wait_for_connection(
 
         if ( retval == -1 )
         {
-            if ( errno == EINTR ) 
+            if ( errno == EINTR )
             {
                 // printf(".");
-                // I get a lot of these signals due to the fact of the 
+                // I get a lot of these signals due to the fact of the
                 // Haskell runtime having its own use for signals.
                 return TIMEOUT_REACHED;
             } else {
@@ -583,7 +583,7 @@ int wait_for_connection(
             // We got data, just let it go...
             // printf("letitgo\n");
             can_go = 1;
-        } else 
+        } else
         {
             // We didn't get data, finish and terminate
             // printf("timeo\n");
@@ -640,8 +640,8 @@ int wait_for_connection(
     SSL_get0_alpn_selected(result->sslHandle, &out_protocol,
             &pr_len);
     // Wonder who is in charge of releasing that buffer...
-    result -> protocol_index = lookup_protocol( 
-            (char*)out_protocol, pr_len, 
+    result -> protocol_index = lookup_protocol(
+            (char*)out_protocol, pr_len,
             c->protocol_list, c->protocol_list_length);
 
     *wired_session = result;
@@ -681,7 +681,7 @@ int send_data(wired_session_t* ws, char* buffer, int buffer_size)
         } else {
             return BAD_HAPPENED;
         }
-    } else 
+    } else
     {
         return BAD_HAPPENED;
     }
@@ -721,10 +721,10 @@ int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_re
 void handle_error(const char *file, int lineno, const char *msg){
     fprintf(stderr, "** %s:%d %s\n", file, lineno, msg);
     ERR_print_errors_fp(stderr);
-    /* exit(-1); */ 
+    /* exit(-1); */
 }
 
-/* This array will store all of the mutexes available to OpenSSL. */ 
+/* This array will store all of the mutexes available to OpenSSL. */
 static MUTEX_TYPE *mutex_buf= NULL;
 
 
@@ -789,4 +789,3 @@ int thread_cleanup(void)
     mutex_buf = NULL;
     return 1;
 }
-
