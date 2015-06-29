@@ -70,7 +70,7 @@ data FlowControlCommand =
      AddBytes_FCM Int
 
 -- A hashtable from stream id to channel of availabiliy increases
-type Stream2AvailSpace = HashTable GlobalStreamId (Chan FlowControlCommand)
+type Stream2AvailSpace = HashTable GlobalStreamId (MVar FlowControlCommand)
 
 
 data CanOutput = CanOutput
@@ -105,7 +105,7 @@ data PrioritySendState = PrioritySendState {
 
 data FramerSessionData = FramerSessionData {
       _stream2flow           :: Stream2AvailSpace
-    , _stream2outputBytes    :: HashTable GlobalStreamId (Chan LB.ByteString)
+    , _stream2outputBytes    :: HashTable GlobalStreamId (MVar LB.ByteString)
     , _defaultStreamWindow   :: MVar Int
 
     -- Wait variable to output bytes to the channel
@@ -129,7 +129,6 @@ data FramerSessionData = FramerSessionData {
     -- For sending data orderly
     , _prioritySendState     :: PrioritySendState
     }
-
 
 L.makeLenses ''FramerSessionData
 
@@ -252,7 +251,7 @@ addCapacity stream_id delta_cap =
             Nothing -> return False
 
             Just command_chan -> do
-                liftIO $ writeChan command_chan $ AddBytes_FCM delta_cap
+                liftIO $ putMVar command_chan $ AddBytes_FCM delta_cap
                 return True
 
 
@@ -345,7 +344,7 @@ inputGatherer pull_action session_input = do
                                         -- Add capacity to everybody's windows
                                         liftIO $
                                             H.mapM_ (\ (k,v) ->
-                                                         when (k /=0 ) $ writeChan v (AddBytes_FCM general_delta)
+                                                         when (k /=0 ) $ putMVar v (AddBytes_FCM general_delta)
                                                     )
                                                     stream_to_flow
 
@@ -421,7 +420,7 @@ outputGatherer session_output = do
 
                     Just bytes_chan -> return bytes_chan
 
-                liftIO $ writeChan stream_bytes_chan $ dataForFrame p1 p2
+                liftIO $ putMVar stream_bytes_chan $ dataForFrame p1 p2
                 loopPart
 
             Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
@@ -466,11 +465,11 @@ startStreamOutputQueueIfNotExists stream_id = do
             return ()
 
 
-startStreamOutputQueue :: Int -> FramerSession (Chan LB.ByteString, Chan FlowControlCommand)
+startStreamOutputQueue :: Int -> FramerSession (MVar LB.ByteString, MVar FlowControlCommand)
 startStreamOutputQueue stream_id = do
     -- New thread for handling outputs of this stream is needed
-    bytes_chan <- liftIO newChan
-    command_chan <- liftIO newChan
+    bytes_chan <- liftIO newEmptyMVar
+    command_chan <- liftIO newEmptyMVar
 
     s2o <- view stream2outputBytes
 
@@ -593,12 +592,12 @@ sendBytes bs = do
 -- mess with the structure of the packets.
 --
 -- TODO: Use a bounded queue here!!
-flowControlOutput :: Int -> Int -> Int ->  LB.ByteString -> Chan FlowControlCommand -> Chan LB.ByteString ->  FramerSession ()
+flowControlOutput :: Int -> Int -> Int ->  LB.ByteString -> MVar FlowControlCommand -> MVar LB.ByteString ->  FramerSession ()
 flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan =
     if leftovers == ""
       then do
         -- Get more data (possibly block waiting for it)
-        bytes_to_send <- liftIO $ readChan bytes_chan
+        bytes_to_send <- liftIO $ takeMVar bytes_chan
         flowControlOutput stream_id capacity ordinal  bytes_to_send commands_chan bytes_chan
       else do
         -- Length?
@@ -612,7 +611,7 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
           else do
             -- I can not send because flow-control is full, wait for a command instead
             -- liftIO $ putStrLn $ "Warning: channel flow-saturated " ++ (show stream_id)
-            command <- liftIO $ readChan commands_chan
+            command <- liftIO $ takeMVar commands_chan
             case command of
                 AddBytes_FCM delta_cap ->
                     -- liftIO $ putStrLn $ "Flow control delta_cap stream " ++ (show stream_id)

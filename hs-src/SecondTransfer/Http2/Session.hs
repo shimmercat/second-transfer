@@ -77,7 +77,7 @@ type InputFrame  = NH2.Frame
 
 
 useChunkLength :: Int
-useChunkLength = 1024
+useChunkLength = 2048
 
 
 -- Singleton instance used for concurrency
@@ -97,11 +97,11 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
     -- A full block of headers can come here... the mvar in the middle should
     -- be populate to signal end of headers transmission. A thread will be suspended
     -- waiting for that
-    , _headersOutput :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
+    , _headersOutput :: MVar (GlobalStreamId, MVar HeadersSent, Headers)
 
     -- And regular contents can come this way and thus be properly mixed
     -- with everything else.... for now...
-    ,_dataOutput :: Chan DataOutputToConveyor
+    ,_dataOutput :: MVar DataOutputToConveyor
 
     ,_streamsCancelled_WTE :: MVar NS.IntSet
 
@@ -126,9 +126,13 @@ sendFirstFrameToSession (SessionInput chan) frame = writeChan chan $ FirstFrame_
 sendCommandToSession :: SessionInput  -> SessionInputCommand -> IO ()
 sendCommandToSession (SessionInput chan) command = writeChan chan command
 
+type SessionOutputPacket = Either SessionOutputCommand OutputFrame
+
+type SessionOutputChannelAbstraction = Chan SessionOutputPacket
+
 -- From outside, one can only read from this one
-newtype SessionOutput = SessionOutput ( Chan (Either SessionOutputCommand OutputFrame) )
-getFrameFromSession :: SessionOutput -> IO (Either SessionOutputCommand OutputFrame)
+newtype SessionOutput = SessionOutput SessionOutputChannelAbstraction
+getFrameFromSession :: SessionOutput -> IO SessionOutputPacket
 getFrameFromSession (SessionOutput chan) = readChan chan
 
 
@@ -165,7 +169,7 @@ type SessionMaker = SessionsContext -> IO Session
 type CoherentSession = CoherentWorker -> SessionMaker
 
 
-data PostInputMechanism = PostInputMechanism (Chan (Maybe B.ByteString), InputDataStream)
+data PostInputMechanism = PostInputMechanism (MVar (Maybe B.ByteString), InputDataStream)
 
 -- Settings imposed by the peer
 data SessionSettings = SessionSettings {
@@ -183,8 +187,8 @@ data SessionData = SessionData {
     ,_sessionInput               :: Chan SessionInputCommand
 
     -- We need to lock this channel occassionally so that we can order multiple
-    -- header frames properly....
-    ,_sessionOutput              :: MVar (Chan (Either SessionOutputCommand OutputFrame))
+    -- header frames properly....that's the reason for the outer MVar
+    ,_sessionOutput              :: MVar SessionOutputChannelAbstraction
 
     -- Use to encode
     ,_toEncodeHeaders            :: MVar HP.DynamicTable
@@ -253,8 +257,8 @@ http2Session coherent_worker session_id sessions_context =   do
 
     -- These ones need independent threads taking care of sending stuff
     -- their way...
-    headers_output            <- newChan :: IO (Chan (GlobalStreamId, MVar HeadersSent, Headers))
-    data_output               <- newChan :: IO (Chan DataOutputToConveyor)
+    headers_output            <- newEmptyMVar :: IO (MVar (GlobalStreamId, MVar HeadersSent, Headers))
+    data_output               <- newEmptyMVar :: IO (MVar DataOutputToConveyor)
 
     stream2postinputmechanism <- H.new
     stream2workerthread       <- H.new
@@ -432,7 +436,7 @@ sessionInputThread  = do
             if frameEndsHeaders frame then
               do
                 -- Mark this time DEBUG
-                liftIO $ logit $ "headers-received " `mappend` (pack . show $ stream_id )
+                -- liftIO $ logit $ "headers-received " `mappend` (pack . show $ stream_id )
                 -- /DEBUG
                 -- Ok, let it be known that we are not receiving more headers
                 liftIO $ modifyMVar_
@@ -770,7 +774,7 @@ closePostDataSource stream_id = do
     case pim_maybe of
 
         Just (PostInputMechanism (chan, _))  ->
-            liftIO $ writeChan chan Nothing
+            liftIO $ putMVar chan Nothing
 
         Nothing ->
             -- TODO: This is a protocol error, handle it properly
@@ -796,7 +800,7 @@ streamWorkerSendData stream_id bytes = do
 
 sendBytesToPim :: PostInputMechanism -> B.ByteString -> ReaderT SessionData IO ()
 sendBytesToPim (PostInputMechanism (chan, _)) bytes =
-    liftIO $ writeChan chan (Just bytes)
+    liftIO $ putMVar chan (Just bytes)
 
 
 postDataSourceFromMechanism :: PostInputMechanism -> InputDataStream
@@ -853,7 +857,7 @@ workerThread req coherent_worker =
 
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO $ newEmptyMVar
-    liftIO $ writeChan headers_output (stream_id, headers_sent, headers)
+    liftIO $ putMVar headers_output (stream_id, headers_sent, headers)
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
@@ -892,9 +896,9 @@ sendDataOfStream stream_id headers_sent = do
         maybe_bytes <- await
         case maybe_bytes of
             Nothing ->
-                liftIO $ writeChan data_output (stream_id, Nothing)
+                liftIO $ putMVar data_output (stream_id, Nothing)
             Just bytes -> do
-                liftIO $ writeChan data_output (stream_id, Just bytes)
+                liftIO $ putMVar data_output (stream_id, Just bytes)
                 consumer data_output
 
 
@@ -941,11 +945,11 @@ streamIdFromFrame (NH2.Frame (NH2.FrameHeader _ _ stream_id) _) = NH2.fromStream
 
 -- TODO: Have different size for the headers..... just now going with a default size of 16 k...
 -- TODO: Find a way to kill this thread....
-headersOutputThread :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
-                       -> MVar (Chan (Either SessionOutputCommand OutputFrame))
+headersOutputThread :: MVar (GlobalStreamId, MVar HeadersSent, Headers)
+                       -> MVar SessionOutputChannelAbstraction
                        -> ReaderT SessionData IO ()
 headersOutputThread input_chan session_output_mvar = forever $ do
-    (stream_id, headers_ready_mvar, headers) <- liftIO $ readChan input_chan
+    (stream_id, headers_ready_mvar, headers) <- liftIO $ takeMVar input_chan
 
     -- First encode the headers using the table
     encode_dyn_table_mvar <- view toEncodeHeaders
@@ -969,7 +973,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             )
   where
     writeIndividualHeaderFrames ::
-        Chan (Either SessionOutputCommand OutputFrame)
+        SessionOutputChannelAbstraction
         -> GlobalStreamId
         -> [B.ByteString]
         -> Bool
@@ -1007,11 +1011,11 @@ bytestringChunk len s = h:(bytestringChunk len xs)
 --       way to avoid that is by holding a frame or by augmenting the end-user interface
 --       so that the user can signal which one is the last frame. The first approach
 --       restricts responsiviness, the second one clutters things.
-dataOutputThread :: Chan DataOutputToConveyor
-                    -> MVar (Chan (Either SessionOutputCommand OutputFrame))
+dataOutputThread :: MVar DataOutputToConveyor
+                    -> MVar SessionOutputChannelAbstraction
                     -> IO ()
 dataOutputThread input_chan session_output_mvar = forever $ do
-    (stream_id, maybe_contents) <- readChan input_chan
+    (stream_id, maybe_contents) <- takeMVar input_chan
     case maybe_contents of
         Nothing -> do
             liftIO $ do

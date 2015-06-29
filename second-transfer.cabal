@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.5.5.0
+version     :              0.5.5.1
 
 synopsis    :              Second Transfer HTTP/2 web server
 
