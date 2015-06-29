@@ -77,7 +77,7 @@ type InputFrame  = NH2.Frame
 
 
 useChunkLength :: Int
-useChunkLength = 16384
+useChunkLength = 1024
 
 
 -- Singleton instance used for concurrency

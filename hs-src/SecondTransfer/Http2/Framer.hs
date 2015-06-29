@@ -16,6 +16,9 @@ module SecondTransfer.Http2.Framer (
 
 
 import           Control.Concurrent
+import qualified Control.Concurrent.MSem                as MS
+import           Control.Concurrent.STM.TMVar
+import qualified Control.Concurrent.STM                 as STM
 import           Control.Exception
 import qualified Control.Exception                      as E
 import           Control.Lens                           (view)
@@ -31,6 +34,7 @@ import           Data.ByteString.Char8                  (pack)
 import qualified Data.ByteString.Lazy                   as LB
 import           Data.Conduit
 import           Data.Foldable                          (find)
+import qualified Data.PQueue.Min                        as PQ
 
 import qualified Network.HTTP2                          as NH2
 -- Logging utilities
@@ -75,6 +79,30 @@ data CanOutput = CanOutput
 data NoHeadersInChannel = NoHeadersInChannel
 
 
+-- Maximum number of packets in the priority queue waiting for
+-- delivery. More this, and I will simply block...
+maxPacketsInQueue :: Int
+maxPacketsInQueue = 1024
+
+
+newtype PrioPacket = PrioPacket ( (Int,Int),  LB.ByteString)
+                     deriving Show
+
+instance Eq PrioPacket where
+   (==) (PrioPacket (a,_)) (PrioPacket (b,_)) = a == b
+
+instance Ord PrioPacket where
+    compare (PrioPacket (a,_)) (PrioPacket (b,_)) = compare a b
+
+
+-- Simple thread to prioritize frames in the session
+data PrioritySendState = PrioritySendState {
+     -- We need a semaphore so that this doesn't get stagnated waiting on writes
+     _semToSend :: MS.MSem Int
+     ,_prioQ :: TMVar (PQ.MinQueue PrioPacket)
+     }
+
+
 data FramerSessionData = FramerSessionData {
       _stream2flow           :: Stream2AvailSpace
     , _stream2outputBytes    :: HashTable GlobalStreamId (Chan LB.ByteString)
@@ -97,6 +125,9 @@ data FramerSessionData = FramerSessionData {
 
     -- For GoAway frames
     , _lastStream            :: MVar Int
+
+    -- For sending data orderly
+    , _prioritySendState     :: PrioritySendState
     }
 
 
@@ -130,6 +161,9 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
     last_stream_id            <- newMVar 0
     output_is_forbidden       <- newMVar False
 
+    prio_mvar                 <- STM.atomically $ newTMVar (PQ.empty)
+    sem_to_send               <- MS.new maxPacketsInQueue
+
 
     -- We need some shared state
     let framer_session_data = FramerSessionData {
@@ -144,6 +178,10 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         ,_sessionsContext     = sessions_context
         ,_lastStream          = last_stream_id
         ,_outputIsForbidden   = output_is_forbidden
+        ,_prioritySendState   = PrioritySendState {
+                                    _semToSend = sem_to_send,
+                                    _prioQ = prio_mvar
+                                }
         }
 
 
@@ -181,6 +219,10 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
     forkIO
         $ close_on_error new_session_id sessions_context
         $ runReaderT (outputGatherer session_output ) framer_session_data
+    -- Actual data is reordered before being sent
+    forkIO
+        $ close_on_error new_session_id sessions_context
+        $ runReaderT sendReordering framer_session_data
 
     return ()
 
@@ -466,7 +508,7 @@ startStreamOutputQueue stream_id = do
 
     read_state <- ask
     liftIO $ forkIO $ close_on_error session_id' sessions_context  $ runReaderT
-        (flowControlOutput stream_id initial_cap "" command_chan bytes_chan)
+        (flowControlOutput stream_id initial_cap 0 "" command_chan bytes_chan)
         read_state
 
     return (bytes_chan , command_chan)
@@ -549,13 +591,15 @@ sendBytes bs = do
 -- A thread in charge of doing flow control transmission....This sends already
 -- formatted frames (ByteStrings), not the frames themselves. And it doesn't
 -- mess with the structure of the packets.
-flowControlOutput :: Int -> Int -> LB.ByteString -> Chan FlowControlCommand -> Chan LB.ByteString ->  FramerSession ()
-flowControlOutput stream_id capacity leftovers commands_chan bytes_chan =
+--
+-- TODO: Use a bounded queue here!!
+flowControlOutput :: Int -> Int -> Int ->  LB.ByteString -> Chan FlowControlCommand -> Chan LB.ByteString ->  FramerSession ()
+flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan =
     if leftovers == ""
       then do
         -- Get more data (possibly block waiting for it)
         bytes_to_send <- liftIO $ readChan bytes_chan
-        flowControlOutput stream_id capacity  bytes_to_send commands_chan bytes_chan
+        flowControlOutput stream_id capacity ordinal  bytes_to_send commands_chan bytes_chan
       else do
         -- Length?
         let amount = fromIntegral  (LB.length leftovers - 9)
@@ -563,12 +607,8 @@ flowControlOutput stream_id capacity leftovers commands_chan bytes_chan =
           then do
             -- Is
             -- I can send ... if no headers are in process....
-            no_headers <- view noHeadersInChannel
-            C.bracket
-                (liftIO $ takeMVar no_headers)
-                (\ _ -> liftIO $ putMVar no_headers NoHeadersInChannel)
-                (\ _ -> sendBytes leftovers )
-            flowControlOutput  stream_id (capacity - amount) "" commands_chan bytes_chan
+            withPrioritySend stream_id ordinal leftovers
+            flowControlOutput  stream_id (capacity - amount) (ordinal+1) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead
             -- liftIO $ putStrLn $ "Warning: channel flow-saturated " ++ (show stream_id)
@@ -576,7 +616,7 @@ flowControlOutput stream_id capacity leftovers commands_chan bytes_chan =
             case command of
                 AddBytes_FCM delta_cap ->
                     -- liftIO $ putStrLn $ "Flow control delta_cap stream " ++ (show stream_id)
-                    flowControlOutput stream_id (capacity + delta_cap) leftovers commands_chan bytes_chan
+                    flowControlOutput stream_id (capacity + delta_cap) ordinal leftovers commands_chan bytes_chan
 
 
 releaseFramer :: FramerSession ()
@@ -584,3 +624,45 @@ releaseFramer =
     -- Release any resources pending...
 
     return ()
+
+
+withPrioritySend :: GlobalStreamId -> Int -> LB.ByteString -> FramerSession ()
+withPrioritySend stream_id packet_ordinal datum = do
+    PrioritySendState {_semToSend = s, _prioQ = pqm } <- view prioritySendState
+    let
+        new_record = PrioPacket ( (stream_id,packet_ordinal),datum)
+    -- Now, for this to work, I need to have enough capacity to add something to the queue
+    liftIO $ do
+        -- We are using a semaphore to avoid overflowing this place. Notice that the flow
+        -- control output is till using an unbounded queue!!!
+        MS.wait s
+        -- And add it to the queue....
+        STM.atomically $ do
+            pq <- takeTMVar pqm
+            putTMVar pqm $ PQ.insert new_record pq
+
+
+-- In charge of actually sending the data frames, in a special thread (create in the caller)
+sendReordering :: FramerSession ()
+sendReordering = do
+    PrioritySendState {_semToSend = s, _prioQ = pqm } <- view prioritySendState
+    no_headers <- view noHeadersInChannel
+    -- Get a packet, if possible, or wait for it
+    PrioPacket (_, datum) <- liftIO . STM.atomically $ do
+        pq <- takeTMVar pqm
+        if PQ.null pq
+          then STM.retry
+          else do
+            let
+              (record, thinner) =  PQ.deleteFindMin pq
+            putTMVar pqm thinner
+            return record
+    -- Since I got something to send, I can let one of the guys to put more stuff
+    liftIO $ MS.signal s
+    -- Now we do the tries and locks for headers
+    C.bracket
+        (liftIO $ takeMVar no_headers)
+        (\ _ -> liftIO $ putMVar no_headers NoHeadersInChannel)
+        (\ _ -> sendBytes datum )
+    -- And tail-recurse
+    sendReordering
