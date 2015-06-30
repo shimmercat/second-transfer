@@ -32,6 +32,7 @@ import           Data.Binary                            (decode)
 import qualified Data.ByteString                        as B
 import           Data.ByteString.Char8                  (pack)
 import qualified Data.ByteString.Lazy                   as LB
+import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Foldable                          (find)
 import qualified Data.PQueue.Min                        as PQ
@@ -68,6 +69,7 @@ type GlobalStreamId = Int
 
 data FlowControlCommand =
      AddBytes_FCM Int
+    |Finish_FCM
 
 -- A hashtable from stream id to channel of availabiliy increases
 type Stream2AvailSpace = HashTable GlobalStreamId (MVar FlowControlCommand)
@@ -247,12 +249,42 @@ addCapacity stream_id delta_cap =
     do
         table <- view stream2flow
         val <- liftIO $ H.lookup table stream_id
+        last_stream_mvar <- view lastStream
+        last_stream <- liftIO . readMVar $ last_stream_mvar
         case val of
-            Nothing -> return False
+            Nothing | stream_id > last_stream ->
+                      return False
+                    | otherwise -> -- If the stream was seen already, interpret this as a
+                                  -- rogue WINDOW_UPDATE and do nothing
+                      return True
 
             Just command_chan -> do
                 liftIO $ putMVar command_chan $ AddBytes_FCM delta_cap
                 return True
+
+
+finishFlowControlForStream :: GlobalStreamId -> FramerSession ()
+finishFlowControlForStream stream_id =
+    do
+        table <- view stream2flow
+        val <- liftIO $ H.lookup table stream_id
+        case val of
+            -- Weird
+            Nothing -> return ()
+
+            Just command_chan -> do
+                liftIO $ do
+                    putMVar command_chan  Finish_FCM
+                    H.delete table stream_id
+
+                return ()
+        table2 <- view stream2outputBytes
+        val2 <- liftIO $ H.lookup table2 stream_id
+        case val of
+            Nothing -> return ()
+
+            Just _ ->
+               liftIO $ H.delete table2 stream_id
 
 
 -- This works by pulling bytes from the input side of the pipeline and converting them to frames.
@@ -405,6 +437,13 @@ outputGatherer session_output = do
                 INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
                 releaseFramer
 
+            Left (FinishStream_SOC stream_id ) -> do
+                -- Session knows that we are done with the given stream, and that we can release
+                -- the flow control structures
+                -- NOTICE: Unfortunately, this doesn't work, so ignore the message for now
+                -- finishFlowControlForStream stream_id
+                loopPart
+
             Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _) ) -> do
                 -- This frame is flow-controlled... I may be unable to send this frame in
                 -- some circumstances...
@@ -415,6 +454,7 @@ outputGatherer session_output = do
 
                     Nothing ->  do
                         -- Actually, this branch should never be taken!!
+                        liftIO $ putStrLn "Bad thing happenend"
                         (bc, _) <- startStreamOutputQueue stream_id
                         return bc
 

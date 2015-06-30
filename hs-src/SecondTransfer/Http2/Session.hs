@@ -35,6 +35,7 @@ import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
 import           Control.Monad                          (forever)
 import           Control.Monad.IO.Class                 (liftIO)
+import           Control.DeepSeq                        ( ($!!), deepseq )
 import           Control.Monad.Trans.Reader
 -- import           Control.Monad.Catch                    (throwM)
 
@@ -158,6 +159,7 @@ data SessionInputCommand =
 -- temporary
 data  SessionOutputCommand =
     CancelSession_SOC
+    |FinishStream_SOC GlobalStreamId
   deriving Show
 
 
@@ -314,7 +316,8 @@ http2Session coherent_worker session_id sessions_context =   do
     forkIO $ exc_guard SessionHeadersOutputThread_HTTP2SessionComponent
            $ runReaderT (headersOutputThread headers_output session_output_mvar) session_data
 
-    -- Create a thread that captures data and sends it down the tube
+    -- Create a thread that captures data and sends it down the tube. This is waiting for
+    -- stuff coming from all the workers. This function is also in charge of closing streams
     forkIO $ exc_guard SessionDataOutputThread_HTTP2SessionComponent
            $ dataOutputThread data_output session_output_mvar
 
@@ -499,7 +502,12 @@ sessionInputThread  = do
                 liftIO $ do
                     thread_id <- forkIO $ E.catch
                         (runReaderT
-                            (workerThread (header_list_after, post_data_source) coherent_worker)
+                            (workerThread
+                                   (
+                                      header_list_after `deepseq`
+                                      (header_list_after, post_data_source)
+                                   )
+                                   coherent_worker)
                             for_worker_thread
                         )
                         (
@@ -523,9 +531,9 @@ sessionInputThread  = do
         MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             liftIO $ do
-                INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream reset: " ++ (show _error_code_id) )
+                -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream reset: " ++ (show _error_code_id) )
                 cancelled_streams <- takeMVar cancelled_streams_mvar
-                INSTRUMENTATION( infoM "HTTP2.Session" $ "Cancelled stream was: " ++ (show stream_id) )
+                -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Cancelled stream was: " ++ (show stream_id) )
                 putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
                 maybe_thread_id <- H.lookup stream2workerthread stream_id
                 case maybe_thread_id  of
@@ -535,7 +543,7 @@ sessionInputThread  = do
                         error "InterruptingUnexistentStream"
 
                     Just thread_id -> do
-                        INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
+                        -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
                         throwTo thread_id StreamCancelledException
 
             continue
@@ -592,7 +600,7 @@ sessionInputThread  = do
 
         MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do
             -- Deal with pings: NOT an Ack, so answer
-            INSTRUMENTATION( debugM "HTTP2.Session" "Ping processed" )
+            -- INSTRUMENTATION( debugM "HTTP2.Session" "Ping processed" )
             sendOutFrame
                 (NH2.EncodeInfo
                     (NH2.setAck NH2.defaultFlags)
@@ -609,15 +617,15 @@ sessionInputThread  = do
 
         -- TODO: Do something with these settings!!
         MiddleFrame_SIC (NH2.Frame _ (NH2.SettingsFrame settings_list))  -> do
-            INSTRUMENTATION( debugM "HTTP2.Session" $ "Received settings: " ++ (show settings_list) )
+            -- INSTRUMENTATION( debugM "HTTP2.Session" $ "Received settings: " ++ (show settings_list) )
             -- Just acknowledge the frame.... for now
             handleSettingsFrame settings_list
             continue
 
         MiddleFrame_SIC somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
-            INSTRUMENTATION( errorM "HTTP2.Session" $  "Received problematic frame: " )
-            INSTRUMENTATION( errorM "HTTP2.Session" $  "..  " ++ (show somethingelse) )
+            -- INSTRUMENTATION( errorM "HTTP2.Session" $  "Received problematic frame: " )
+            -- INSTRUMENTATION( errorM "HTTP2.Session" $  "..  " ++ (show somethingelse) )
 
             continue
 
@@ -840,7 +848,8 @@ sendPrimitive500Error =
     )
 
 
-
+-- Invokes the Coherent worker. Data is send through pipes to
+-- the output thread here in this session.
 workerThread :: Request -> CoherentWorker -> WorkerMonad ()
 workerThread req coherent_worker =
   do
@@ -851,10 +860,11 @@ workerThread req coherent_worker =
     --       throws an exception signaling that the request is ill-formed
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
+    liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
     (headers, _, data_and_conclussion) <-
         liftIO $ E.catch
             ( do
-                (h, x, d) <- coherent_worker req
+                (h, x, d) <- {-# SCC "coherent-worker" #-} (coherent_worker $ {-# SCC "req-eval"  #-} req)
                 return $! (h,x,d)
             )
             (
@@ -886,6 +896,7 @@ workerThread req coherent_worker =
             (sendDataOfStream stream_id headers_sent)
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
         -- will need to be changed.
+
         return ()
       else
 
@@ -1009,7 +1020,8 @@ bytestringChunk len s = h:(bytestringChunk len xs)
     (h, xs) = B.splitAt len s
 
 
--- TODO: find a clean way to finish this thread (maybe with negative stream ids?)
+-- This thread is for the entire session, not for each stream. The thread should
+-- die while waiting for input in a garbage-collected mvar.
 -- TODO: This function does non-optimal chunking for the case where responses are
 --       actually streamed.... in those cases we need to keep state for frames in
 --       some other format....
@@ -1027,12 +1039,16 @@ dataOutputThread input_chan session_output_mvar = forever $ do
         Nothing -> do
             liftIO $ do
                 withLockedSessionOutput
-                    (\ session_output ->    writeChan session_output $ Right ( NH2.EncodeInfo {
-                             NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
-                            ,NH2.encodeStreamId  = NH2.toStreamIdentifier stream_id
-                            ,NH2.encodePadding   = Nothing },
-                            NH2.DataFrame ""
-                            )
+                    (\ session_output ->  do
+                           -- Write an empty data-frame with the right flags
+                           writeChan session_output $ Right ( NH2.EncodeInfo {
+                                 NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
+                                ,NH2.encodeStreamId  = NH2.toStreamIdentifier stream_id
+                                ,NH2.encodePadding   = Nothing },
+                                NH2.DataFrame ""
+                                )
+                           -- And then write an-end-of-stream command
+                           writeChan session_output $ Left . FinishStream_SOC $ stream_id
                         )
 
         Just contents -> do
