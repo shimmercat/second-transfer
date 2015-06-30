@@ -97,7 +97,7 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
     -- A full block of headers can come here... the mvar in the middle should
     -- be populate to signal end of headers transmission. A thread will be suspended
     -- waiting for that
-    , _headersOutput :: MVar (GlobalStreamId, MVar HeadersSent, Headers)
+    , _headersOutput :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
 
     -- And regular contents can come this way and thus be properly mixed
     -- with everything else.... for now...
@@ -257,7 +257,7 @@ http2Session coherent_worker session_id sessions_context =   do
 
     -- These ones need independent threads taking care of sending stuff
     -- their way...
-    headers_output            <- newEmptyMVar :: IO (MVar (GlobalStreamId, MVar HeadersSent, Headers))
+    headers_output            <- newChan :: IO (Chan (GlobalStreamId, MVar HeadersSent, Headers))
     data_output               <- newEmptyMVar :: IO (MVar DataOutputToConveyor)
 
     stream2postinputmechanism <- H.new
@@ -436,7 +436,7 @@ sessionInputThread  = do
             if frameEndsHeaders frame then
               do
                 -- Mark this time DEBUG
-                -- liftIO $ logit $ "headers-received " `mappend` (pack . show $ stream_id )
+                liftIO $ logit $ "headers-received " `mappend` (pack . show $ stream_id )
                 -- /DEBUG
                 -- Ok, let it be known that we are not receiving more headers
                 liftIO $ modifyMVar_
@@ -447,6 +447,11 @@ sessionInputThread  = do
                 headers_bytes             <- getHeaderBytes stream_id
                 dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
                 (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
+                -- DEBUG
+                let
+                    (Just path) = He.fetchHeader header_list ":path"
+                liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
+                -- /DEBUG
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here
                 liftIO $ do
@@ -479,6 +484,8 @@ sessionInputThread  = do
                     return $ Just source
                   else do
                     return Nothing
+
+                liftIO $ logit $ "headers-received-2 " `mappend` (pack . show $ stream_id )
 
                 -- TODO: Handle the cases where a request tries to send data
                 -- even if the method doesn't allow for data.
@@ -857,7 +864,7 @@ workerThread req coherent_worker =
 
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO $ newEmptyMVar
-    liftIO $ putMVar headers_output (stream_id, headers_sent, headers)
+    liftIO $ writeChan headers_output (stream_id, headers_sent, headers)
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
@@ -945,11 +952,11 @@ streamIdFromFrame (NH2.Frame (NH2.FrameHeader _ _ stream_id) _) = NH2.fromStream
 
 -- TODO: Have different size for the headers..... just now going with a default size of 16 k...
 -- TODO: Find a way to kill this thread....
-headersOutputThread :: MVar (GlobalStreamId, MVar HeadersSent, Headers)
+headersOutputThread :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
                        -> MVar SessionOutputChannelAbstraction
                        -> ReaderT SessionData IO ()
 headersOutputThread input_chan session_output_mvar = forever $ do
-    (stream_id, headers_ready_mvar, headers) <- liftIO $ takeMVar input_chan
+    (stream_id, headers_ready_mvar, headers) <- liftIO $ readChan input_chan
 
     -- First encode the headers using the table
     encode_dyn_table_mvar <- view toEncodeHeaders
