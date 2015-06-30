@@ -106,8 +106,8 @@ data PrioritySendState = PrioritySendState {
 
 
 data FramerSessionData = FramerSessionData {
-      _stream2flow           :: Stream2AvailSpace
-    , _stream2outputBytes    :: HashTable GlobalStreamId (MVar LB.ByteString)
+      _stream2flow           :: MVar Stream2AvailSpace
+    , _stream2outputBytes    :: MVar ( HashTable GlobalStreamId (MVar LB.ByteString) )
     , _defaultStreamWindow   :: MVar Int
 
     -- Wait variable to output bytes to the channel
@@ -155,21 +155,24 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
 
     -- TODO : Add type annotations....
     s2f                       <- H.new
+    stream2flow_mvar          <- newMVar s2f
     s2o                       <- H.new
+    stream2output_bytes_mvar  <- newMVar s2o
     default_stream_size_mvar  <- newMVar 65536
     can_output                <- newMVar CanOutput
     no_headers_in_channel     <- newMVar NoHeadersInChannel
     last_stream_id            <- newMVar 0
     output_is_forbidden       <- newMVar False
 
-    prio_mvar                 <- STM.atomically $ newTMVar (PQ.empty)
+    prio_mvar                 <- STM.atomically $ newTMVar PQ.empty
     sem_to_send               <- MS.new maxPacketsInQueue
+
 
 
     -- We need some shared state
     let framer_session_data = FramerSessionData {
-        _stream2flow          = s2f
-        ,_stream2outputBytes  = s2o
+        _stream2flow          = stream2flow_mvar
+        ,_stream2outputBytes  = stream2output_bytes_mvar
         ,_defaultStreamWindow = default_stream_size_mvar
         ,_canOutput           = can_output
         ,_noHeadersInChannel  = no_headers_in_channel
@@ -247,8 +250,9 @@ addCapacity 0         delta_cap =
     return True
 addCapacity stream_id delta_cap =
     do
-        table <- view stream2flow
-        val <- liftIO $ H.lookup table stream_id
+        table_mvar <- view stream2flow
+        val <- liftIO $ withMVar table_mvar $ \ table ->
+            H.lookup table stream_id
         last_stream_mvar <- view lastStream
         last_stream <- liftIO . readMVar $ last_stream_mvar
         case val of
@@ -266,25 +270,25 @@ addCapacity stream_id delta_cap =
 finishFlowControlForStream :: GlobalStreamId -> FramerSession ()
 finishFlowControlForStream stream_id =
     do
-        table <- view stream2flow
-        val <- liftIO $ H.lookup table stream_id
-        case val of
-            -- Weird
-            Nothing -> return ()
+        table_mvar <- view stream2flow
+        liftIO . withMVar table_mvar $ \ table -> do
+            val <- H.lookup table stream_id
+            case val of
+                -- Weird
+                Nothing -> return ()
 
-            Just command_chan -> do
-                liftIO $ do
-                    putMVar command_chan  Finish_FCM
-                    H.delete table stream_id
+                Just command_chan -> do
+                    liftIO $
+                        H.delete table stream_id
+                    return ()
+        table2_mvar <- view stream2outputBytes
+        liftIO . withMVar table2_mvar $ \ table -> do
+          val <- H.lookup table stream_id
+          case val of
+              Nothing -> return ()
 
-                return ()
-        table2 <- view stream2outputBytes
-        val2 <- liftIO $ H.lookup table2 stream_id
-        case val of
-            Nothing -> return ()
-
-            Just _ ->
-               liftIO $ H.delete table2 stream_id
+              Just _ ->
+                 liftIO $ H.delete table stream_id
 
 
 -- This works by pulling bytes from the input side of the pipeline and converting them to frames.
@@ -374,11 +378,11 @@ inputGatherer pull_action session_input = do
                                         let general_delta = new_default_stream_size - old_default_stream_size
                                         stream_to_flow <- view stream2flow
                                         -- Add capacity to everybody's windows
-                                        liftIO $
+                                        liftIO . withMVar stream_to_flow $ \ stream_to_flow' ->
                                             H.mapM_ (\ (k,v) ->
                                                          when (k /=0 ) $ putMVar v (AddBytes_FCM general_delta)
                                                     )
-                                                    stream_to_flow
+                                                    stream_to_flow'
 
 
                                         -- And set a new value
@@ -437,26 +441,23 @@ outputGatherer session_output = do
                 INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
                 releaseFramer
 
-            Left (FinishStream_SOC stream_id ) -> do
+            Left (FinishStream_SOC stream_id ) ->
                 -- Session knows that we are done with the given stream, and that we can release
                 -- the flow control structures
                 -- NOTICE: Unfortunately, this doesn't work, so ignore the message for now
-                -- finishFlowControlForStream stream_id
+                -- finishFlowControlForStream stream_id.
                 loopPart
 
             Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _) ) -> do
                 -- This frame is flow-controlled... I may be unable to send this frame in
                 -- some circumstances...
                 let stream_id = NH2.fromStreamIdentifier stream_idii
-                s2o <- view stream2outputBytes
-                lookup_result <- liftIO $ H.lookup s2o stream_id
+                stream2output_mvar <- view stream2outputBytes
+                lookup_result <- liftIO $ withMVar stream2output_mvar $ \ s2o -> H.lookup s2o stream_id
                 stream_bytes_chan <- case lookup_result of
 
-                    Nothing ->  do
-                        -- Actually, this branch should never be taken!!
-                        liftIO $ putStrLn "Bad thing happenend"
-                        (bc, _) <- startStreamOutputQueue stream_id
-                        return bc
+                    Nothing ->
+                        error "It is the end of the world at Framer.hs"
 
                     Just bytes_chan -> return bytes_chan
 
@@ -491,8 +492,8 @@ updateLastStream stream_id = do
 
 startStreamOutputQueueIfNotExists :: GlobalStreamId -> FramerSession ()
 startStreamOutputQueueIfNotExists stream_id = do
-    table <- view stream2flow
-    val <- liftIO $ H.lookup table stream_id
+    table_mvar <- view stream2flow
+    val <- liftIO . withMVar table_mvar  $ \ table -> H.lookup table stream_id
     case val of
         Nothing | stream_id /= 0 -> do
             -- DEBUG
@@ -511,14 +512,14 @@ startStreamOutputQueue stream_id = do
     bytes_chan <- liftIO newEmptyMVar
     command_chan <- liftIO newEmptyMVar
 
-    s2o <- view stream2outputBytes
+    s2o_mvar <- view stream2outputBytes
 
-    liftIO $ H.insert s2o stream_id bytes_chan
+    liftIO . withMVar s2o_mvar $ \ s2o ->  H.insert s2o stream_id bytes_chan
 
-    s2c <- view stream2flow
+    stream2flow_mvar <- view stream2flow
 
 
-    liftIO $ H.insert s2c stream_id command_chan
+    liftIO . withMVar stream2flow_mvar  $ \ s2c ->  H.insert s2c stream_id command_chan
 
     --
     initial_cap_mvar <- view defaultStreamWindow
