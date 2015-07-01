@@ -27,6 +27,7 @@ import           Control.Monad                          (unless, when)
 import           Control.Monad.IO.Class                 (liftIO)
 import qualified Control.Monad.Catch                    as C
 import           Control.Monad.Trans.Class              (lift)
+import           Control.DeepSeq                        (($!!))
 import           Control.Monad.Trans.Reader
 import           Data.Binary                            (decode)
 import qualified Data.ByteString                        as B
@@ -245,10 +246,10 @@ addCapacity ::
         GlobalStreamId ->
         Int           ->
         FramerSession Bool
-addCapacity 0         delta_cap =
+addCapacity 0         !delta_cap =
     -- TODO: Implement session flow control
     return True
-addCapacity stream_id delta_cap =
+addCapacity stream_id !delta_cap =
     do
         table_mvar <- view stream2flow
         val <- liftIO $ withMVar table_mvar $ \ table ->
@@ -380,13 +381,13 @@ inputGatherer pull_action session_input = do
                                         -- Add capacity to everybody's windows
                                         liftIO . withMVar stream_to_flow $ \ stream_to_flow' ->
                                             H.mapM_ (\ (k,v) ->
-                                                         when (k /=0 ) $ putMVar v (AddBytes_FCM general_delta)
+                                                         when (k /=0 ) $ putMVar v (AddBytes_FCM $! general_delta)
                                                     )
                                                     stream_to_flow'
 
 
                                         -- And set a new value
-                                        liftIO $ putMVar old_default_stream_size_mvar new_default_stream_size
+                                        liftIO $ putMVar old_default_stream_size_mvar $! new_default_stream_size
 
 
                                     Nothing ->
@@ -395,7 +396,7 @@ inputGatherer pull_action session_input = do
 
                                 -- And send the frame down to the session, so that session specific settings
                                 -- can be applied.
-                                liftIO $ sendToSession starting frame
+                                liftIO $ sendToSession starting $! frame
 
 
                             a_frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) _ )   -> do
@@ -461,7 +462,7 @@ outputGatherer session_output = do
 
                     Just bytes_chan -> return bytes_chan
 
-                liftIO $ putMVar stream_bytes_chan $ dataForFrame p1 p2
+                liftIO $ putMVar stream_bytes_chan $! dataForFrame p1 p2
                 loopPart
 
             Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
@@ -670,7 +671,7 @@ withPrioritySend :: GlobalStreamId -> Int -> LB.ByteString -> FramerSession ()
 withPrioritySend stream_id packet_ordinal datum = do
     PrioritySendState {_semToSend = s, _prioQ = pqm } <- view prioritySendState
     let
-        new_record = PrioPacket ( (stream_id,packet_ordinal),datum)
+        new_record = PrioPacket $!! ( (stream_id,packet_ordinal),datum)
     -- Now, for this to work, I need to have enough capacity to add something to the queue
     liftIO $ do
         -- We are using a semaphore to avoid overflowing this place. Notice that the flow
