@@ -246,10 +246,10 @@ addCapacity ::
         GlobalStreamId ->
         Int           ->
         FramerSession Bool
-addCapacity 0         !delta_cap =
+addCapacity 0         delta_cap =
     -- TODO: Implement session flow control
     return True
-addCapacity stream_id !delta_cap =
+addCapacity stream_id delta_cap =
     do
         table_mvar <- view stream2flow
         val <- liftIO $ withMVar table_mvar $ \ table ->
@@ -466,9 +466,6 @@ outputGatherer session_output = do
                 loopPart
 
             Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
-                -- DEBUG
-                liftIO $ logit $ "headers-out " `mappend` (pack . show . NH2.fromStreamIdentifier . NH2.encodeStreamId $ p1 )
-                -- /DEBUG
                 handleHeadersOfStream p1 p2
                 loopPart
 
@@ -497,9 +494,6 @@ startStreamOutputQueueIfNotExists stream_id = do
     val <- liftIO . withMVar table_mvar  $ \ table -> H.lookup table stream_id
     case val of
         Nothing | stream_id /= 0 -> do
-            -- DEBUG
-            liftIO . logit $ "stream-starts " `mappend` (pack . show $ stream_id )
-            -- /DEBUG
             startStreamOutputQueue stream_id
             return ()
 

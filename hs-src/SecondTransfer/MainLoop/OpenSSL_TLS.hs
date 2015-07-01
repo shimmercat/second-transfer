@@ -307,7 +307,6 @@ provideActions wired_ptr = do
     let
         pushAction :: LB.ByteString -> IO ()
         pushAction datum = do
-            -- logit $ "start-push " `mappend` (pack . show $ LB.length datum)
             already_closed <- readMVar already_closed_mvar
             if already_closed
               then
@@ -320,7 +319,6 @@ provideActions wired_ptr = do
                                 return ()
                           | r == badHappened     ->
                                 throwIO $ TLSLayerGenericProblem "Could not send data"
-            -- logit "end-push"
 
         pullAction :: IO B.ByteString
         pullAction =  do

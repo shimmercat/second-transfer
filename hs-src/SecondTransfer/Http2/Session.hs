@@ -33,7 +33,7 @@ import           Control.Concurrent                     (ThreadId, forkIO)
 import           Control.Concurrent.Chan
 import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
-import           Control.Monad                          (forever)
+import           Control.Monad                          (forever,unless)
 import           Control.Monad.IO.Class                 (liftIO)
 import           Control.DeepSeq                        ( ($!!), deepseq )
 import           Control.Monad.Trans.Reader
@@ -438,9 +438,6 @@ sessionInputThread  = do
 
             if frameEndsHeaders frame then
               do
-                -- Mark this time DEBUG
-                liftIO $ logit $ "headers-received " `mappend` (pack . show $ stream_id )
-                -- /DEBUG
                 -- Ok, let it be known that we are not receiving more headers
                 liftIO $ modifyMVar_
                     receiving_headers_mvar
@@ -453,7 +450,7 @@ sessionInputThread  = do
                 -- DEBUG
                 let
                     (Just path) = He.fetchHeader header_list ":path"
-                liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
+                -- liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
                 -- /DEBUG
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here
@@ -487,8 +484,6 @@ sessionInputThread  = do
                     return $ Just source
                   else do
                     return Nothing
-
-                liftIO $ logit $ "headers-received-2 " `mappend` (pack . show $ stream_id )
 
                 -- TODO: Handle the cases where a request tries to send data
                 -- even if the method doesn't allow for data.
@@ -860,7 +855,7 @@ workerThread req coherent_worker =
     --       throws an exception signaling that the request is ill-formed
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
-    liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
+    -- liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
     (headers, _, data_and_conclussion) <-
         liftIO $ E.catch
             ( do
@@ -868,21 +863,19 @@ workerThread req coherent_worker =
                 return $! (h,x,d)
             )
             (
-                (\ _ -> sendPrimitive500Error )
+                const sendPrimitive500Error
                 :: HTTP500PrecursorException -> IO (Headers, PushedStreams, DataAndConclusion)
             )
 
     -- Now I send the headers, if that's possible at all
-    headers_sent <- liftIO $ newEmptyMVar
+    headers_sent <- liftIO  newEmptyMVar
     liftIO $ writeChan headers_output (stream_id, headers_sent, headers)
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
     -- streams
     is_stream_cancelled <- isStreamCancelled stream_id
-    if not is_stream_cancelled
-
-      then do
+    unless  is_stream_cancelled $ do
         -- I have a beautiful source that I can de-construct...
         -- TODO: Optionally pulling data out from a Conduit ....
         -- liftIO ( data_and_conclussion $$ (_sendDataOfStream stream_id) )
@@ -891,14 +884,11 @@ workerThread req coherent_worker =
         -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
         -- are let to bubble and managed in this thread fork point...
         (_maybe_footers, _) <- runConduit $
-            (transPipe liftIO data_and_conclussion)
+             transPipe liftIO data_and_conclussion
             `fuseBothMaybe`
-            (sendDataOfStream stream_id headers_sent)
+            sendDataOfStream stream_id headers_sent
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
         -- will need to be changed.
-
-        return ()
-      else
 
         return ()
 
