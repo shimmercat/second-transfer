@@ -672,6 +672,7 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
           else do
             -- I can not send because flow-control is full, wait for a command instead
             -- liftIO $ putStrLn $ "Warning: channel flow-saturated " ++ (show stream_id)
+            liftIO $ logit "flc"
             command <- liftIO $ takeMVar commands_chan
             case command of
                 AddBytes_FCM delta_cap ->

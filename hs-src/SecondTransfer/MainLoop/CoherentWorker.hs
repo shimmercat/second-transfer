@@ -36,6 +36,9 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , pushedStreams_PS
     , dataAndConclusion_PS
     , effect_PS
+    , startedTime_Pr
+    , streamId_Pr
+    , sessionId_Pr
 
     , defaultEffects
     , coherentToAwareWorker
@@ -86,6 +89,8 @@ data Perception = Perception {
   -- processing. But otherwise a number uniquely identifying the session. 
   _sessionId_Pr :: Int
   }
+
+makeLenses ''Perception
 
 
 -- | A request is a set of headers and a request body....
