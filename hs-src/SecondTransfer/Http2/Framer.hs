@@ -46,7 +46,7 @@ import qualified Data.HashTable.IO                      as H
 
 import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, nextSessionId, SessionsContext)
 import           SecondTransfer.Http2.Session
-import           SecondTransfer.MainLoop.CoherentWorker (CoherentWorker)
+import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker)
 import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.MainLoop.PushPullType   (Attendant, CloseAction,
                                                          PullAction, PushAction)
@@ -139,8 +139,8 @@ L.makeLenses ''FramerSessionData
 type FramerSession = ReaderT FramerSessionData IO
 
 
-wrapSession :: CoherentWorker -> SessionsContext -> Attendant
-wrapSession coherent_worker sessions_context push_action pull_action close_action = do
+wrapSession :: AwareWorker -> SessionsContext -> Attendant
+wrapSession aware_worker sessions_context push_action pull_action close_action = do
 
     let
         session_id_mvar = view nextSessionId sessions_context
@@ -150,7 +150,7 @@ wrapSession coherent_worker sessions_context push_action pull_action close_actio
         \ session_id -> return (session_id+1, session_id)
 
     (session_input, session_output) <- http2Session
-                                        coherent_worker
+                                        aware_worker
                                         new_session_id
                                         sessions_context
 

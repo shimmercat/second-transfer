@@ -29,7 +29,7 @@ module SecondTransfer.Http2.Session(
 #include "Logging.cpphs"
 
 -- System grade utilities
-import           Control.Concurrent                     (ThreadId, forkIO)
+import           Control.Concurrent                     (ThreadId, forkIO, threadDelay)
 import           Control.Concurrent.Chan
 import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
@@ -60,6 +60,8 @@ import qualified Network.HTTP2                          as NH2
 
 -- Logging utilities
 import           System.Log.Logger
+
+import           System.Clock                            (getTime, TimeSpec, Clock(..))
 
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
@@ -168,7 +170,7 @@ type SessionMaker = SessionsContext -> IO Session
 
 
 -- Here is how we make a session wrapping a CoherentWorker
-type CoherentSession = CoherentWorker -> SessionMaker
+type CoherentSession = AwareWorker -> SessionMaker
 
 
 data PostInputMechanism = PostInputMechanism (MVar (Maybe B.ByteString), InputDataStream)
@@ -214,7 +216,7 @@ data SessionData = SessionData {
     -- I make copies of it in different contexts, and as needed.
     ,_forWorkerThread            :: WorkerThreadEnvironment
 
-    ,_coherentWorker             :: CoherentWorker
+    ,_awareWorker                :: AwareWorker
 
     -- Some streams may be cancelled
     ,_streamsCancelled           :: MVar NS.IntSet
@@ -240,8 +242,8 @@ makeLenses ''SessionData
 
 
 --                                v- {headers table size comes here!!}
-http2Session :: CoherentWorker -> Int -> SessionsContext -> IO Session
-http2Session coherent_worker session_id sessions_context =   do
+http2Session :: AwareWorker -> Int -> SessionsContext -> IO Session
+http2Session aware_worker session_id sessions_context =   do
     session_input             <- newChan
     session_output            <- newChan
     session_output_mvar       <- newMVar session_output
@@ -287,7 +289,7 @@ http2Session coherent_worker session_id sessions_context =   do
         ,_toEncodeHeaders            = encode_headers_table_mvar
         ,_stream2HeaderBlockFragment = stream_request_headers
         ,_forWorkerThread            = for_worker_thread
-        ,_coherentWorker             = coherent_worker
+        ,_awareWorker                = aware_worker
         ,_streamsCancelled           = cancelled_streams_mvar
         ,_stream2PostInputMechanism  = stream2postinputmechanism
         ,_stream2WorkerThread        = stream2workerthread
@@ -343,12 +345,13 @@ sessionInputThread  = do
     decode_headers_table_mvar <- view toDecodeHeaders
     stream_request_headers    <- view stream2HeaderBlockFragment
     cancelled_streams_mvar    <- view streamsCancelled
-    coherent_worker           <- view coherentWorker
+    coherent_worker           <- view awareWorker
 
     for_worker_thread_uns     <- view forWorkerThread
     stream2workerthread       <- view stream2WorkerThread
     receiving_headers_mvar    <- view receivingHeaders
     last_good_stream_mvar     <- view lastGoodStream
+    current_session_id        <- view sessionIdAtSession
 
     input                     <- liftIO $ readChan session_input
 
@@ -442,6 +445,8 @@ sessionInputThread  = do
                 liftIO $ modifyMVar_
                     receiving_headers_mvar
                     (\ _ -> return Nothing )
+                -- Lets get a time
+                headers_arrived_time      <- liftIO $ getTime Monotonic
                 -- Let's decode the headers
                 let for_worker_thread     = set streamId stream_id for_worker_thread_uns
                 headers_bytes             <- getHeaderBytes stream_id
@@ -485,6 +490,18 @@ sessionInputThread  = do
                   else do
                     return Nothing
 
+                let
+                  perception = Perception {
+                      _startedTime_Pr = headers_arrived_time,
+                      _streamId_Pr = stream_id,
+                      _sessionId_Pr = current_session_id
+                      }
+                  request = Request {
+                      _headers_RQ = header_list_after,
+                      _inputData_RQ = post_data_source,
+                      _perception_RQ = perception
+                      }
+
                 -- TODO: Handle the cases where a request tries to send data
                 -- even if the method doesn't allow for data.
 
@@ -498,10 +515,7 @@ sessionInputThread  = do
                     thread_id <- forkIO $ E.catch
                         (runReaderT
                             (workerThread
-                                   (
-                                      header_list_after `deepseq`
-                                      (header_list_after, post_data_source)
-                                   )
+                                   request
                                    coherent_worker)
                             for_worker_thread
                         )
@@ -829,7 +843,7 @@ isStreamCancelled stream_id = do
     return $ NS.member stream_id cancelled_streams
 
 
-sendPrimitive500Error :: IO PrincipalStream
+sendPrimitive500Error :: IO TupledPrincipalStream
 sendPrimitive500Error =
   return (
         [
@@ -845,8 +859,8 @@ sendPrimitive500Error =
 
 -- Invokes the Coherent worker. Data is send through pipes to
 -- the output thread here in this session.
-workerThread :: Request -> CoherentWorker -> WorkerMonad ()
-workerThread req coherent_worker =
+workerThread :: Request -> AwareWorker -> WorkerMonad ()
+workerThread req aware_worker =
   do
     headers_output <- view headersOutput
     stream_id      <- view streamId
@@ -856,16 +870,21 @@ workerThread req coherent_worker =
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
     -- liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
-    (headers, _, data_and_conclussion) <-
+    -- (headers, _, data_and_conclussion)
+    principal_stream <-
         liftIO $ E.catch
-            ( do
-                (h, x, d) <- {-# SCC "coherent-worker" #-} (coherent_worker $ {-# SCC "req-eval"  #-} req)
-                return $! (h,x,d)
+            (
+                aware_worker  req
             )
             (
-                const sendPrimitive500Error
-                :: HTTP500PrecursorException -> IO (Headers, PushedStreams, DataAndConclusion)
+                const $ tupledPrincipalStreamToPrincipalStream <$> sendPrimitive500Error
+                :: HTTP500PrecursorException -> IO PrincipalStream
             )
+
+    let
+       headers = principal_stream ^. headers_PS
+       data_and_conclusion = principal_stream ^. dataAndConclusion_PS
+       effects = principal_stream ^. effect_PS
 
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO  newEmptyMVar
@@ -884,29 +903,34 @@ workerThread req coherent_worker =
         -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
         -- are let to bubble and managed in this thread fork point...
         (_maybe_footers, _) <- runConduit $
-             transPipe liftIO data_and_conclussion
+             transPipe liftIO data_and_conclusion
             `fuseBothMaybe`
-            sendDataOfStream stream_id headers_sent
+            sendDataOfStream stream_id headers_sent effects
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
         -- will need to be changed.
 
         return ()
 
 --                                                       v-- comp. monad.
-sendDataOfStream :: GlobalStreamId -> MVar HeadersSent -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
-sendDataOfStream stream_id headers_sent = do
+sendDataOfStream :: GlobalStreamId -> MVar HeadersSent -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
+sendDataOfStream stream_id headers_sent effect = do
     data_output <- view dataOutput
     -- Wait for all headers sent
     liftIO $ takeMVar headers_sent
     consumer data_output
   where
+    delay = effect ^. middlePauseForDelivery_Ef
     consumer data_output = do
         maybe_bytes <- await
         case maybe_bytes of
             Nothing ->
+                -- This is how we finish sending data
                 liftIO $ putMVar data_output (stream_id, Nothing)
             Just bytes -> do
-                liftIO $ putMVar data_output (stream_id, Just bytes)
+                liftIO $ do
+                    unless (delay == 0 ) $
+                        threadDelay delay
+                    putMVar data_output (stream_id, Just bytes)
                 consumer data_output
 
 
