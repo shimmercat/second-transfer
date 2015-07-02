@@ -79,8 +79,8 @@ type OutputFrame = (NH2.EncodeInfo, NH2.FramePayload)
 type InputFrame  = NH2.Frame
 
 
-useChunkLength :: Int
-useChunkLength = 2048
+--useChunkLength :: Int
+-- useChunkLength = 2048
 
 
 -- Singleton instance used for concurrency
@@ -310,6 +310,8 @@ http2Session aware_worker session_id sessions_context =   do
                 exc_handler component e
             )
 
+        use_chunk_length =  sessions_context ^.  sessionsConfig . dataFrameSize
+
     -- Create an input thread that decodes frames...
     forkIO $ exc_guard SessionInputThread_HTTP2SessionComponent
            $ runReaderT sessionInputThread session_data
@@ -321,7 +323,7 @@ http2Session aware_worker session_id sessions_context =   do
     -- Create a thread that captures data and sends it down the tube. This is waiting for
     -- stuff coming from all the workers. This function is also in charge of closing streams
     forkIO $ exc_guard SessionDataOutputThread_HTTP2SessionComponent
-           $ dataOutputThread data_output session_output_mvar
+           $ dataOutputThread use_chunk_length data_output session_output_mvar
 
     -- The two previous threads fill the session_output argument below (they write to it)
     -- the session machinery in the other end is in charge of sending that data through the
@@ -981,6 +983,9 @@ headersOutputThread :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
                        -> MVar SessionOutputChannelAbstraction
                        -> ReaderT SessionData IO ()
 headersOutputThread input_chan session_output_mvar = forever $ do
+
+    use_chunk_length <- view $ sessionsContext .  sessionsConfig . dataFrameSize
+
     (stream_id, headers_ready_mvar, headers) <- liftIO $ readChan input_chan
 
     -- First encode the headers using the table
@@ -991,7 +996,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
     liftIO $ putMVar encode_dyn_table_mvar new_dyn_table
 
     -- Now split the bytestring in chunks of the needed size....
-    bs_chunks <- return $! bytestringChunk useChunkLength data_to_send
+    bs_chunks <- return $! bytestringChunk use_chunk_length data_to_send
 
     -- And send the chunks through while locking the output place....
     liftIO $ E.bracket
@@ -1044,10 +1049,11 @@ bytestringChunk len s = h:(bytestringChunk len xs)
 --       way to avoid that is by holding a frame or by augmenting the end-user interface
 --       so that the user can signal which one is the last frame. The first approach
 --       restricts responsiviness, the second one clutters things.
-dataOutputThread :: MVar DataOutputToConveyor
+dataOutputThread :: Int
+                    -> MVar DataOutputToConveyor
                     -> MVar SessionOutputChannelAbstraction
                     -> IO ()
-dataOutputThread input_chan session_output_mvar = forever $ do
+dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
     (stream_id, maybe_contents) <- takeMVar input_chan
     case maybe_contents of
         Nothing -> do
@@ -1067,7 +1073,7 @@ dataOutputThread input_chan session_output_mvar = forever $ do
 
         Just contents -> do
             -- And now just simply output it...
-            let bs_chunks = bytestringChunk useChunkLength $! contents
+            let bs_chunks = bytestringChunk use_chunk_length $! contents
             -- And send the chunks through while locking the output place....
             writeContinuations bs_chunks stream_id
 

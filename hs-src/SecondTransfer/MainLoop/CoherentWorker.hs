@@ -156,7 +156,7 @@ makeLenses ''PrincipalStream
 
 
 -- | Main type of this library. You implement one of these for your server.
---   Basically this is a callback that the library calls as soon as it has
+--   This is a callback that the library calls as soon as it has
 --   all the headers of a request. For GET requests that's the entire request
 --   basically, but for POST and PUT requests this is just before the data
 --   starts arriving to the server.

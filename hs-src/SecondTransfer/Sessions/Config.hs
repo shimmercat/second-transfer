@@ -116,6 +116,7 @@ data SessionsConfig = SessionsConfig {
     -- | Session callbacks
     _sessionsCallbacks :: SessionsCallbacks
     ,_sessionsEnrichedHeaders :: SessionsEnrichedHeaders
+    -- | Size to use when splitting data in data frames
     ,_dataFrameSize :: Int
 }
 
