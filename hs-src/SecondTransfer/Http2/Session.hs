@@ -67,7 +67,9 @@ import           System.Clock                            (getTime, TimeSpec, Clo
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
 import           SecondTransfer.Sessions.Config
-import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, SessionsContext, sessionsConfig)
+import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler,
+                                                         SessionsContext,
+                                                         sessionsConfig)
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He

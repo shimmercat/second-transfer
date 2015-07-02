@@ -23,6 +23,7 @@ module SecondTransfer.Sessions.Config(
     -- ,UsedProtocol(..)
     ,SessionsConfig(..)
     ,ErrorCallback
+    ,DataFrameDeliveryCallback
     ) where
 
 
@@ -72,7 +73,7 @@ data SessionComponent =
 --   session.
 type ErrorCallback = (SessionComponent, SessionCoordinates, SomeException) -> IO ()
 
--- | Used by the session engine to report delivery of a data frame. Keep this callback very
+-- | Used by the session engine to report delivery of each data frame. Keep this callback very
 --   light, it runs in the main sending thread. It is called as
 --   f session_id stream_id ordinal when_delivered
 type DataFrameDeliveryCallback =  Int -> Int -> Int -> TimeSpec ->  IO ()
@@ -114,10 +115,10 @@ defaultSessionsEnrichedHeaders = SessionsEnrichedHeaders {
 -- | Configuration information you can provide to the session maker.
 data SessionsConfig = SessionsConfig {
     -- | Session callbacks
-    _sessionsCallbacks :: SessionsCallbacks
-    ,_sessionsEnrichedHeaders :: SessionsEnrichedHeaders
+    _sessionsCallbacks         :: SessionsCallbacks
+    ,_sessionsEnrichedHeaders  :: SessionsEnrichedHeaders
     -- | Size to use when splitting data in data frames
-    ,_dataFrameSize :: Int
+    ,_dataFrameSize            :: Int
 }
 
 makeLenses ''SessionsConfig

@@ -21,7 +21,7 @@ import           Control.Concurrent.STM.TMVar
 import qualified Control.Concurrent.STM                 as STM
 import           Control.Exception
 import qualified Control.Exception                      as E
-import           Control.Lens                           (view)
+import           Control.Lens                           (view, (^.) )
 import qualified Control.Lens                           as L
 import           Control.Monad                          (unless, when)
 import           Control.Monad.IO.Class                 (liftIO)
@@ -43,8 +43,14 @@ import qualified Network.HTTP2                          as NH2
 import           System.Log.Logger
 
 import qualified Data.HashTable.IO                      as H
+import           System.Clock                           (Clock(..),getTime)
 
-import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, nextSessionId, SessionsContext)
+import           SecondTransfer.Sessions.Internal       (
+                                                         sessionExceptionHandler,
+                                                         nextSessionId,
+                                                         sessionsConfig,
+                                                         SessionsContext)
+import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Http2.Session
 import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker)
 import qualified SecondTransfer.MainLoop.Framer         as F
@@ -83,7 +89,7 @@ data NoHeadersInChannel = NoHeadersInChannel
 
 
 -- Maximum number of packets in the priority queue waiting for
--- delivery. More this, and I will simply block...
+-- delivery. More than this, and I will simply block...
 maxPacketsInQueue :: Int
 maxPacketsInQueue = 1024
 
@@ -108,7 +114,9 @@ data PrioritySendState = PrioritySendState {
 
 data FramerSessionData = FramerSessionData {
       _stream2flow           :: MVar Stream2AvailSpace
-    , _stream2outputBytes    :: MVar ( HashTable GlobalStreamId (MVar LB.ByteString) )
+    -- Two members below: the place where you put data which is going to be flow-controlled,
+    -- and the place with the ordinal
+    , _stream2outputBytes    :: MVar ( HashTable GlobalStreamId (MVar LB.ByteString, MVar Int) )
     , _defaultStreamWindow   :: MVar Int
 
     -- Wait variable to output bytes to the channel
@@ -121,7 +129,7 @@ data FramerSessionData = FramerSessionData {
     , _closeAction           :: CloseAction
 
     -- Global id of the session, used for e.g. error reporting.
-    , _sessionId             :: Int
+    , _sessionIdAtFramer     :: Int
 
     -- Sessions context, used for thing like e.g. error reporting
     , _sessionsContext       :: SessionsContext
@@ -144,6 +152,7 @@ wrapSession aware_worker sessions_context push_action pull_action close_action =
 
     let
         session_id_mvar = view nextSessionId sessions_context
+
 
     new_session_id <- modifyMVarMasked
         session_id_mvar $
@@ -179,7 +188,7 @@ wrapSession aware_worker sessions_context push_action pull_action close_action =
         ,_noHeadersInChannel  = no_headers_in_channel
         ,_pushAction          = push_action
         ,_closeAction         = close_action
-        ,_sessionId           = new_session_id
+        ,_sessionIdAtFramer   = new_session_id
         ,_sessionsContext     = sessions_context
         ,_lastStream          = last_stream_id
         ,_outputIsForbidden   = output_is_forbidden
@@ -418,68 +427,83 @@ inputGatherer pull_action session_input = do
 -- All the output frames come this way first
 outputGatherer :: SessionOutput -> FramerSession ()
 outputGatherer session_output = do
+    frame_sent_report_callback <- view $
+       sessionsContext            .
+       sessionsConfig             .
+       sessionsCallbacks          .
+       dataDeliveryCallback_SC
+
+    session_id <- view sessionIdAtFramer
+
+    let
+
+       dataForFrame p1 p2 =
+           LB.fromStrict $ NH2.encodeFrame p1 p2
+
+       cont = loopPart session_id frame_sent_report_callback
+
+       loopPart :: Int -> Maybe DataFrameDeliveryCallback -> FramerSession ()
+       loopPart session_id frame_sent_report_callback = do
+           command_or_frame  <- liftIO $ getFrameFromSession session_output
+           case command_or_frame of
+
+               Left CancelSession_SOC -> do
+                   -- The session wants to cancel things
+                   INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
+                   releaseFramer
+
+               Left (FinishStream_SOC stream_id ) ->
+                   -- Session knows that we are done with the given stream, and that we can release
+                   -- the flow control structures
+                   -- NOTICE: Unfortunately, this doesn't work, so ignore the message for now
+                   -- finishFlowControlForStream stream_id.
+                   cont
+
+               Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _) ) -> do
+                   -- This frame is flow-controlled... I may be unable to send this frame in
+                   -- some circumstances...
+                   let stream_id = NH2.fromStreamIdentifier stream_idii
+                   stream2output_mvar <- view stream2outputBytes
+                   lookup_result <- liftIO $ withMVar stream2output_mvar $ \ s2o -> H.lookup s2o stream_id
+                   (stream_bytes_chan, frame_ordinal_mvar) <- case lookup_result of
+                       Nothing ->
+                           error "It is the end of the world at Framer.hs"
+                       Just x -> return x
+
+                   case frame_sent_report_callback of
+                       Just callback -> liftIO $ do
+                           -- Here we invoke the customer's callback.
+                           when_delivered <- getTime Monotonic
+                           ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
+                           callback session_id stream_id ordinal when_delivered
+                       Nothing -> return ()
+
+                   liftIO $ putMVar stream_bytes_chan $! dataForFrame p1 p2
+                   cont
+
+               Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
+                   handleHeadersOfStream p1 p2
+                   cont
+
+               Right (p1, p2@(NH2.ContinuationFrame _) ) -> do
+                   handleHeadersOfStream p1 p2
+                   cont
+
+               Right (p1, p2) -> do
+                   -- Most other frames go right away... as long as no headers are in process...
+                   no_headers <- view noHeadersInChannel
+                   liftIO $ takeMVar no_headers
+                   pushFrame p1 p2
+                   liftIO $ putMVar no_headers NoHeadersInChannel
+                   cont
 
     -- We start by sending a settings frame
     pushFrame
         (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing)
         (NH2.SettingsFrame [])
 
-    loopPart
-
-  where
-
-
-    dataForFrame p1 p2 =
-        LB.fromStrict $ NH2.encodeFrame p1 p2
-
-    loopPart :: FramerSession ()
-    loopPart = do
-        command_or_frame  <- liftIO $ getFrameFromSession session_output
-        case command_or_frame of
-
-            Left CancelSession_SOC -> do
-                -- The session wants to cancel things
-                INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
-                releaseFramer
-
-            Left (FinishStream_SOC stream_id ) ->
-                -- Session knows that we are done with the given stream, and that we can release
-                -- the flow control structures
-                -- NOTICE: Unfortunately, this doesn't work, so ignore the message for now
-                -- finishFlowControlForStream stream_id.
-                loopPart
-
-            Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _) ) -> do
-                -- This frame is flow-controlled... I may be unable to send this frame in
-                -- some circumstances...
-                let stream_id = NH2.fromStreamIdentifier stream_idii
-                stream2output_mvar <- view stream2outputBytes
-                lookup_result <- liftIO $ withMVar stream2output_mvar $ \ s2o -> H.lookup s2o stream_id
-                stream_bytes_chan <- case lookup_result of
-
-                    Nothing ->
-                        error "It is the end of the world at Framer.hs"
-
-                    Just bytes_chan -> return bytes_chan
-
-                liftIO $ putMVar stream_bytes_chan $! dataForFrame p1 p2
-                loopPart
-
-            Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
-                handleHeadersOfStream p1 p2
-                loopPart
-
-            Right (p1, p2@(NH2.ContinuationFrame _) ) -> do
-                handleHeadersOfStream p1 p2
-                loopPart
-
-            Right (p1, p2) -> do
-                -- Most other frames go right away... as long as no headers are in process...
-                no_headers <- view noHeadersInChannel
-                liftIO $ takeMVar no_headers
-                pushFrame p1 p2
-                liftIO $ putMVar no_headers NoHeadersInChannel
-                loopPart
+    -- And then we continue...
+    loopPart session_id frame_sent_report_callback
 
 
 updateLastStream :: GlobalStreamId  -> FramerSession ()
@@ -505,11 +529,12 @@ startStreamOutputQueue :: Int -> FramerSession (MVar LB.ByteString, MVar FlowCon
 startStreamOutputQueue stream_id = do
     -- New thread for handling outputs of this stream is needed
     bytes_chan <- liftIO newEmptyMVar
+    ordinal_num <- liftIO $ newMVar 0
     command_chan <- liftIO newEmptyMVar
 
     s2o_mvar <- view stream2outputBytes
 
-    liftIO . withMVar s2o_mvar $ \ s2o ->  H.insert s2o stream_id bytes_chan
+    liftIO . withMVar s2o_mvar $ \ s2o ->  H.insert s2o stream_id (bytes_chan, ordinal_num)
 
     stream2flow_mvar <- view stream2flow
 
@@ -521,7 +546,7 @@ startStreamOutputQueue stream_id = do
     initial_cap <- liftIO $ readMVar initial_cap_mvar
     close_action <- view closeAction
     sessions_context <- view sessionsContext
-    session_id' <- view SecondTransfer.Http2.Framer.sessionId
+    session_id' <- view sessionIdAtFramer
     output_is_forbidden_mvar <- view outputIsForbidden
 
     -- And don't forget the thread itself
