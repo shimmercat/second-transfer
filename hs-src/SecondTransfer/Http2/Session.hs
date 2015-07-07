@@ -1074,6 +1074,7 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
             let bs_chunks = bytestringChunk use_chunk_length $! contents
             -- And send the chunks through while locking the output place....
             writeContinuations bs_chunks stream_id delay
+            return ()
 
   where
 
@@ -1083,11 +1084,11 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
 
     writeContinuations :: [B.ByteString] -> GlobalStreamId  -> Int -> IO ()
     writeContinuations fragments stream_id microseconds_delay  = mapM_ (\ fragment -> do
-        -- unless (microseconds_delay == 0 ) $
-        --                 threadDelay microseconds_delay
-        withLockedSessionOutput (\ session_output -> writeChan session_output $ Right ( NH2.EncodeInfo {
-            NH2.encodeFlags     = NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
-            ,NH2.encodePadding  = Nothing },
-            NH2.DataFrame fragment ) )
+              unless (microseconds_delay == 0 ) $
+                              threadDelay microseconds_delay
+              withLockedSessionOutput (\ session_output -> writeChan session_output $ Right ( NH2.EncodeInfo {
+                  NH2.encodeFlags     = NH2.defaultFlags
+                  ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
+                  ,NH2.encodePadding  = Nothing },
+                  NH2.DataFrame fragment ) )
         ) fragments
