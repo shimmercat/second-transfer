@@ -89,8 +89,8 @@ type InputFrame  = NH2.Frame
 data HeadersSent = HeadersSent
 
 -- All streams put their data bits here. A "Nothing" value signals
--- end of data.
-type DataOutputToConveyor = (GlobalStreamId, Maybe B.ByteString)
+-- end of data. Middle value is delay in microseconds
+type DataOutputToConveyor = (GlobalStreamId, Int, Maybe B.ByteString)
 
 
 -- Whatever a worker thread is going to need comes here....
@@ -459,7 +459,7 @@ sessionInputThread  = do
                 -- DEBUG
                 let
                     (Just path) = He.fetchHeader header_list ":path"
-                -- liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
+                liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
                 -- /DEBUG
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here
@@ -639,7 +639,6 @@ sessionInputThread  = do
             -- An undhandled case here....
             -- INSTRUMENTATION( errorM "HTTP2.Session" $  "Received problematic frame: " )
             -- INSTRUMENTATION( errorM "HTTP2.Session" $  "..  " ++ (show somethingelse) )
-
             continue
 
   where
@@ -647,15 +646,14 @@ sessionInputThread  = do
 
     -- TODO: Do use the settings!!!
     handleSettingsFrame :: NH2.SettingsList -> ReaderT SessionData IO ()
-    handleSettingsFrame _settings_list =
+    handleSettingsFrame _settings_list = do
+        -- liftIO $ logit $ "Settings " `mappend` (pack . show $  _settings_list)
         sendOutFrame
             (NH2.EncodeInfo
                 (NH2.setAck NH2.defaultFlags)
                 (NH2.toStreamIdentifier 0)
                 Nothing )
             (NH2.SettingsFrame [])
-
-
 
 
 sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload -> ReaderT SessionData IO ()
@@ -873,7 +871,7 @@ workerThread req aware_worker =
     --       throws an exception signaling that the request is ill-formed
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
-    -- liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
+    liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
     -- (headers, _, data_and_conclussion)
     principal_stream <-
         liftIO $ E.catch
@@ -929,12 +927,10 @@ sendDataOfStream stream_id headers_sent effect = do
         case maybe_bytes of
             Nothing ->
                 -- This is how we finish sending data
-                liftIO $ putMVar data_output (stream_id, Nothing)
+                liftIO $ putMVar data_output (stream_id, 0, Nothing)
             Just bytes -> do
                 liftIO $ do
-                    unless (delay == 0 ) $
-                        threadDelay delay
-                    putMVar data_output (stream_id, Just bytes)
+                    putMVar data_output (stream_id, delay, Just bytes)
                 consumer data_output
 
 
@@ -1056,7 +1052,7 @@ dataOutputThread :: Int
                     -> MVar SessionOutputChannelAbstraction
                     -> IO ()
 dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
-    (stream_id, maybe_contents) <- takeMVar input_chan
+    (stream_id, delay, maybe_contents) <- takeMVar input_chan
     case maybe_contents of
         Nothing -> do
             liftIO $ do
@@ -1077,7 +1073,7 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
             -- And now just simply output it...
             let bs_chunks = bytestringChunk use_chunk_length $! contents
             -- And send the chunks through while locking the output place....
-            writeContinuations bs_chunks stream_id
+            writeContinuations bs_chunks stream_id delay
 
   where
 
@@ -1085,8 +1081,10 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
         (takeMVar session_output_mvar)
         (putMVar session_output_mvar) -- <-- There is an implicit argument there!!
 
-    writeContinuations :: [B.ByteString] -> GlobalStreamId  -> IO ()
-    writeContinuations fragments stream_id  = mapM_ (\ fragment ->
+    writeContinuations :: [B.ByteString] -> GlobalStreamId  -> Int -> IO ()
+    writeContinuations fragments stream_id microseconds_delay  = mapM_ (\ fragment -> do
+        -- unless (microseconds_delay == 0 ) $
+        --                 threadDelay microseconds_delay
         withLockedSessionOutput (\ session_output -> writeChan session_output $ Right ( NH2.EncodeInfo {
             NH2.encodeFlags     = NH2.defaultFlags
             ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id

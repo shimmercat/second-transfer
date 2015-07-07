@@ -585,7 +585,7 @@ handleHeadersOfStream p1@(NH2.EncodeInfo {}) frame_payload
         no_headers <- view noHeadersInChannel
         liftIO $ takeMVar no_headers
         pushFrame p1 frame_payload
-        -- DONT PUT THE MvAR HERE
+        -- Don't put the MvAR HERE
 
     | frameIsHeadersAndOpensStream frame_payload && frameEndsHeaders p1 frame_payload = do
         no_headers <- view noHeadersInChannel
@@ -672,7 +672,7 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
           else do
             -- I can not send because flow-control is full, wait for a command instead
             -- liftIO $ putStrLn $ "Warning: channel flow-saturated " ++ (show stream_id)
-            liftIO $ logit "flc"
+            -- liftIO $ logit "flc"
             command <- liftIO $ takeMVar commands_chan
             case command of
                 AddBytes_FCM delta_cap ->

@@ -20,7 +20,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , Perception(..)
     , Effect(..)
     , AwareWorker
-    , PrincipalStream
+    , PrincipalStream(..)
     , PushedStreams
     , PushedStream
     , DataAndConclusion
