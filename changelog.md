@@ -1,3 +1,7 @@
+- 0.5.5.1 :
+    * Restricted HTTP2 package version.
+    * Fixes #2
+
 - 0.5.5.0 :
     * Made HeaderEditor a Monoid instance
     * Trying to WINDOW_UPDATE an unexistent stream aborts the session, as it should
