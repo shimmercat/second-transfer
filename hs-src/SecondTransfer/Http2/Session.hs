@@ -90,7 +90,7 @@ data HeadersSent = HeadersSent
 
 -- All streams put their data bits here. A "Nothing" value signals
 -- end of data. Middle value is delay in microseconds
-type DataOutputToConveyor = (GlobalStreamId, Int, Maybe B.ByteString)
+type DataOutputToConveyor = (GlobalStreamId, Maybe B.ByteString)
 
 
 -- Whatever a worker thread is going to need comes here....
@@ -921,16 +921,16 @@ sendDataOfStream stream_id headers_sent effect = do
     liftIO $ takeMVar headers_sent
     consumer data_output
   where
-    delay = effect ^. middlePauseForDelivery_Ef
+    --delay = effect ^. middlePauseForDelivery_Ef
     consumer data_output = do
         maybe_bytes <- await
         case maybe_bytes of
             Nothing ->
                 -- This is how we finish sending data
-                liftIO $ putMVar data_output (stream_id, 0, Nothing)
+                liftIO $ putMVar data_output (stream_id, Nothing)
             Just bytes -> do
                 liftIO $ do
-                    putMVar data_output (stream_id, delay, Just bytes)
+                    putMVar data_output (stream_id, Just bytes)
                 consumer data_output
 
 
@@ -1052,7 +1052,7 @@ dataOutputThread :: Int
                     -> MVar SessionOutputChannelAbstraction
                     -> IO ()
 dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
-    (stream_id, delay, maybe_contents) <- takeMVar input_chan
+    (stream_id, maybe_contents) <- takeMVar input_chan
     case maybe_contents of
         Nothing -> do
             liftIO $ do
@@ -1073,7 +1073,7 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
             -- And now just simply output it...
             let bs_chunks = bytestringChunk use_chunk_length $! contents
             -- And send the chunks through while locking the output place....
-            writeContinuations bs_chunks stream_id delay
+            writeContinuations bs_chunks stream_id
             return ()
 
   where
@@ -1082,10 +1082,10 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
         (takeMVar session_output_mvar)
         (putMVar session_output_mvar) -- <-- There is an implicit argument there!!
 
-    writeContinuations :: [B.ByteString] -> GlobalStreamId  -> Int -> IO ()
-    writeContinuations fragments stream_id microseconds_delay  = mapM_ (\ fragment -> do
-              unless (microseconds_delay == 0 ) $
-                              threadDelay microseconds_delay
+    writeContinuations :: [B.ByteString] -> GlobalStreamId  -> IO ()
+    writeContinuations fragments stream_id  = mapM_ (\ fragment -> do
+              -- unless (microseconds_delay == 0 ) $
+              --                 threadDelay microseconds_delay
               withLockedSessionOutput (\ session_output -> writeChan session_output $ Right ( NH2.EncodeInfo {
                   NH2.encodeFlags     = NH2.defaultFlags
                   ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id

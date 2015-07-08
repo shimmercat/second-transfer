@@ -28,7 +28,6 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , InputDataStream
     , TupledPrincipalStream
 
-    , middlePauseForDelivery_Ef
     , headers_RQ
     , inputData_RQ
     , perception_RQ
@@ -133,17 +132,13 @@ type DataAndConclusion = ConduitM () B.ByteString IO Footers
 -- | Sometimes a response needs to be handled a bit specially,
 --   for example by reporting delivery details back to the worker
 data Effect = Effect {
-  -- Pause time in microseconds for deliverying frames of this
-  -- stream. Zero is no pause and it is a
-  -- special case since no call is made then
-  _middlePauseForDelivery_Ef :: Int
   }
 
 makeLenses ''Effect
 
 defaultEffects :: Effect
 defaultEffects = Effect {
-   _middlePauseForDelivery_Ef = 0
+   -- _middlePauseForDelivery_Ef = 0
    }
 
 
