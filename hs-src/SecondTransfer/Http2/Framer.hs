@@ -52,7 +52,7 @@ import           SecondTransfer.Sessions.Internal       (
                                                          SessionsContext)
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Http2.Session
-import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker)
+import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker, fragmentDeliveryCallback_Ef)
 import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.MainLoop.PushPullType   (Attendant, CloseAction,
                                                          PullAction, PushAction)
@@ -459,7 +459,7 @@ outputGatherer session_output = do
                    -- finishFlowControlForStream stream_id.
                    cont
 
-               Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _) ) -> do
+               Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _), ef ) -> do
                    -- This frame is flow-controlled... I may be unable to send this frame in
                    -- some circumstances...
                    let stream_id = NH2.fromStreamIdentifier stream_idii
@@ -470,26 +470,36 @@ outputGatherer session_output = do
                            error "It is the end of the world at Framer.hs"
                        Just x -> return x
 
-                   case frame_sent_report_callback of
-                       Just callback -> liftIO $ do
+                   -- All the dance below is to avoid a system call if there is no need
+                   case (frame_sent_report_callback, ef ^. fragmentDeliveryCallback_Ef ) of
+                       (Just c1, Just c2) -> liftIO $ do
                            -- Here we invoke the client's callback.
                            when_delivered <- getTime Monotonic
                            ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
-                           callback session_id stream_id ordinal when_delivered
-                       Nothing -> return ()
+                           c1 session_id stream_id ordinal when_delivered
+                           c2 ordinal when_delivered
+                       (Nothing, Just c2) -> liftIO $ do
+                           when_delivered <- getTime Monotonic
+                           ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
+                           c2 ordinal when_delivered
+                       (Just c1, Nothing) -> liftIO $ do
+                           when_delivered <- getTime Monotonic
+                           ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
+                           c1 session_id stream_id ordinal when_delivered
+                       (Nothing, Nothing) -> return ()
 
                    liftIO $ putMVar stream_bytes_chan $! dataForFrame p1 p2
                    cont
 
-               Right (p1, p2@(NH2.HeadersFrame _ _) ) -> do
+               Right (p1, p2@(NH2.HeadersFrame _ _), _effect ) -> do
                    handleHeadersOfStream p1 p2
                    cont
 
-               Right (p1, p2@(NH2.ContinuationFrame _) ) -> do
+               Right (p1, p2@(NH2.ContinuationFrame _), _effect ) -> do
                    handleHeadersOfStream p1 p2
                    cont
 
-               Right (p1, p2) -> do
+               Right (p1, p2, _effect) -> do
                    -- Most other frames go right away... as long as no headers are in process...
                    no_headers <- view noHeadersInChannel
                    liftIO $ takeMVar no_headers

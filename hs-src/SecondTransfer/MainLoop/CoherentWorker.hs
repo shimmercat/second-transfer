@@ -27,6 +27,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , CoherentWorker
     , InputDataStream
     , TupledPrincipalStream
+    , FragmentDeliveryCallback
 
     , headers_RQ
     , inputData_RQ
@@ -38,6 +39,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , startedTime_Pr
     , streamId_Pr
     , sessionId_Pr
+    , fragmentDeliveryCallback_Ef
 
     , defaultEffects
     , coherentToAwareWorker
@@ -129,16 +131,23 @@ type PushedStream = (Headers, Headers, DataAndConclusion)
 --   be anything (even bottom), I'm not handling it just yet.
 type DataAndConclusion = ConduitM () B.ByteString IO Footers
 
+-- | First argument is the ordinal of this data frame, second an approximation of when
+--   the frame was delivered, according to the monotonic clock. Do not linger in this call,
+--   it may delay some important thread
+type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
+
+
 -- | Sometimes a response needs to be handled a bit specially,
 --   for example by reporting delivery details back to the worker
 data Effect = Effect {
+  _fragmentDeliveryCallback_Ef :: Maybe FragmentDeliveryCallback
   }
 
 makeLenses ''Effect
 
 defaultEffects :: Effect
 defaultEffects = Effect {
-   -- _middlePauseForDelivery_Ef = 0
+  _fragmentDeliveryCallback_Ef = Nothing
    }
 
 
