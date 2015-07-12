@@ -472,7 +472,7 @@ outputGatherer session_output = do
 
                    case frame_sent_report_callback of
                        Just callback -> liftIO $ do
-                           -- Here we invoke the customer's callback.
+                           -- Here we invoke the client's callback.
                            when_delivered <- getTime Monotonic
                            ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
                            callback session_id stream_id ordinal when_delivered
@@ -671,8 +671,6 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
             flowControlOutput  stream_id (capacity - amount) (ordinal+1) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead
-            -- liftIO $ putStrLn $ "Warning: channel flow-saturated " ++ (show stream_id)
-            -- liftIO $ logit "flc"
             command <- liftIO $ takeMVar commands_chan
             case command of
                 AddBytes_FCM delta_cap ->

@@ -456,10 +456,11 @@ sessionInputThread  = do
                 headers_bytes             <- getHeaderBytes stream_id
                 dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
                 (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
-                -- DEBUG
+#if LOGIT_SWITCH_TIMINGS
                 let
                     (Just path) = He.fetchHeader header_list ":path"
                 liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
+#endif
                 -- /DEBUG
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here
@@ -871,7 +872,9 @@ workerThread req aware_worker =
     --       throws an exception signaling that the request is ill-formed
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
+#if LOGIT_SWITCH_TIMINGS
     liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
+#endif
     -- (headers, _, data_and_conclussion)
     principal_stream <-
         liftIO $ E.catch
