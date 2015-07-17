@@ -934,7 +934,7 @@ workerThread req aware_worker =
        can_push             = session_settings ^. pushEnabled
 
     -- There are several possible moments where the PUSH_PROMISEs can be sent,
-    -- but a default save one is before sending the response HEADERS, so that
+    -- but a default safe one is before sending the response HEADERS, so that
     -- LINK headers in the response come after any potential promises.
     data_promises <- if can_push then do
         forM pushed_streams $ \ pushed_stream_comp -> do
