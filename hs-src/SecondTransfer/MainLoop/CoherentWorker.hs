@@ -35,6 +35,9 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , headers_PS
     , pushedStreams_PS
     , dataAndConclusion_PS
+    , dataAndConclusion_Psh
+    , requestHeaders_Psh
+    , responseHeaders_Psh
     , effect_PS
     , startedTime_Pr
     , streamId_Pr
@@ -120,6 +123,12 @@ type Footers = FinalizationHeaders
 --   streams are not going to be sent to the client.
 type PushedStreams = [ IO PushedStream ]
 
+-- | A source-like conduit with the data returned in the response. The
+--   return value of the conduit is a list of footers. For now that list can
+--   be anything (even bottom), I'm not handling it just yet.
+type DataAndConclusion = ConduitM () B.ByteString IO Footers
+
+
 -- | A pushed stream, represented by a list of request headers,
 --   a list of response headers, and the usual response body  (which
 --   may include final footers (not implemented yet)).
@@ -129,10 +138,8 @@ data PushedStream = PushedStream {
   _dataAndConclusion_Psh :: DataAndConclusion
   }
 
--- | A source-like conduit with the data returned in the response. The
---   return value of the conduit is a list of footers. For now that list can
---   be anything (even bottom), I'm not handling it just yet.
-type DataAndConclusion = ConduitM () B.ByteString IO Footers
+makeLenses ''PushedStream
+
 
 -- | First argument is the ordinal of this data frame, second an approximation of when
 --   the frame was delivered, according to the monotonic clock. Do not linger in this call,
