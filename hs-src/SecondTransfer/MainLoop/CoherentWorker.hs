@@ -22,7 +22,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , AwareWorker
     , PrincipalStream(..)
     , PushedStreams
-    , PushedStream
+    , PushedStream(..)
     , DataAndConclusion
     , CoherentWorker
     , InputDataStream
@@ -123,8 +123,11 @@ type PushedStreams = [ IO PushedStream ]
 -- | A pushed stream, represented by a list of request headers,
 --   a list of response headers, and the usual response body  (which
 --   may include final footers (not implemented yet)).
-type PushedStream = (Headers, Headers, DataAndConclusion)
-
+data PushedStream = PushedStream {
+  _requestHeaders_Psh    :: Headers,
+  _responseHeaders_Psh   :: Headers,
+  _dataAndConclusion_Psh :: DataAndConclusion
+  }
 
 -- | A source-like conduit with the data returned in the response. The
 --   return value of the conduit is a list of footers. For now that list can
