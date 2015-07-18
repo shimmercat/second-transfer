@@ -1130,10 +1130,12 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             liftIO $ putMVar encode_dyn_table_mvar new_dyn_table
 
             -- Now split the bytestring in chunks of the needed size....
-            bs_chunks <- return $! bytestringChunk use_chunk_length data_to_send
+            -- Note that the only way we can
+            let
+                bs_chunks = bytestringChunk use_chunk_length  data_to_send
 
             -- And send the chunks through while locking the output place....
-            liftIO $ E.bracket
+            liftIO $ bs_chunks `deepseq` E.bracket
                 (takeMVar session_output_mvar)
                 (putMVar session_output_mvar )
                 (\ session_output -> do
@@ -1267,9 +1269,9 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
 
         Just contents -> do
             -- And now just simply output it...
-            let bs_chunks = bytestringChunk use_chunk_length $! contents
+            let bs_chunks = bytestringChunk use_chunk_length contents
             -- And send the chunks through while locking the output place....
-            writeContinuations bs_chunks stream_id effect
+            bs_chunks `deepseq` writeContinuations bs_chunks stream_id effect
             return ()
 
   where

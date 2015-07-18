@@ -43,6 +43,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , streamId_Pr
     , sessionId_Pr
     , fragmentDeliveryCallback_Ef
+    , priorityEffect_Ef
 
     , defaultEffects
     , coherentToAwareWorker
@@ -151,13 +152,20 @@ type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
 --   for example by reporting delivery details back to the worker
 data Effect = Effect {
   _fragmentDeliveryCallback_Ef :: Maybe FragmentDeliveryCallback
+
+  -- In certain circunstances a stream can use an internal priority,
+  -- not given by the browser and the protocol. Lowest values here are
+  -- given more priority. Default (when Nothing) is given zero. Cases
+  -- with negative numbers also work.
+  ,_priorityEffect_Ef :: Maybe Int
   }
 
 makeLenses ''Effect
 
 defaultEffects :: Effect
 defaultEffects = Effect {
-  _fragmentDeliveryCallback_Ef = Nothing
+  _fragmentDeliveryCallback_Ef = Nothing,
+  _priorityEffect_Ef = Nothing
    }
 
 
