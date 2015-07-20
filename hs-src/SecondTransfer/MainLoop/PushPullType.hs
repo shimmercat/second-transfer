@@ -1,12 +1,20 @@
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExistentialQuantification, TemplateHaskell #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
     PushAction
     ,PullAction
     ,Attendant
     ,CloseAction
+    ,AttendantCallbacks(..)
+
+    ,pushAction_AtC
+    ,pullAction_AtC
+    ,closeAction_AtC
+    ,bestEffortPullAction_AtC
     ) where
 
+
+import Control.Lens
 
 import qualified Data.ByteString              as B
 import qualified Data.ByteString.Lazy         as LB
@@ -18,6 +26,12 @@ import qualified Data.ByteString.Lazy         as LB
 --   HTTP/2's normal termination can be observed at a higher level when a
 --   GO_AWAY frame is seen.
 type PushAction  = LB.ByteString -> IO ()
+
+-- | Callback type to pull data from a channel in a best-effort basis.
+--   When the first argument is True, the data-providing backend can
+--   block if the input buffers are empty and await for new data.
+--   Otherwise, it will return immediately with an empty ByteString
+type BestEffortPullAction = Bool -> IO B.ByteString
 
 -- | Callback type to pull data from a channel. The same
 --   as to PushAction applies to exceptions thrown from
@@ -32,6 +46,16 @@ type PullAction  = Int -> IO B.ByteString
 --   also, for example, if the connection to the remote peer
 --   is severed suddenly.
 type CloseAction = IO ()
+
+
+data AttendantCallbacks = AttendantCallbacks {
+    _pushAction_AtC               :: PushAction,
+    _pullAction_AtC               :: PullAction,
+    _bestEffortPullAction_AtC     :: BestEffortPullAction,
+    _closeAction_AtC              :: CloseAction
+    }
+
+makeLenses ''AttendantCallbacks
 
 -- | A function which takes three arguments: the first one says
 --   how to send data (on a socket or similar transport), and the second one how
@@ -50,4 +74,4 @@ type CloseAction = IO ()
 --   This library supplies two of such Attendant factories,
 --   'SecondTransfer.Http1.http11Attendant' for
 --   HTTP 1.1 sessions, and 'SecondTransfer.Http2.http2Attendant' for HTTP/2 sessions.
-type Attendant = PushAction -> PullAction -> CloseAction -> IO ()
+type Attendant = AttendantCallbacks -> IO ()

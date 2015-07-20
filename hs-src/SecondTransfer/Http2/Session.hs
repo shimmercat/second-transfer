@@ -379,7 +379,7 @@ sessionInputThread  = do
     case input of
 
         FirstFrame_SIC (NH2.Frame
-            (NH2.FrameHeader _ 1 null_stream_id ) _ )| NH2.toStreamIdentifier 0 == null_stream_id  -> do
+            (NH2.FrameHeader _ 1 null_stream_id ) _ )| 0 == null_stream_id  -> do
             -- This is a SETTINGS ACK frame, which is okej to have,
             -- do nothing here
             continue
@@ -388,7 +388,7 @@ sessionInputThread  = do
             (NH2.Frame
                 (NH2.FrameHeader _ 0 null_stream_id )
                 (NH2.SettingsFrame settings_list)
-            ) | NH2.toStreamIdentifier 0 == null_stream_id  -> do
+            ) | 0 == null_stream_id  -> do
             -- Good, handle
             handleSettingsFrame settings_list
             continue
@@ -585,7 +585,7 @@ sessionInputThread  = do
           -> unlessReceivingHeaders $ do
             -- So I got data to process
             -- TODO: Handle end of stream
-            let stream_id = NH2.fromStreamIdentifier nh2_stream_id
+            let stream_id = nh2_stream_id
             -- TODO: Handle the cases where the stream_id doesn't match an already existent
             -- stream. In such cases it is justified to reset the connection with a  protocol_error.
 
@@ -612,7 +612,7 @@ sessionInputThread  = do
             sendOutFrame
                 (NH2.EncodeInfo
                     NH2.defaultFlags
-                    (NH2.toStreamIdentifier 0)
+                    0
                     Nothing
                 )
                 (NH2.WindowUpdateFrame
@@ -638,7 +638,7 @@ sessionInputThread  = do
             sendOutFrame
                 (NH2.EncodeInfo
                     (NH2.setAck NH2.defaultFlags)
-                    (NH2.toStreamIdentifier 0)
+                    0
                     Nothing
                 )
                 (NH2.PingFrame somebytes)
@@ -683,8 +683,9 @@ sessionInputThread  = do
         sendOutFrame
             (NH2.EncodeInfo
                 (NH2.setAck NH2.defaultFlags)
-                (NH2.toStreamIdentifier 0)
-                Nothing )
+                0
+                Nothing
+            )
             (NH2.SettingsFrame [])
 
 
@@ -767,11 +768,11 @@ closeConnectionBecauseIsInvalid error_code = do
     sendOutFrame
         (NH2.EncodeInfo
             NH2.defaultFlags
-            (NH2.toStreamIdentifier 0)
+            0
             Nothing
         )
         (NH2.GoAwayFrame
-            (NH2.toStreamIdentifier last_good_stream)
+            last_good_stream
             error_code
             ""
         )
@@ -1089,9 +1090,9 @@ getHeaderBytes global_stream_id = do
 
 isAboutHeaders :: InputFrame -> Maybe (GlobalStreamId, B.ByteString)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame _ block_fragment   ) )
-    = Just (NH2.fromStreamIdentifier stream_id, block_fragment)
+    = Just (stream_id, block_fragment)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.ContinuationFrame block_fragment) )
-    = Just (NH2.fromStreamIdentifier stream_id, block_fragment)
+    = Just (stream_id, block_fragment)
 isAboutHeaders _
     = Nothing
 
@@ -1106,7 +1107,7 @@ frameEndsHeaders (NH2.Frame (NH2.FrameHeader _ flags _) _) = NH2.testEndHeader f
 
 
 streamIdFromFrame :: InputFrame -> GlobalStreamId
-streamIdFromFrame (NH2.Frame (NH2.FrameHeader _ _ stream_id) _) = NH2.fromStreamIdentifier stream_id
+streamIdFromFrame (NH2.Frame (NH2.FrameHeader _ _ stream_id) _) = stream_id
 
 
 -- TODO: Have different size for the headers..... just now going with a default size of 16 k...
@@ -1179,7 +1180,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
     writeIndividualHeaderFrames session_output stream_id (last_fragment:[]) is_first effect =
         writeChan session_output $ Right ( NH2.EncodeInfo {
             NH2.encodeFlags     = NH2.setEndHeader NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
+            ,NH2.encodeStreamId = stream_id
             ,NH2.encodePadding  = Nothing },
             (if is_first then NH2.HeadersFrame Nothing last_fragment else  NH2.ContinuationFrame last_fragment),
             effect
@@ -1187,7 +1188,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
     writeIndividualHeaderFrames session_output stream_id  (fragment:xs) is_first effect = do
         writeChan session_output $ Right ( NH2.EncodeInfo {
             NH2.encodeFlags     = NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
+            ,NH2.encodeStreamId = stream_id
             ,NH2.encodePadding  = Nothing },
             (if is_first then NH2.HeadersFrame Nothing fragment else  NH2.ContinuationFrame fragment),
             effect
@@ -1205,10 +1206,10 @@ headersOutputThread input_chan session_output_mvar = forever $ do
     writePushPromiseFrames session_output parent_stream_id child_stream_id (last_fragment:[]) is_first effect =
         writeChan session_output $ Right ( NH2.EncodeInfo {
             NH2.encodeFlags     = NH2.setEndHeader NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier parent_stream_id
+            ,NH2.encodeStreamId = parent_stream_id
             ,NH2.encodePadding  = Nothing },
             (if is_first
-                then NH2.PushPromiseFrame (NH2.toStreamIdentifier child_stream_id) last_fragment
+                then NH2.PushPromiseFrame child_stream_id last_fragment
                 else NH2.ContinuationFrame last_fragment
             ),
             effect
@@ -1216,10 +1217,10 @@ headersOutputThread input_chan session_output_mvar = forever $ do
     writePushPromiseFrames session_output parent_stream_id child_stream_id  (fragment:xs) is_first effect = do
         writeChan session_output $ Right ( NH2.EncodeInfo {
             NH2.encodeFlags     = NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier parent_stream_id
+            ,NH2.encodeStreamId = parent_stream_id
             ,NH2.encodePadding  = Nothing },
             (if is_first
-                then NH2.PushPromiseFrame (NH2.toStreamIdentifier child_stream_id) fragment
+                then NH2.PushPromiseFrame child_stream_id fragment
                 else  NH2.ContinuationFrame fragment
             ),
             effect
@@ -1258,7 +1259,7 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
                            -- Write an empty data-frame with the right flags
                            writeChan session_output $ Right ( NH2.EncodeInfo {
                                  NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
-                                ,NH2.encodeStreamId  = NH2.toStreamIdentifier stream_id
+                                ,NH2.encodeStreamId  = stream_id
                                 ,NH2.encodePadding   = Nothing },
                                 NH2.DataFrame "",
                                 effect
@@ -1287,7 +1288,7 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
                       (\ session_output -> writeChan session_output $ Right (
                            NH2.EncodeInfo {
                                NH2.encodeFlags     = NH2.defaultFlags
-                               ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
+                               ,NH2.encodeStreamId = stream_id
                                ,NH2.encodePadding  = Nothing
                                },
                            NH2.DataFrame fragment,

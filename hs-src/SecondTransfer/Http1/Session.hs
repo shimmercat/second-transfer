@@ -18,8 +18,8 @@ import           Data.Conduit.List                       (consume)
 -- import           Data.Monoid                            (mconcat, mappend)
 
 import           SecondTransfer.MainLoop.CoherentWorker
-import           SecondTransfer.MainLoop.PushPullType    (Attendant)
-import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag)
+import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag, sessionsConfig)
 
 -- Logging utilities
 import           System.Log.Logger
@@ -29,7 +29,6 @@ import           System.Clock
 import           SecondTransfer.Http1.Parse
 import           SecondTransfer.Exception                (IOProblem)
 import           SecondTransfer.Sessions.Config
-import           SecondTransfer.Sessions.Internal        (sessionsConfig)
 import qualified SecondTransfer.Utils.HTTPHeaders        as He
 
 -- import           Debug.Trace                             (traceShow)
@@ -38,14 +37,19 @@ import qualified SecondTransfer.Utils.HTTPHeaders        as He
 -- | Session attendant that speaks HTTP/1.1
 --
 http11Attendant :: SessionsContext -> AwareWorker -> Attendant
-http11Attendant sessions_context coherent_worker
-                push_action pull_action close_action
-    = do
+http11Attendant sessions_context coherent_worker attendant_callbacks
+    =
+    do
         new_session_tag <- acquireNewSessionTag sessions_context
         infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
         forkIO $ go new_session_tag (Just "") 1
         return ()
   where
+    push_action = attendant_callbacks ^. pushAction_AtC
+    -- pull_action = attendant_callbacks ^. pullAction_AtC
+    close_action = attendant_callbacks ^. closeAction_AtC
+    best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_AtC
+
     go :: Int -> Maybe B.ByteString -> Int -> IO ()
     go session_tag (Just leftovers) reuse_no = do
         infoM "Session.Session_HTTP11" $ "(Re)Using session with tag: " ++ (show session_tag)
@@ -62,13 +66,14 @@ http11Attendant sessions_context coherent_worker
             -- completion = addBytes parser $ traceShow ("At session " ++ (show session_tag) ++ " Received: " ++ (unpack bytes) ) bytes
         case completion of
 
-            MustContinue_H1PC new_parser -> do
+            MustContinue_H1PC new_parser ->
                 -- print "MustContinue_H1PC"
                 catch
                     (do
-                        new_bytes <- pull_action
-                        r <- add_data new_parser new_bytes session_tag reuse_no
-                        return r
+                        -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
+                        -- possible
+                        new_bytes <- best_effort_pull_action True
+                        add_data new_parser new_bytes session_tag reuse_no
                     )
                     ( (\ _e -> do
                         -- This is a pretty harmless condition that happens

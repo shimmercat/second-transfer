@@ -22,21 +22,21 @@ module SecondTransfer.Exception (
 
     -- * Internal exceptions
     ,HTTP2ProtocolException(..)
-    ) where 
+    ) where
 
 import           Control.Exception
 import           Data.Typeable
 
 
 
--- | Abstract exception. All HTTP/2 exceptions derive from here 
+-- | Abstract exception. All HTTP/2 exceptions derive from here
 data HTTP2SessionException = forall e . Exception e => HTTP2SessionException e
     deriving Typeable
 
 instance Show HTTP2SessionException where
     show (HTTP2SessionException e) = show e
 
-instance Exception HTTP2SessionException 
+instance Exception HTTP2SessionException
 
 convertHTTP2SessionExceptionToException :: Exception e => e -> SomeException
 convertHTTP2SessionExceptionToException = toException . HTTP2SessionException
@@ -76,7 +76,7 @@ getFramerExceptionFromException x = do
     cast a
 
 
--- | Thrown when the HTTP/2 connection prefix doesn't 
+-- | Thrown when the HTTP/2 connection prefix doesn't
 --   match the expected prefix.
 data BadPrefaceException = BadPrefaceException
     deriving (Typeable, Show)
@@ -106,14 +106,14 @@ getHTTP11ExceptionFromException x = do
     cast a
 
 -- | Abstract exception. It is an error if an exception of this type bubbles
---   to this library, but we will do our best to handle it gracefully. 
+--   to this library, but we will do our best to handle it gracefully.
 --   All internal error precursors at the workers can thus inherit from here
 --   to have a fallback option in case they forget to handle the error.
 --   This exception inherits from HTTP11Exception
 data HTTP500PrecursorException = forall e . Exception e => HTTP500PrecursorException e
     deriving Typeable
 
-instance Show HTTP500PrecursorException where 
+instance Show HTTP500PrecursorException where
     show (HTTP500PrecursorException e) = show e
 
 -- | Use the traditional idiom if you need to derive from 'HTTP500PrecursorException',
@@ -128,57 +128,57 @@ getHTTP500PrecursorExceptionFromException x = do
     HTTP500PrecursorException a <- fromException x
     cast a
 
--- Here we say how we go with these exceptions.... 
+-- Here we say how we go with these exceptions....
 instance Exception HTTP500PrecursorException where
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
 
 -- | Thrown with HTTP/1.1 over HTTP/1.1 sessions when the response body
 --   or the request body doesn't include a Content-Length header field,
---   given that should have included it 
-data ContentLengthMissingException = ContentLengthMissingException 
+--   given that should have included it
+data ContentLengthMissingException = ContentLengthMissingException
     deriving (Typeable, Show)
 
-instance Exception ContentLengthMissingException where 
+instance Exception ContentLengthMissingException where
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
 
-data HTTP11SyntaxException = HTTP11SyntaxException String 
+data HTTP11SyntaxException = HTTP11SyntaxException String
     deriving (Typeable, Show)
 
-instance Exception HTTP11SyntaxException where 
+instance Exception HTTP11SyntaxException where
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
 
 -- | Throw exceptions derived from this (e.g, `GenericIOProblem` below)
---   to have the HTTP/2 session to terminate gracefully. 
-data IOProblem = forall e . Exception e => IOProblem e 
+--   to have the HTTP/2 session to terminate gracefully.
+data IOProblem = forall e . Exception e => IOProblem e
     deriving Typeable
 
 instance  Show IOProblem where
-    show (IOProblem e) = show e 
+    show (IOProblem e) = show e
 
-instance Exception IOProblem 
+instance Exception IOProblem
 
 -- | A concrete case of the above exception. Throw one of this
---   if you don't want to implement your own type. Use 
+--   if you don't want to implement your own type. Use
 --   `IOProblem` in catch signatures.
 data GenericIOProblem = GenericIOProblem
     deriving (Show, Typeable)
 
 
-instance Exception GenericIOProblem where 
+instance Exception GenericIOProblem where
     toException = toException . IOProblem
-    fromException x = do 
-        IOProblem a <- fromException x 
+    fromException x = do
+        IOProblem a <- fromException x
         cast a
 
 
--- | This exception will be raised inside a `CoherentWorker` when the underlying 
+-- | This exception will be raised inside a `CoherentWorker` when the underlying
 -- stream is cancelled (STREAM_RESET in HTTP\/2). Do any necessary cleanup
 -- in a handler, or simply use the fact that the exception is asynchronously
--- delivered 
--- to your CoherentWorker Haskell thread, giving you an opportunity to 
+-- delivered
+-- to your CoherentWorker Haskell thread, giving you an opportunity to
 -- interrupt any blocked operations.
 data StreamCancelledException = StreamCancelledException
     deriving (Show, Typeable)

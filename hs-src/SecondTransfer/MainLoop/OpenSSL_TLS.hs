@@ -70,7 +70,6 @@ data Wired_t
 type Connection_Ptr = Ptr Connection_t
 type Wired_Ptr = Ptr Wired_t
 
-
 -- Actually, this makes a listener for new connections
 -- connection_t* make_connection(char* certificate_filename, char* privkey_filename, char* hostname, int portno,
 --     char* protocol_list, int protocol_list_len)
@@ -100,6 +99,9 @@ foreign import ccall "send_data" sendData :: Wired_Ptr -> Ptr CChar -> CInt -> I
 
 -- int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_recvd);
 foreign import ccall "recv_data" recvData :: Wired_Ptr -> Ptr CChar -> CInt -> Ptr CInt -> IO CInt
+
+-- int recv_data_best_effort(wired_session_t* ws, char* inbuffer, int buffer_size, int can_wait, int* data_recvd);
+foreign import ccall "recv_data_best_effort" recvDataBestEffort :: Wired_Ptr -> Ptr CChar -> CInt -> CInt -> Ptr CInt -> IO CInt
 
 -- int get_selected_protocol(wired_session_t* ws){ return ws->protocol_index; }
 foreign import ccall "get_selected_protocol" getSelectedProtocol :: Wired_Ptr -> IO CInt
@@ -156,11 +158,8 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
                 pchar
                 (fromIntegral len)
 
-        if connection_ptr == nullPtr
-          then do
+        when (connection_ptr == nullPtr) $
             throwIO $ TLSLayerGenericProblem "Could not create listening end"
-          else do
-            return ()
 
         forever $ do
             either_wired_ptr <- alloca $ \ wired_ptr_ptr ->
@@ -180,18 +179,18 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
             case either_wired_ptr of
 
 -- Disable a warning
-                Left _msg -> do
+                Left _msg ->
                     return ()
 
                 Right wired_ptr -> do
 
-                    (push_action, pull_action, close_action) <- provideActions wired_ptr
+                    attendant_callbacks <- provideActions wired_ptr
 
                     use_protocol <- getSelectedProtocol wired_ptr
 
                     let
                         maybe_session_attendant = case fromIntegral use_protocol of
-                            n | (use_protocol >= 0)  -> Just $ snd $ attendants !! n
+                            n | use_protocol >= 0  -> Just $ snd $ attendants !! n
                               -- Or just select the first one
                               | otherwise            -> Just . snd . head $ attendants
 
@@ -199,8 +198,8 @@ tlsServeWithALPN certificate_filename key_filename interface_name attendants int
 
                         Just session_attendant ->
                             E.catch
-                                (session_attendant push_action pull_action close_action)
-                                ((\ e -> do
+                                (session_attendant attendant_callbacks)
+                                ((\ e ->
                                     throwIO e
                                 )::TLSLayerGenericProblem -> IO () )
 
@@ -255,31 +254,31 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
                                                 Just _ ->
                                                     return Interrupted
 
-                                        | re == badHappened  -> return $ Left_I "A wait for connection failed"
+                                        | re == badHappened  -> return $ Left_I ("A wait for connection failed" :: String)
                             r
                     in tryOnce
 
                 -- With the potentially obtained SSL session do...
                 case either_wired_ptr of
 
-                    Left_I _msg -> do
+                    Left_I _msg ->
                         -- // .. //
                         recursion
 
                     Right_I wired_ptr -> do
-                        (push_action, pull_action, close_action) <- provideActions wired_ptr
+                        attendant_callbacks <- provideActions wired_ptr
 
                         use_protocol <- getSelectedProtocol wired_ptr
 
                         let
                             maybe_session_attendant = case fromIntegral use_protocol of
-                                n | (use_protocol >= 0)  -> Just $ snd $ attendants !! n
+                                n | use_protocol >= 0  -> Just $ snd $ attendants !! n
                                   | otherwise            -> Just . snd . head $ attendants
 
                         case maybe_session_attendant of
 
                             Just session_attendant ->
-                                session_attendant push_action pull_action close_action
+                                session_attendant attendant_callbacks
 
                             Nothing ->
                                 return ()
@@ -287,7 +286,7 @@ tlsServeWithALPNAndFinishOnRequest certificate_filename key_filename interface_n
                         -- // .. //
                         recursion
 
-                    Interrupted -> do
+                    Interrupted ->
                         closeConnection connection_ptr
 
         -- Start the loop defined above...
@@ -301,7 +300,8 @@ defaultWaitTime = 200000
 smallWaitTime :: CInt
 smallWaitTime = 50000
 
-provideActions :: Wired_Ptr -> IO (LB.ByteString -> IO (), IO B.ByteString, IO ())
+-- provideActions :: Wired_Ptr -> IO (LB.ByteString -> IO (), Int -> IO B.ByteString, IO ())
+provideActions :: Wired_Ptr -> IO AttendantCallbacks
 provideActions wired_ptr = do
     already_closed_mvar <- newMVar False
     let
@@ -320,19 +320,41 @@ provideActions wired_ptr = do
                           | r == badHappened     ->
                                 throwIO $ TLSLayerGenericProblem "Could not send data"
 
-        pullAction :: IO B.ByteString
-        pullAction =  do
+        pullAction :: Int -> IO B.ByteString
+        pullAction bytes_to_get =  do
             already_closed <- readMVar already_closed_mvar
             if already_closed
-              then do
+              then
+                throwIO $ TLSLayerGenericProblem "Tried to receive on closed handle"
+              else
+                allocaBytes bytes_to_get $ \ pcharbuffer ->
+                    alloca $ \ data_recvd_ptr -> do
+                        result <- recvData wired_ptr pcharbuffer (fromIntegral bytes_to_get) data_recvd_ptr
+                        recvd_bytes <- case result of
+                            r | r == allOk       -> peek data_recvd_ptr
+                              | r == badHappened ->
+                                    throwIO $ TLSLayerGenericProblem "Could not receive data"
+
+                        B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
+
+        bestEffortPullAction :: Bool -> IO B.ByteString
+        bestEffortPullAction can_wait =  do
+            already_closed <- readMVar already_closed_mvar
+            if already_closed
+              then
                 throwIO $ TLSLayerGenericProblem "Tried to receive on closed handle"
               else
                 allocaBytes useBufferSize $ \ pcharbuffer ->
                     alloca $ \ data_recvd_ptr -> do
-                        result <- recvData wired_ptr pcharbuffer (fromIntegral useBufferSize) data_recvd_ptr
+                        result <- recvDataBestEffort
+                                    wired_ptr
+                                    pcharbuffer
+                                    (fromIntegral useBufferSize)
+                                    (fromIntegral . fromEnum $ can_wait)
+                                    data_recvd_ptr
                         recvd_bytes <- case result of
                             r | r == allOk       -> peek data_recvd_ptr
-                              | r == badHappened -> do
+                              | r == badHappened ->
                                     throwIO $ TLSLayerGenericProblem "Could not receive data"
 
                         B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
@@ -341,11 +363,12 @@ provideActions wired_ptr = do
         -- Ensure that the socket and the struct are only closed once
         closeAction = do
             b <- readMVar already_closed_mvar
-            if not b
-              then do
+            unless b $  do
                 modifyMVar_ already_closed_mvar (\ _ -> return True)
                 disposeWiredSession wired_ptr
-                -- debugM "OpenSSL" "dispose clalled"
-              else
-                return ()
-    return (pushAction, pullAction, closeAction)
+    return  AttendantCallbacks {
+        _pushAction_AtC = pushAction,
+        _pullAction_AtC = pullAction,
+        _closeAction_AtC = closeAction,
+        _bestEffortPullAction_AtC = bestEffortPullAction
+    }

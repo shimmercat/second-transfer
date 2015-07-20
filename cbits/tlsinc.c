@@ -58,6 +58,7 @@ void close_connection(connection_t* conn);
 int wait_for_connection(connection_t* conn, int microseconds, wired_session_t** wired_session);
 int send_data(wired_session_t* ws, char* buffer, int buffer_size);
 int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_recvd);
+int recv_data_best_effort(wired_session_t* ws, char* inbuffer, int buffer_size, int can_wait, int* data_recvd);
 int get_selected_protocol(wired_session_t* ws){ return ws->protocol_index; }
 void dispose_wired_session(wired_session_t* ws);
 static int thread_setup(void);
@@ -720,28 +721,60 @@ int send_data(wired_session_t* ws, char* buffer, int buffer_size)
     }
 }
 
+// Now this function does a very good effort to get as much data as requested, and it
+// doesn't return until then. That works well for HTTP/2 sessions which are almost
+// never closed naturally. It is however more tricky for EOF cases....
 int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_recvd)
 {
     int received=0, count = 0;
-    char buffer[1024];
 
     // printf("Recvd entered\n");
 
-    if (ws)
+    while ( count < buffer_size )
     {
-        received = SSL_read (ws->sslHandle, inbuffer, buffer_size);
+        if (ws)
+        {
+            received = SSL_read (ws->sslHandle, inbuffer+count, buffer_size - count );
+        }
+        if ( received <= 0 )
+        {
+            ERR_print_errors_fp (stderr);
+            return BAD_HAPPENED;
+        } else
+        {
+            // Continue reading
+            count += received ;
+        }
+    }
+
+    // printf("Recvd exited\n");
+    *data_recvd=count ;
+    return ALL_OK;
+}
+
+
+int recv_data_best_effort(wired_session_t* ws, char* inbuffer, int buffer_size, int can_wait, int* data_recvd)
+{
+    int received=0, count = 0;
+
+    if (ws && ( can_wait || SSL_pending(ws->sslHandle) ) )
+    {
+        received = SSL_read (ws->sslHandle, inbuffer+count, buffer_size - count );
     }
     if ( received <= 0 )
     {
         ERR_print_errors_fp (stderr);
         return BAD_HAPPENED;
+    } else
+    {
+        // Continue reading
+        count += received ;
     }
-    *data_recvd = received ;
 
-    // printf("Recvd exited\n");
-
+    *data_recvd=count ;
     return ALL_OK;
 }
+
 
 #define MUTEX_TYPE       pthread_mutex_t
 #define MUTEX_SETUP(x)   pthread_mutex_init(&(x), NULL)

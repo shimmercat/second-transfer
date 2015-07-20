@@ -2,6 +2,6 @@
 
 module SecondTransfer.Http1(
     http11Attendant
-    ) where 
+    ) where
 
 import SecondTransfer.Http1.Session         (http11Attendant)
