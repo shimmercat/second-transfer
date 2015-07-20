@@ -19,6 +19,8 @@
 #include <bits/sigthread.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <netinet/tcp.h>
+
 
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
@@ -102,6 +104,7 @@ static int tcpStart (char* hostname, int portno, int* errorh)
     handle = socket (AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(handle, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
     if (handle == -1)
     {
         perror ("Socket could not be created");
@@ -110,29 +113,46 @@ static int tcpStart (char* hostname, int portno, int* errorh)
     }
     else
     {
-        server.sin_family = AF_INET;
-        server.sin_port = htons (portno);
-        server.sin_addr = *((struct in_addr *) host->h_addr);
-        bzero (&(server.sin_zero), 8);
 
-        error = bind (handle, (struct sockaddr *) &server,
-                sizeof (struct sockaddr));
-        if (error == -1)
+        int flag = 1;
+        int result = setsockopt(handle,            /* socket affected */
+                                 IPPROTO_TCP,     /* set option at TCP level */
+                                 TCP_NODELAY,     /* name of option */
+                                 (char *) &flag,  /* the cast is historical
+                                                         cruft */
+                                 sizeof(int));    /* length of option value */
+        if (result < 0)
         {
-            perror ("Bind");
+            perror("Couldn't set TCP_NODELAY");
             handle = 0;
             *errorh = BAD_HAPPENED;
-        }
-        else
+        } else
         {
-            error = listen(handle, 5);
-            if ( error != 0 )
+            server.sin_family = AF_INET;
+            server.sin_port = htons (portno);
+            server.sin_addr = *((struct in_addr *) host->h_addr);
+            bzero (&(server.sin_zero), 8);
+
+            error = bind (handle, (struct sockaddr *) &server,
+                    sizeof (struct sockaddr));
+            if (error == -1)
             {
-                perror("Listen");
+                perror ("Bind");
                 handle = 0;
                 *errorh = BAD_HAPPENED;
             }
+            else
+            {
+                error = listen(handle, 5);
+                if ( error != 0 )
+                {
+                    perror("Listen");
+                    handle = 0;
+                    *errorh = BAD_HAPPENED;
+                }
+            }
         }
+
     }
 
     return handle;
@@ -605,6 +625,19 @@ int wait_for_connection(
     if (newsockfd < 0)
     {
         perror("ERROR on accept");
+        return BAD_HAPPENED;
+    }
+
+    int flag = 1;
+    int nresult =  setsockopt(newsockfd,            /* socket affected */
+                                 IPPROTO_TCP,     /* set option at TCP level */
+                                 TCP_NODELAY,     /* name of option */
+                                 (char *) &flag,  /* the cast is historical
+                                                         cruft */
+                                 sizeof(int));    /* length of option value */
+    if ( nresult < 0)
+    {
+        perror("Couldn't set TCP_NODELAY");
         return BAD_HAPPENED;
     }
 
