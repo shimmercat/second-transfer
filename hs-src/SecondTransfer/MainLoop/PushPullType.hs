@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, ExistentialQuantification #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
     PushAction
@@ -21,8 +21,10 @@ type PushAction  = LB.ByteString -> IO ()
 
 -- | Callback type to pull data from a channel. The same
 --   as to PushAction applies to exceptions thrown from
---   there.
-type PullAction  = IO  B.ByteString
+--   there. The first argument is the number of bytes to
+--   pull from the medium. Barring exceptions, we always
+--   know how many bytes we are expecting with HTTP/2.
+type PullAction  = Int -> IO B.ByteString
 
 -- | Callback that the session calls to realease resources
 --   associated with the channels. Take into account that your
