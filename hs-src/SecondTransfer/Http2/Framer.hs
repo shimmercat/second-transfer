@@ -16,6 +16,7 @@ module SecondTransfer.Http2.Framer (
 
 
 import           Control.Concurrent                     hiding (yield)
+import qualified Control.Concurrent                     as CC(yield)
 import qualified Control.Concurrent.MSem                as MS
 import           Control.Concurrent.STM.TMVar
 import qualified Control.Concurrent.STM                 as STM
@@ -23,7 +24,7 @@ import           Control.Exception
 import qualified Control.Exception                      as E
 import           Control.Lens                           (view, (^.) )
 import qualified Control.Lens                           as L
-import           Control.Monad                          (unless, when)
+import           Control.Monad                          (unless, when, replicateM_)
 import           Control.Monad.IO.Class                 (liftIO)
 import qualified Control.Monad.Catch                    as C
 import           Control.Monad.Trans.Class              (lift)
@@ -60,6 +61,8 @@ import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.Logging        (logWithExclusivity, logit)
 
+import           Debug.Trace                            (trace)
+
 #include "Logging.cpphs"
 
 
@@ -91,11 +94,13 @@ data NoHeadersInChannel = NoHeadersInChannel
 -- Maximum number of packets in the priority queue waiting for
 -- delivery. More than this, and I will simply block...
 maxPacketsInQueue :: Int
-maxPacketsInQueue = 1024
+maxPacketsInQueue = 32
 
 
------------------------------------v--priority --|-------v-ordinal
-newtype PrioPacket = PrioPacket ( (Int          ,        Int     ),  LB.ByteString)
+-----In this implementation, this  v- and this  v- member should not change during the lieftime
+----- of the stream.
+-----------------------------------v--priority, v-- stream_id ----|------v-ordinal
+newtype PrioPacket = PrioPacket ( (Int ,        Int,                     Int     ),  LB.ByteString)
                      deriving Show
 
 instance Eq PrioPacket where
@@ -481,7 +486,7 @@ outputGatherer session_output = do
                        stream_id = stream_idii
                        priority = fromMaybe stream_id $ ef ^. priorityEffect_Ef
 
-                   startStreamOutputQueueIfNotExists stream_id priority
+                   startStreamOutputQueueIfNotExists stream_id $ priority
 
                    stream2output_mvar <- view stream2outputBytes
                    lookup_result <- liftIO $ withMVar stream2output_mvar $ \ s2o -> H.lookup s2o stream_id
@@ -695,12 +700,12 @@ sendBytes bs = do
 -- There is one of these for each stream
 --
 flowControlOutput :: Int -> Int -> Int -> Int ->  LB.ByteString -> MVar FlowControlCommand -> MVar LB.ByteString ->  FramerSession ()
-flowControlOutput __stream_id priority capacity ordinal leftovers commands_chan bytes_chan =
+flowControlOutput stream_id priority capacity ordinal leftovers commands_chan bytes_chan =
     if leftovers == ""
       then do
         -- Get more data (possibly block waiting for it)
         bytes_to_send <- liftIO $ takeMVar bytes_chan
-        flowControlOutput __stream_id priority capacity ordinal  bytes_to_send commands_chan bytes_chan
+        flowControlOutput stream_id priority capacity ordinal  bytes_to_send commands_chan bytes_chan
       else do
         -- Length?
         let amount = fromIntegral  (LB.length leftovers - 9)
@@ -708,15 +713,16 @@ flowControlOutput __stream_id priority capacity ordinal leftovers commands_chan 
           then do
             -- Is
             -- I can send ... if no headers are in process....
-            withPrioritySend priority ordinal leftovers
-            flowControlOutput  __stream_id priority (capacity - amount) (ordinal+1) "" commands_chan bytes_chan
+            -- liftIO . logit $ "set-priority (stream_id, prio, ordinal) " `mappend` (pack . show) (__stream_id, priority, ordinal)
+            withPrioritySend priority stream_id ordinal leftovers
+            flowControlOutput  stream_id priority (capacity - amount) (ordinal+1) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead
             command <- liftIO $ takeMVar commands_chan
             case command of
                 AddBytes_FCM delta_cap ->
                     -- liftIO $ putStrLn $ "Flow control delta_cap stream " ++ (show stream_id)
-                    flowControlOutput __stream_id priority (capacity + delta_cap) ordinal leftovers commands_chan bytes_chan
+                    flowControlOutput stream_id priority (capacity + delta_cap) ordinal leftovers commands_chan bytes_chan
 
 
 releaseFramer :: FramerSession ()
@@ -728,11 +734,11 @@ releaseFramer =
 
 -- This prioritizes DATA packets, in some rudimentary way.
 -- This code will be replaced in due time for something compliant.
-withPrioritySend :: Int -> Int -> LB.ByteString -> FramerSession ()
-withPrioritySend priority packet_ordinal datum = do
+withPrioritySend :: Int -> Int -> Int -> LB.ByteString -> FramerSession ()
+withPrioritySend priority stream_id packet_ordinal datum = do
     PrioritySendState {_semToSend = s, _prioQ = pqm } <- view prioritySendState
     let
-        new_record = PrioPacket  ( (priority, packet_ordinal), datum)
+        new_record = PrioPacket  ( (priority, stream_id, packet_ordinal), datum)
     -- Now, for this to work, I need to have enough capacity to add something to the queue
     liftIO $ do
         -- We are using a semaphore to avoid overflowing this place. Notice that the flow
@@ -750,7 +756,7 @@ sendReordering = do
     PrioritySendState {_semToSend = s, _prioQ = pqm } <- view prioritySendState
     no_headers <- view noHeadersInChannel
     -- Get a packet, if possible, or wait for it
-    PrioPacket ( (priority_, packed_ordinal_), datum) <- liftIO . STM.atomically $ do
+    PrioPacket ( (priority_, stream_id, packed_ordinal_), datum) <- liftIO . STM.atomically $ do
         pq <- takeTMVar pqm
         if PQ.null pq
           then STM.retry
@@ -759,6 +765,7 @@ sendReordering = do
               (record, thinner) =  PQ.deleteFindMin pq
             putTMVar pqm thinner
             return record
+    -- liftIO . logit $ "prio-send (prio,stream_id, ordinal) " `mappend` (pack . show) (priority, stream_id, packed_ordinal_)
     -- Since I got something to send, I can let one of the guys to put more stuff
     liftIO $ MS.signal s
     -- Now we do the tries and locks for headers
@@ -766,5 +773,11 @@ sendReordering = do
         (liftIO $ takeMVar no_headers)
         (\ _ -> liftIO $ putMVar no_headers NoHeadersInChannel)
         (\ _ -> sendBytes datum )
+
+    -- Sleep for a little bit, we dont' want too many frames
+    -- here too fast. BIG TODO: We need a better way to handle this
+    liftIO $ replicateM_ 10 CC.yield
+    --liftIO $ threadDelay 100
+
     -- And tail-recurse
     sendReordering

@@ -949,7 +949,7 @@ workerThread req aware_worker =
                 pushed_data_and_conclusion = pushed_stream ^. dataAndConclusion_Psh
 
             child_stream_id <- liftIO $ modifyMVar next_push_stream_mvar
-                                     $ (\ x -> return (x+1,x) )
+                                     $ (\ x -> return (x+2,x) )
 
             liftIO . writeChan headers_output . PushPromise_HM $
                 (stream_id, child_stream_id, request_headers, effects)
