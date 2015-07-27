@@ -63,6 +63,9 @@ int get_selected_protocol(wired_session_t* ws){ return ws->protocol_index; }
 void dispose_wired_session(wired_session_t* ws);
 static int thread_setup(void);
 
+// Preprocessor flag: when 1, we will trace ALPN info
+#define TRACE_ALPN_NEGOTIATION 0
+
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -319,24 +322,32 @@ static int protocol_select (
     connection_t* conn = (connection_t*) arg;
     static char output[64];
 
-    char* incursor = (char*) in;
 
-    while (incursor < (char*)in + inlen )
+#if TRACE_ALPN_NEGOTIATION
+    printf("protocol check starts, offered %d bytes for protocols ^^^^^^^^^^^^^ \n", inlen);
+    int first_run = 1;
+#endif
+    char* stored_cursor = conn->protocol_list;
+
+    while( stored_cursor < conn->protocol_list + conn->protocol_list_length)
     {
-        // Got a protocol.... can I satisfy it?
-        char sublen = *incursor;
-        //printf("offered prot %.*s \n", sublen, incursor+1);
-
-        char* stored_cursor = conn->protocol_list;
+        char* incursor = (char*) in;
         int sto_protocol = 0;
+        char sublen2 = *stored_cursor;
 
-        while( stored_cursor < conn->protocol_list + conn->protocol_list_length)
+        while (incursor < (char*)in + inlen )
         {
-            char sublen2 = *stored_cursor;
+            // Got a protocol.... can I satisfy it?
+            char sublen = *incursor;
+
+#if TRACE_ALPN_NEGOTIATION
+            if (first_run)
+                printf("offered prot %.*s \n", sublen, incursor+1);
+#endif
 
             if (sublen != sublen2)
             {
-
+                // No match, just continue
             } else {
                 int cmpresult = strncmp( incursor + 1, stored_cursor + 1, sublen);
                 if (cmpresult == 0)
@@ -344,19 +355,29 @@ static int protocol_select (
                     // They are equal, choose this one...
                     strncpy( output, stored_cursor+1, sublen);
                     *outlen = sublen;
-                    *out = output;
-
-
+                    *out = (unsigned char*)output;
+#if TRACE_ALPN_NEGOTIATION
+                    printf("protocol check ends by match vvvvvvvvvvv \n");
+#endif
                     return SSL_TLSEXT_ERR_OK;
                 }
             }
-            sto_protocol += 1;
-            stored_cursor += (1+sublen2);
+
+            incursor += (1+sublen);
         }
 
-        incursor += (1+sublen);
+#if TRACE_ALPN_NEGOTIATION
+        first_run = 0;
+#endif
+
+        sto_protocol += 1;
+        stored_cursor += (1+sublen2);
+
     }
 
+#if TRACE_ALPN_NEGOTIATION
+    printf("protocol check ends without match vvvvvvvvvvv \n");
+#endif
     // I think this is what should be returned
     return -1;
 }
