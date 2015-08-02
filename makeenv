@@ -1,10 +1,6 @@
-export PATH=/home/alcides/.cabal/bin:$PATH
-export HALCYON_GHC_VERSION=7.10.1
-export HALCYON_CABAL_VERSION=1.22.4.0
-eval "$( /app/halcyon/halcyon paths )"
 THIS_DIR=$(dirname `readlink -f ${BASH_SOURCE[0]}`)
-export KEL_DATA_DIR=$THIS_DIR/kel-data-dir/
 # Need to be sure I can access the right openssl library
 export LD_LIBRARY_PATH=/opt/openssl-1.0.2/lib:$LD_LIBRARY_PATH
-export PATH=$THIS_DIR/.cabal-sandbox/bin:$PATH
+# See if you can do this more specific
+export PATH=$(stack path --local-install-root)/bin:$(stack path --bin-path):$PATH
 export PATH=/opt/openssl-1.0.2/bin:$PATH

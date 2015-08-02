@@ -1,14 +1,14 @@
 {-# LANGUAGE OverloadedStrings, Rank2Types #-}
 {-|
 
-Utilities for working with headers. 
+Utilities for working with headers.
 
 -}
 module SecondTransfer.Utils.HTTPHeaders (
     -- * Simple manipulation
-    -- 
+    --
     -- | These transformations are simple enough that don't require
-    --   going away from the list representation (see type `Headers`) 
+    --   going away from the list representation (see type `Headers`)
     lowercaseHeaders
     ,headersAreLowercase
     ,headersAreLowercaseAtHeaderEditor
@@ -16,22 +16,22 @@ module SecondTransfer.Utils.HTTPHeaders (
     -- * Transformations based on maps
     --
     -- | Many operations benefit
-    --   from transforming the list to a map with custom sorting and 
+    --   from transforming the list to a map with custom sorting and
     --   doing a set of operations on that representation.
     --
     ,HeaderEditor
     ,Headers
     -- ** Introducing and removing the `HeaderEditor`
-    ,fromList 
-    ,toList 
+    ,fromList
+    ,toList
     -- ** Access to a particular header
     ,headerLens
     ,replaceHeaderValue
     -- ** HTTP utilities
     ,replaceHostByAuthority
     ,introduceDateHeader
-    ) where 
- 
+    ) where
+
 import qualified Control.Lens                           as L
 import           Control.Lens                           ( (^.) )
 
@@ -57,86 +57,86 @@ import           Data.Monoid
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 
 -- Why having a headers library? The one at Network.HTTP.Headers works
--- with Strings and is not very friendly to custom headers. 
+-- with Strings and is not very friendly to custom headers.
 -- This is a very basic, lightweight normalizer.
 
--- | HTTP headers are case-insensitive, so we can use lowercase versions 
+-- | HTTP headers are case-insensitive, so we can use lowercase versions
 -- everywhere
 lowercaseHeaders :: Headers -> Headers
 lowercaseHeaders = map (\(h,v) -> (low h, v))
-  where 
+  where
     low = encodeUtf8 . toLower . decodeUtf8
 
 
 -- | Checks that headers are lowercase
-headersAreLowercase :: Headers -> Bool 
-headersAreLowercase headers = 
+headersAreLowercase :: Headers -> Bool
+headersAreLowercase headers =
     foldl
         (\ prev (hn, _) -> (flip (&&)) (aTitleIsLowercase  hn) $! prev)
         True
         headers
 
-headersAreLowercaseAtHeaderEditor :: HeaderEditor -> Bool 
-headersAreLowercaseAtHeaderEditor header_editor = 
+headersAreLowercaseAtHeaderEditor :: HeaderEditor -> Bool
+headersAreLowercaseAtHeaderEditor header_editor =
     Ms.foldlWithKey'
         (\ prev hn _ -> (flip (&&)) (aTitleIsLowercase . toFlatBs $ hn) $! prev)
         True
         (innerMap header_editor)
 
-aTitleIsLowercase :: B.ByteString -> Bool 
+aTitleIsLowercase :: B.ByteString -> Bool
 aTitleIsLowercase a_title = not . T.any isUpper . decodeUtf8 $ a_title
 
 
 -- | Looks for a given header
 fetchHeader :: Headers -> B.ByteString -> Maybe B.ByteString
-fetchHeader headers header_name = 
-    snd 
-      <$> 
-    find ( \ x -> fst x == header_name ) headers 
+fetchHeader headers header_name =
+    snd
+      <$>
+    find ( \ x -> fst x == header_name ) headers
 
 
 newtype Autosorted = Autosorted { toFlatBs :: B.ByteString }
   deriving Eq
 
 
-colon :: Word8 
+colon :: Word8
 colon = fromIntegral . fromEnum $ ':'
 
 
-instance Ord Autosorted where 
-  compare (Autosorted a) (Autosorted b) | (B.head a) == colon, (B.head b) /= colon = LT 
-  compare (Autosorted a) (Autosorted b) | (B.head a) /= colon, (B.head b) == colon = GT 
+instance Ord Autosorted where
+  compare (Autosorted a) (Autosorted b) | (B.head a) == colon, (B.head b) /= colon = LT
+  compare (Autosorted a) (Autosorted b) | (B.head a) /= colon, (B.head b) == colon = GT
   compare (Autosorted a) (Autosorted b)  = compare a b
 
 
--- | Abstract data-type. Use `fromList` to get one of these from `Headers`. 
+-- | Abstract data-type. Use `fromList` to get one of these from `Headers`.
 -- The underlying representation admits better asymptotics.
 newtype HeaderEditor = HeaderEditor { innerMap :: Ms.Map Autosorted B.ByteString }
 
 -- This is a pretty uninteresting instance
-instance Monoid HeaderEditor where 
+instance Monoid HeaderEditor where
     mempty = HeaderEditor mempty
     mappend (HeaderEditor x) (HeaderEditor y) = HeaderEditor (x `mappend` y)
 
--- | /O(n*log n)/ Builds the editor from a list. 
-fromList :: Headers -> HeaderEditor 
+-- | /O(n*log n)/ Builds the editor from a list.
+fromList :: Headers -> HeaderEditor
 fromList = HeaderEditor . Ms.fromList . map (\(hn, hv) -> (Autosorted hn, hv))
 
 -- | /O(n)/ Takes the HeaderEditor back to Headers
-toList :: HeaderEditor -> Headers 
+toList :: HeaderEditor -> Headers
 toList (HeaderEditor m) = [ (toFlatBs x, v) | (x,v) <- Ms.toList m ]
 
 
--- | replaceHeaderValue headers header_name maybe_header_value looks for 
---   header_name. If header_name is found and maybe_header_value is nothing, it 
+-- | replaceHeaderValue headers header_name maybe_header_value looks for
+--   header_name. If header_name is found and maybe_header_value is nothing, it
 --   returns a new headers list with the header deleted. If header_name is found
---   and header_value is Just new_value, it returns a new list with the header 
+--   and header_value is Just new_value, it returns a new list with the header
 --   containing the new value. If header_name is not in headers and maybe_header_value
 --   is Nothing, it returns the original headers list. If header_name is not in headers
 --   and maybe_header_value is Just new_value, it returns a new list where the last element
 --   is (header_name, new_value)
 replaceHeaderValue :: HeaderEditor -> B.ByteString -> Maybe B.ByteString -> HeaderEditor
-replaceHeaderValue (HeaderEditor m) header_name maybe_header_value = 
+replaceHeaderValue (HeaderEditor m) header_name maybe_header_value =
     HeaderEditor $ Ms.alter (const maybe_header_value) (Autosorted header_name) m
 
 
@@ -144,43 +144,43 @@ replaceHeaderValue (HeaderEditor m) header_name maybe_header_value =
 --   and you can use it then to add, alter and remove headers.
 --   It uses the same semantics than `replaceHeaderValue`
 headerLens :: B.ByteString -> L.Lens' HeaderEditor (Maybe B.ByteString)
-headerLens name = 
-    L.lens 
-        (Ms.lookup hname . innerMap ) 
+headerLens name =
+    L.lens
+        (Ms.lookup hname . innerMap )
         (\(HeaderEditor hs) mhv -> HeaderEditor $ Ms.alter (const mhv) hname hs)
-  where 
+  where
     hname = Autosorted name
 
--- | Replaces a \"host\" HTTP\/1.1 header by an ":authority" HTTP\/2 
+-- | Replaces a \"host\" HTTP\/1.1 header by an ":authority" HTTP\/2
 -- header.
 -- The list is expected to be already in lowercase, so nothing will happen if there
 -- the header name portion is \"Host\" instead of \"host\".
 --
--- Notice that having a "Host" header in an HTTP\/2 message is perfectly valid in certain 
+-- Notice that having a "Host" header in an HTTP\/2 message is perfectly valid in certain
 -- circumstances, check <https://http2.github.io/http2-spec/#rfc.section.8.1.2.3 Section 8.1.2.3>
 -- of the spec for details.
 replaceHostByAuthority :: HeaderEditor -> HeaderEditor
-replaceHostByAuthority  headers = 
+replaceHostByAuthority  headers =
   let
     host_lens :: L.Lens' HeaderEditor (Maybe B.ByteString)
     host_lens = headerLens "host"
     authority_lens = headerLens ":authority"
     maybe_host_header = headers ^. host_lens
     no_hosts = L.set host_lens Nothing headers
-  in 
-    case maybe_host_header of  
-        Nothing -> headers 
+  in
+    case maybe_host_header of
+        Nothing -> headers
         Just host -> L.set authority_lens (Just host) no_hosts
 
 
--- | Given a header editor, introduces a "Date" header. This function has 
+-- | Given a header editor, introduces a "Date" header. This function has
 -- a side-effect: to get the current time
 introduceDateHeader :: HeaderEditor -> IO HeaderEditor
 introduceDateHeader header_editor = do
     current_time <- getCurrentTime
-    let 
+    let
         date_header_lens = headerLens "date"
         formatted_date = Just . pack $
             formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" current_time
-        new_editor = L.set date_header_lens formatted_date header_editor 
+        new_editor = L.set date_header_lens formatted_date header_editor
     return new_editor

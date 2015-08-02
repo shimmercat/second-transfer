@@ -3,9 +3,11 @@
 #ifdef ENABLE_DEBUG
 
 #define INSTRUMENTATION(x)   (liftIO $ logWithExclusivity (x))
+#define LOGIT_SWITCH_TIMINGS 1
 
 #else
 
 #define INSTRUMENTATION(x)   (return ())
+#define LOGIT_SWITCH_TIMINGS 0
 
-#endif 
+#endif

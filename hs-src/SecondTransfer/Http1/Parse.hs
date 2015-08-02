@@ -15,7 +15,7 @@ module SecondTransfer.Http1.Parse(
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
     ,BodyStopCondition(..)
-    ) where 
+    ) where
 
 
 
@@ -60,7 +60,7 @@ type HeaderParseClosure = (B.ByteString ->  ([Int], Int, Word8))
 
 -- L.makeLenses ''IncrementalHttp1Parser
 
-instance Show IncrementalHttp1Parser where 
+instance Show IncrementalHttp1Parser where
     show (IncrementalHttp1Parser ft _sp ) = show $ Bu.toLazyByteString ft
 
 
@@ -72,7 +72,7 @@ newIncrementalHttp1Parser = IncrementalHttp1Parser {
 
 
 -- | Was the parser complete?
-data Http1ParserCompletion = 
+data Http1ParserCompletion =
     -- | No, not even headers are done. Use the returned
     --   value to continue
     MustContinue_H1PC IncrementalHttp1Parser
@@ -81,61 +81,61 @@ data Http1ParserCompletion =
     --   argument is a left-overs string.
     |OnlyHeaders_H1PC      Headers B.ByteString
     -- | For requests with a body. The second argument is a condition
-    --   to stop receiving the body, the third is leftovers from 
+    --   to stop receiving the body, the third is leftovers from
     --   parsing the headers.
     |HeadersAndBody_H1PC   Headers BodyStopCondition B.ByteString
-    -- | Some requests are mal-formed. We can check those cases 
+    -- | Some requests are mal-formed. We can check those cases
     --   here.
-    |RequestIsMalformed_H1PC 
+    |RequestIsMalformed_H1PC
     deriving Show
 
 
--- | Stop condition when parsing the body. Right now only length 
---   is supported, given with Content-Length. 
+-- | Stop condition when parsing the body. Right now only length
+--   is supported, given with Content-Length.
 --
---  TODO: Support "chunked" transfer encoding for classical 
+--  TODO: Support "chunked" transfer encoding for classical
 --  HTTP/1.1, uploads will need it.
-data BodyStopCondition = 
-     UseBodyLength_BSC Int 
+data BodyStopCondition =
+     UseBodyLength_BSC Int
      deriving (Show, Eq)
 
 
-data RequestOrResponseLine = 
+data RequestOrResponseLine =
     -- First argument is the URI, second the method
     Request_RoRL B.ByteString B.ByteString
     -- First argument is the status code
     |Response_RoRL Int
     deriving (Show, Eq)
 
-    
+
 addBytes :: IncrementalHttp1Parser -> B.ByteString -> Http1ParserCompletion
 addBytes (IncrementalHttp1Parser full_text header_parse_closure) new_bytes =
   let -- Just feed the bytes
     (positions, length_so_far, last_char ) = header_parse_closure new_bytes
     new_full_text = full_text `mappend` (Bu.byteString new_bytes)
-    could_finish = twoCRLFsAreConsecutive positions 
-  in 
-    case could_finish of 
+    could_finish = twoCRLFsAreConsecutive positions
+  in
+    case could_finish of
         Just at_position -> elaborateHeaders new_full_text positions at_position
 
-        Nothing -> MustContinue_H1PC 
-                    $ IncrementalHttp1Parser 
-                        new_full_text 
+        Nothing -> MustContinue_H1PC
+                    $ IncrementalHttp1Parser
+                        new_full_text
                         (locateCRLFs length_so_far positions last_char)
 
 
 elaborateHeaders :: Bu.Builder -> [Int] -> Int -> Http1ParserCompletion
-elaborateHeaders full_text crlf_positions last_headers_position = 
-  let 
+elaborateHeaders full_text crlf_positions last_headers_position =
+  let
     -- Start by getting a full byte-string representation of the headers,
     -- no need to be silly with chunks.
     full_headers_text = Lb.toStrict $ Bu.toLazyByteString full_text
 
     -- Filter out CRLF pairs corresponding to multiline headers.
-    no_cont_positions_reverse = filter 
-        (\ pos -> if pos >= last_headers_position then True else 
+    no_cont_positions_reverse = filter
+        (\ pos -> if pos >= last_headers_position then True else
             not . isWsCh8 $
-                (Ch8.index 
+                (Ch8.index
                     full_headers_text
                     (pos + 2)
                 )
@@ -145,14 +145,14 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     no_cont_positions = reverse . tail $ no_cont_positions_reverse
 
     -- Now get the headers as slices from the original string.
-    headers_pre = map 
-        (\ (start, stop) -> 
+    headers_pre = map
+        (\ (start, stop) ->
             subByteString start stop full_headers_text
         )
         (zip
             ((:)
                 0
-                (map 
+                (map
                     ( + 2 )
                     no_cont_positions
                 )
@@ -169,23 +169,23 @@ elaborateHeaders full_text crlf_positions last_headers_position =
 
     headers_1 = headers_0
 
-    (headers_2, has_body) = case request_or_response of 
+    (headers_2, has_body) = case request_or_response of
 
-        Request_RoRL uri method -> 
+        Request_RoRL uri method ->
           let
             -- No lowercase, methods are case sensitive
             -- lc_method = bsToLower method
-            has_body' = case method of 
-                "POST"   -> True 
-                "PUT"    -> True 
+            has_body' = case method of
+                "POST"   -> True
+                "PUT"    -> True
                 _        -> False
-          in 
+          in
             ( (":path", uri):(":method",method):headers_1, has_body' )
 
-        Response_RoRL status -> 
-          let 
-            status_str = pack . show $ status 
-            excludes_body = 
+        Response_RoRL status ->
+          let
+            status_str = pack . show $ status
+            excludes_body =
                 ( (Ch8.head status_str) == '1')
                 ||
                 ( status == 204 || status == 304)
@@ -197,54 +197,54 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         ( (stripBs . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
         ]
 
-    content_length :: Int 
-    content_length = 
+    content_length :: Int
+    content_length =
       let
         cnt_length_header = find (\ x -> (fst x) == "content-length" ) headers_3
-      in case cnt_length_header of 
-        Just (_, hv) -> read . unpack $ hv 
+      in case cnt_length_header of
+        Just (_, hv) -> read . unpack $ hv
         Nothing -> throw ContentLengthMissingException
 
     leftovers = B.drop (last_headers_position + 4) full_headers_text
-  in 
-    if has_body 
-      then 
+  in
+    if has_body
+      then
         HeadersAndBody_H1PC headers_3 (UseBodyLength_BSC content_length) leftovers
-      else 
+      else
         OnlyHeaders_H1PC headers_3 leftovers
 
 
 splitByColon :: B.ByteString -> (B.ByteString, B.ByteString)
-splitByColon  = L.over L._2 (B.tail) . Ch8.break (== ':') 
+splitByColon  = L.over L._2 (B.tail) . Ch8.break (== ':')
 
 
 parseFirstLine :: B.ByteString -> RequestOrResponseLine
-parseFirstLine s = 
-  let 
-    either_error_or_rrl = Ap.parseOnly httpFirstLine s 
+parseFirstLine s =
+  let
+    either_error_or_rrl = Ap.parseOnly httpFirstLine s
     exc = HTTP11SyntaxException "BadMessageFirstLine"
-  in 
-    case either_error_or_rrl of 
-        Left _ -> throw exc 
+  in
+    case either_error_or_rrl of
+        Left _ -> throw exc
         Right rrl -> rrl
 
 bsToLower :: B.ByteString -> B.ByteString
-bsToLower = Ch8.map toLower 
+bsToLower = Ch8.map toLower
 
 
 -- This ought to be slow!
 stripBs :: B.ByteString -> B.ByteString
-stripBs s = 
-    fst 
+stripBs s =
+    fst
     .
     last
     $
-    takeWhile 
+    takeWhile
         ( \ (_, ch) -> isWsCh8 ch )
     $
-        iterate 
-        ( \ (bs, _) -> 
-                case Ch8.unsnoc bs of 
+        iterate
+        ( \ (bs, _) ->
+                case Ch8.unsnoc bs of
                     Just (newbs, w8) -> (newbs, w8)
                     Nothing -> ("", 'n')
         )
@@ -253,13 +253,13 @@ stripBs s =
 
 locateCRLFs :: Int -> [Int] -> Word8 ->  B.ByteString ->  ([Int], Int, Word8)
 locateCRLFs initial_offset other_positions prev_last_char next_chunk =
-  let 
+  let
     (last_char, positions_list, strlen) =
-        B.foldl 
-            (\ (prev_char, lst, i) w8 -> 
-                let 
+        B.foldl
+            (\ (prev_char, lst, i) w8 ->
+                let
                     j = i + 1
-                in case (prev_char, w8) of 
+                in case (prev_char, w8) of
                     (13,10) -> (w8, (i-1):lst, j)
                     _       -> (w8, lst,   j)
             )
@@ -268,7 +268,7 @@ locateCRLFs initial_offset other_positions prev_last_char next_chunk =
   in (positions_list, strlen, last_char)
 
 
-twoCRLFsAreConsecutive :: [Int] -> Maybe Int 
+twoCRLFsAreConsecutive :: [Int] -> Maybe Int
 twoCRLFsAreConsecutive (p2:p1:_) | p2 - p1 == 2 = Just p1
 twoCRLFsAreConsecutive _                        = Nothing
 
@@ -289,7 +289,7 @@ http1Token :: Ap.Parser B.ByteString
 http1Token = Ap.string "HTTP/1.1" <|> Ap.string "HTTP/1.0"
 
 http1Method :: Ap.Parser B.ByteString
-http1Method = 
+http1Method =
     Ap.string "GET"
     <|> Ap.string "POST"
     <|> Ap.string "HEAD"
@@ -306,13 +306,13 @@ space :: Ap.Parser Word8
 space = Ap.word8 32
 
 requestLine :: Ap.Parser RequestOrResponseLine
-requestLine = 
+requestLine =
     flip Request_RoRL
-    <$> 
-    http1Method 
+    <$>
+    http1Method
     <* space
     <*>
-    unspacedUri 
+    unspacedUri
     <* space
     <* http1Token
 
@@ -320,7 +320,7 @@ digit :: Ap.Parser Word8
 digit = Ap.satisfy (Ap.inClass "0-9")
 
 responseLine :: Ap.Parser RequestOrResponseLine
-responseLine = 
+responseLine =
     (pure Response_RoRL)
     <*
     http1Token
@@ -329,7 +329,7 @@ responseLine =
     <*>
     ( read . map (toEnum . fromIntegral )  <$> Ap.count 3 digit )
     <*
-    space 
+    space
     <*
     Ap.takeByteString
 
@@ -338,9 +338,9 @@ httpFirstLine = requestLine <|> responseLine
 
 
 headerListToHTTP11Text :: Headers -> Bu.Builder
-headerListToHTTP11Text headers = 
-    case headers of 
-        -- According to the specs, :status can be only 
+headerListToHTTP11Text headers =
+    case headers of
+        -- According to the specs, :status can be only
         -- the first header
         (hn,hv): rest | hn == ":status" ->
             (
@@ -349,16 +349,16 @@ headerListToHTTP11Text headers =
                 (go rest)
             )
 
-        rest -> 
+        rest ->
             (
                 (first_line 200)
                 `mappend`
                 (go rest)
             )
-  where 
+  where
     go [] = mempty
-    go ((hn,hv):rest) = 
-        (Bu.byteString hn) `mappend` ":" `mappend` " " `mappend` (Bu.byteString hv) 
+    go ((hn,hv):rest) =
+        (Bu.byteString hn) `mappend` ":" `mappend` " " `mappend` (Bu.byteString hv)
                            `mappend` "\r\n" `mappend` (go rest)
 
     first_line :: Int -> Bu.Builder
@@ -372,43 +372,43 @@ headerListToHTTP11Text headers =
 
 
 serializeHTTPResponse :: Headers -> [B.ByteString] -> Lb.ByteString
-serializeHTTPResponse response_headers fragments = 
+serializeHTTPResponse response_headers fragments =
   let
-    -- So got some data in an answer. Now there are three ways to go about 
+    -- So got some data in an answer. Now there are three ways to go about
     -- the returned data: to force a chunked transfer-encoding, to read all
-    -- the data and add/set the Content-Length header, or to let the user 
+    -- the data and add/set the Content-Length header, or to let the user
     -- decide which one she prefers.
     --
     -- Right now I'm going for the second one, until somebody complains
-    -- This is equivalent to a lazy byte-string...but I just need the 
-    -- length 
+    -- This is equivalent to a lazy byte-string...but I just need the
+    -- length
     -- I promised to minimize the number of interventions of the library,
-    -- so it could be a good idea to remove this one further down the 
-    -- road. 
+    -- so it could be a good idea to remove this one further down the
+    -- road.
     h2 = E.lowercaseHeaders response_headers
     data_size = foldl' (\ n bs -> n + B.length bs) 0 fragments
     headers_editor = E.fromList h2
     content_length_header_lens = E.headerLens "content-length"
-    he2 = L.set 
-        content_length_header_lens 
-        (Just (pack . show $ data_size)) 
-        headers_editor 
+    he2 = L.set
+        content_length_header_lens
+        (Just (pack . show $ data_size))
+        headers_editor
     h3 = E.toList he2
     -- Next, I must serialize the headers....
     headers_text_as_builder = headerListToHTTP11Text h3
 
-    -- We dump the headers first... unfortunately when talking 
-    -- HTTP/1.1 the most efficient way to write those bytes is 
+    -- We dump the headers first... unfortunately when talking
+    -- HTTP/1.1 the most efficient way to write those bytes is
     -- to create a big buffer and pass it on to OpenSSL.
-    -- However the Builder generating the headers above says 
+    -- However the Builder generating the headers above says
     -- it generates fragments between 4k and 32 kb, I checked it
     -- and it is true, so we can use it
 
-    -- Now we need to insert an extra \r\n, even it the response is 
+    -- Now we need to insert an extra \r\n, even it the response is
     -- empty
 
     -- And then we use the builder to re-format the fragments returned
-    -- by the coherent worker 
+    -- by the coherent worker
     -- TODO: This could be a good place to introduce chunked responses.
     body_builder = mconcat $ map Bu.byteString fragments
 
@@ -467,10 +467,10 @@ httpStatusTable = M.fromList
 -----------------------------------------------------------------------------------------
 
 -- assertEqual :: Eq a => String -> a -> a -> IO ()
--- assertEqual label v1 v2 = do 
+-- assertEqual label v1 v2 = do
 --     putStrLn label
---     if v1 == v2 
---       then 
+--     if v1 == v2
+--       then
 --         putStrLn "Ok"
---       else 
+--       else
 --         putStrLn "NoOk"

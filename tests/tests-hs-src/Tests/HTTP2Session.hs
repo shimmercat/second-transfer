@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Tests.HTTP2Session where 
+module Tests.HTTP2Session where
 
 
 import           Data.Typeable
@@ -26,14 +26,14 @@ import           Data.Conduit                     (yield)
 
 
 saysHello :: DataAndConclusion
-saysHello = do 
+saysHello = do
     yield "Hello world!\ns"
     -- No footers
     return []
 
 
-simpleWorker :: CoherentWorker
-simpleWorker request = return (
+simpleWorker :: AwareWorker
+simpleWorker = coherentToAwareWorker . const $ return (
     [
         (":status", "200")
     ],
@@ -44,18 +44,18 @@ simpleWorker request = return (
 data Internal500Exception = Internal500Exception
     deriving (Typeable, Show)
 
-instance Exception Internal500Exception where 
+instance Exception Internal500Exception where
     toException = convertHTTP500PrecursorExceptionToException
     fromException = getHTTP500PrecursorExceptionFromException
 
-throwingWorker :: CoherentWorker
+throwingWorker :: AwareWorker
 throwingWorker _ = throwIO Internal500Exception
 
-throwingWorker2 :: CoherentWorker
-throwingWorker2 _req = return (
+throwingWorker2 :: AwareWorker
+throwingWorker2  = coherentToAwareWorker . const .  return $ (
         [
             -- These headers will be already sent by the time
-            -- the exception is discovered... 
+            -- the exception is discovered...
             (":status", "200")
         ],
         [], -- No pushed streams
@@ -71,7 +71,7 @@ setError mvar = const $ modifyMVar_ mvar (const $ return True )
 
 
 errorsSessionConfig :: MVar Bool -> SessionsConfig
-errorsSessionConfig mvar = set (sessionsCallbacks . reportErrorCallback)
+errorsSessionConfig mvar = set (sessionsCallbacks . reportErrorCallback_SC)
     (Just $ setError mvar) defaultSessionsConfig
 
 
@@ -86,83 +86,83 @@ testPrefaceChecks = TestCase $ do
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
     threadDelay 1000000
     got_error <- readMVar errors_mvar
-    if got_error then 
+    if got_error then
         assertFailure "Exception raised"
     else
         return ()
 
 
 testPrefaceChecks2 :: Test
-testPrefaceChecks2 = TestCase $ do 
+testPrefaceChecks2 = TestCase $ do
     errors_mvar <- newMVar False
     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
-    let 
+    let
         attendant = http2Attendant sessions_context simpleWorker
     decoy_session <- createDecoySession attendant
     -- This should work
     sendRawDataToSession decoy_session "PRI * HXXP/2.0\r\n\r\nSM\r\n\r\n"
     threadDelay 1000000
     got_error <- readMVar errors_mvar
-    if not got_error then do 
+    if not got_error then do
         assertFailure "Exception didn't raise"
     else
         return ()
 
 
-testFirstFrameMustBeSettings :: Test 
-testFirstFrameMustBeSettings = TestCase $ do 
-    errors_mvar <- newMVar False 
+testFirstFrameMustBeSettings :: Test
+testFirstFrameMustBeSettings = TestCase $ do
+    errors_mvar <- newMVar False
     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
-    let 
+    let
         attendant = http2Attendant sessions_context simpleWorker
     decoy_session <- createDecoySession attendant
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
     maybe_frame <- recvFrameFromSession decoy_session
-    case maybe_frame of 
-        Nothing -> 
+    case maybe_frame of
+        Nothing ->
             assertFailure "Waiting a frame, received none"
-        Just (NH2.Frame _ (NH2.SettingsFrame _)) -> -- Ok 
+        Just (NH2.Frame _ (NH2.SettingsFrame _)) -> -- Ok
             return ()
 
         _ ->
             assertFailure "Waiting a settings frame, received something else"
 
-testFirstFrameMustBeSettings2 :: Test 
-testFirstFrameMustBeSettings2 = TestCase $ do 
-    errors_mvar <- newMVar False 
+testFirstFrameMustBeSettings2 :: Test
+testFirstFrameMustBeSettings2 = TestCase $ do
+    errors_mvar <- newMVar False
     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
-    let 
+    let
         attendant = http2Attendant sessions_context simpleWorker
     decoy_session <- createDecoySession attendant
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
     maybe_frame <- recvFrameFromSession decoy_session
-    case maybe_frame of 
-        Nothing -> 
+    case maybe_frame of
+        Nothing ->
             assertFailure "Waiting a frame, received none"
-        Just (NH2.Frame _ (NH2.SettingsFrame _)) -> -- Ok 
+        Just (NH2.Frame _ (NH2.SettingsFrame _)) -> -- Ok
             return ()
 
         _ ->
             assertFailure "Waiting a settings frame, received something else"
 
     -- Send a settings frame now
-    sendFrameToSession 
-        decoy_session 
+    sendFrameToSession
+        decoy_session
         ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
           (NH2.SettingsFrame []) )
 
     -- Check session is alive
     got_error <- readMVar errors_mvar
-    if got_error then do 
+    if got_error then do
         assertFailure "Exception raised unexpectedly"
     else
         return ()
 
-testFirstFrameMustBeSettings3 :: Test 
-testFirstFrameMustBeSettings3 = TestCase $ do 
-    errors_mvar <- newMVar False 
+testFirstFrameMustBeSettings3 :: Test
+testFirstFrameMustBeSettings3 = TestCase $ do
+    errors_mvar <- newMVar False
     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
-    let 
+    let
         attendant = http2Attendant sessions_context simpleWorker
     decoy_session <- createDecoySession attendant
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -171,8 +171,8 @@ testFirstFrameMustBeSettings3 = TestCase $ do
           (NH2.PingFrame "01234567") )
 
     -- Send a ping frame now, so that we get an error
-    sendFrameToSession 
-        decoy_session 
+    sendFrameToSession
+        decoy_session
         d2
 
     -- We need to give some time to the framework to react to problems
@@ -180,17 +180,17 @@ testFirstFrameMustBeSettings3 = TestCase $ do
 
     -- Check session is alive
     got_error <- readMVar errors_mvar
-    if not got_error then do 
+    if not got_error then do
         assertFailure "Exception didn't raise properly"
     else
         return ()
 
 
-testIGet500Status :: Test 
-testIGet500Status = TestCase $ do 
-    errors_mvar <- newMVar False 
+testIGet500Status :: Test
+testIGet500Status = TestCase $ do
+    errors_mvar <- newMVar False
     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
-    let 
+    let
         attendant = http2Attendant sessions_context throwingWorker
     decoy_session <- createDecoySession attendant
 
@@ -198,8 +198,8 @@ testIGet500Status = TestCase $ do
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
     -- Send a settings frame now, otherwise the session will bark....
-    sendFrameToSession 
-        decoy_session 
+    sendFrameToSession
+        decoy_session
         ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
           (NH2.SettingsFrame []) )
 
@@ -212,8 +212,8 @@ testIGet500Status = TestCase $ do
         ]
 
     -- Now we read a few frames
-    seen <- return False 
-    f0 <- recvFrameFromSession decoy_session 
+    seen <- return False
+    f0 <- recvFrameFromSession decoy_session
     seen1 <- frameIsStatus500 decoy_session seen f0
 
     f1 <- recvFrameFromSession decoy_session
@@ -222,35 +222,35 @@ testIGet500Status = TestCase $ do
     f2 <- recvFrameFromSession decoy_session
     seen3 <- frameIsStatus500 decoy_session seen f2
 
-    if not seen3 then do 
+    if not seen3 then do
         assertFailure "Didn't see that 500"
-    else 
+    else
         return ()
 
 
-frameIsStatus500 :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool 
-frameIsStatus500 decoy_session prev maybe_frame = 
-    case prev of 
-        True -> return True 
-        False -> 
-            case maybe_frame of 
-                Just (NH2.Frame _  (NH2.HeadersFrame _ bs ) ) -> do 
+frameIsStatus500 :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool
+frameIsStatus500 decoy_session prev maybe_frame =
+    case prev of
+        True -> return True
+        False ->
+            case maybe_frame of
+                Just (NH2.Frame _  (NH2.HeadersFrame _ bs ) ) -> do
                     headers <- decodeHeadersForSession decoy_session bs
-                    let 
+                    let
                         maybe_status = fetchHeader headers ":status"
-                    case maybe_status of 
-                        Just x | x == "500" -> return True 
+                    case maybe_status of
+                        Just x | x == "500" -> return True
                         _                   -> return False
 
                 _ ->
                     return False
 
 
-testSessionBreaksOnLateError :: Test 
-testSessionBreaksOnLateError = TestCase $ do 
-    errors_mvar <- newMVar False 
+testSessionBreaksOnLateError :: Test
+testSessionBreaksOnLateError = TestCase $ do
+    errors_mvar <- newMVar False
     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
-    let 
+    let
         attendant = http2Attendant sessions_context throwingWorker2
     decoy_session <- createDecoySession attendant
 
@@ -258,8 +258,8 @@ testSessionBreaksOnLateError = TestCase $ do
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
     -- Send a settings frame now, otherwise the session will bark....
-    sendFrameToSession 
-        decoy_session 
+    sendFrameToSession
+        decoy_session
         ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
           (NH2.SettingsFrame []) )
 
@@ -272,8 +272,8 @@ testSessionBreaksOnLateError = TestCase $ do
         ]
 
     -- Now we read a few frames
-    seen <- return False 
-    f0 <- recvFrameFromSession decoy_session 
+    seen <- return False
+    f0 <- recvFrameFromSession decoy_session
     seen1 <- frameIsGoAwayBecauseInternalError decoy_session seen f0
 
     f1 <- recvFrameFromSession decoy_session
@@ -285,20 +285,20 @@ testSessionBreaksOnLateError = TestCase $ do
     f3 <- recvFrameFromSession decoy_session
     seen4 <- frameIsGoAwayBecauseInternalError decoy_session seen3 f3
 
-    if not seen4 then do 
+    if not seen4 then do
         assertFailure "Didn't see GoAwayFrame"
-    else 
+    else
         return ()
 
 
-frameIsGoAwayBecauseInternalError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool 
-frameIsGoAwayBecauseInternalError decoy_session prev maybe_frame = do 
-    case prev of 
-        True -> return True 
-        False -> 
-            case maybe_frame of 
-                Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do 
-                    case ec of 
+frameIsGoAwayBecauseInternalError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool
+frameIsGoAwayBecauseInternalError decoy_session prev maybe_frame = do
+    case prev of
+        True -> return True
+        False ->
+            case maybe_frame of
+                Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do
+                    case ec of
                         NH2.InternalError   -> return True
                         _                   -> return False
 
@@ -306,14 +306,14 @@ frameIsGoAwayBecauseInternalError decoy_session prev maybe_frame = do
                     return False
 
 
-frameIsGoAwayBecauseProtocolError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool 
-frameIsGoAwayBecauseProtocolError decoy_session prev maybe_frame = do 
-    case prev of 
-        True -> return True 
-        False -> 
-            case maybe_frame of 
-                Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do 
-                    case ec of 
+frameIsGoAwayBecauseProtocolError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool
+frameIsGoAwayBecauseProtocolError decoy_session prev maybe_frame = do
+    case prev of
+        True -> return True
+        False ->
+            case maybe_frame of
+                Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do
+                    case ec of
                         NH2.ProtocolError   -> return True
                         _                   -> return False
 
@@ -352,8 +352,8 @@ testUpdateWindowFrameAborts = TestCase $ do
          NH2.WindowUpdateFrame 10 )
 
     -- Now we read a few frames
-    seen <- return False 
-    f0 <- recvFrameFromSession decoy_session 
+    seen <- return False
+    f0 <- recvFrameFromSession decoy_session
     seen1 <- frameIsGoAwayBecauseProtocolError decoy_session seen f0
 
     f1 <- recvFrameFromSession decoy_session
@@ -365,14 +365,14 @@ testUpdateWindowFrameAborts = TestCase $ do
     -- f3 <- recvFrameFromSession decoy_session
     -- seen4 <- frameIsGoAwayBecauseProtocolError decoy_session seen3 f3
 
-    if not seen2 then do 
+    if not seen2 then do
         assertFailure "Didn't see GoAwayFrame"
     else
         return ()
 
     -- Check session is alive
     got_error <- readMVar errors_mvar
-    if got_error then do 
+    if got_error then do
         assertFailure "Exception raised unexpectedly"
     else
         return ()

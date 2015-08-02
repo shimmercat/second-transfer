@@ -29,11 +29,11 @@ module SecondTransfer.Http2.Session(
 #include "Logging.cpphs"
 
 -- System grade utilities
-import           Control.Concurrent                     (ThreadId, forkIO)
+import           Control.Concurrent                     (ThreadId, forkIO, threadDelay)
 import           Control.Concurrent.Chan
 import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
-import           Control.Monad                          (forever,unless)
+import           Control.Monad                          (forever,unless, when, mapM_, forM, forM_)
 import           Control.Monad.IO.Class                 (liftIO)
 import           Control.DeepSeq                        ( ($!!), deepseq )
 import           Control.Monad.Trans.Reader
@@ -61,11 +61,15 @@ import qualified Network.HTTP2                          as NH2
 -- Logging utilities
 import           System.Log.Logger
 
+import           System.Clock                            (getTime, TimeSpec, Clock(..))
+
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
 import           SecondTransfer.Sessions.Config
-import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler, SessionsContext, sessionsConfig)
+import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler,
+                                                         SessionsContext,
+                                                         sessionsConfig)
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
@@ -73,20 +77,35 @@ import           SecondTransfer.MainLoop.Logging        (logWithExclusivity, log
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to
 -- use :-(
-type OutputFrame = (NH2.EncodeInfo, NH2.FramePayload)
+type OutputFrame = (NH2.EncodeInfo, NH2.FramePayload, Effect)
 type InputFrame  = NH2.Frame
 
 
-useChunkLength :: Int
-useChunkLength = 2048
+--useChunkLength :: Int
+-- useChunkLength = 2048
 
 
 -- Singleton instance used for concurrency
 data HeadersSent = HeadersSent
 
 -- All streams put their data bits here. A "Nothing" value signals
--- end of data.
-type DataOutputToConveyor = (GlobalStreamId, Maybe B.ByteString)
+-- end of data. Middle value is delay in microseconds
+type DataOutputToConveyor = (GlobalStreamId, Maybe B.ByteString, Effect)
+
+
+data HeaderOutputMessage =
+    NormalResponse_HM (GlobalStreamId, MVar HeadersSent, Headers, Effect)
+    --
+    |PushPromise_HM   (GlobalStreamId, GlobalStreamId, Headers, Effect)
+
+
+-- Settings imposed by the peer
+data SessionSettings = SessionSettings {
+    _pushEnabled :: Bool
+    }
+
+makeLenses ''SessionSettings
+
 
 
 -- Whatever a worker thread is going to need comes here....
@@ -98,7 +117,7 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
     -- A full block of headers can come here... the mvar in the middle should
     -- be populate to signal end of headers transmission. A thread will be suspended
     -- waiting for that
-    , _headersOutput :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
+    , _headersOutput :: Chan HeaderOutputMessage
 
     -- And regular contents can come this way and thus be properly mixed
     -- with everything else.... for now...
@@ -106,6 +125,9 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
 
     ,_streamsCancelled_WTE :: MVar NS.IntSet
 
+    ,_sessionSettings_WTE :: MVar SessionSettings
+
+    ,_nextPushStream_WTE :: MVar Int
     }
 
 makeLenses ''WorkerThreadEnvironment
@@ -168,17 +190,9 @@ type SessionMaker = SessionsContext -> IO Session
 
 
 -- Here is how we make a session wrapping a CoherentWorker
-type CoherentSession = CoherentWorker -> SessionMaker
-
+type CoherentSession = AwareWorker -> SessionMaker
 
 data PostInputMechanism = PostInputMechanism (MVar (Maybe B.ByteString), InputDataStream)
-
--- Settings imposed by the peer
-data SessionSettings = SessionSettings {
-    _pushEnabled :: Bool
-    }
-
-makeLenses ''SessionSettings
 
 
 -- NH2.Frame != Frame
@@ -214,7 +228,7 @@ data SessionData = SessionData {
     -- I make copies of it in different contexts, and as needed.
     ,_forWorkerThread            :: WorkerThreadEnvironment
 
-    ,_coherentWorker             :: CoherentWorker
+    ,_awareWorker                :: AwareWorker
 
     -- Some streams may be cancelled
     ,_streamsCancelled           :: MVar NS.IntSet
@@ -233,6 +247,9 @@ data SessionData = SessionData {
 
     -- And used to keep peer session settings
     ,_sessionSettings            :: MVar SessionSettings
+
+    -- What is the next stream available for push?
+    ,_nextPushStream             :: MVar Int
     }
 
 
@@ -240,8 +257,8 @@ makeLenses ''SessionData
 
 
 --                                v- {headers table size comes here!!}
-http2Session :: CoherentWorker -> Int -> SessionsContext -> IO Session
-http2Session coherent_worker session_id sessions_context =   do
+http2Session :: AwareWorker -> Int -> SessionsContext -> IO Session
+http2Session aware_worker session_id sessions_context =   do
     session_input             <- newChan
     session_output            <- newChan
     session_output_mvar       <- newMVar session_output
@@ -259,7 +276,7 @@ http2Session coherent_worker session_id sessions_context =   do
 
     -- These ones need independent threads taking care of sending stuff
     -- their way...
-    headers_output            <- newChan :: IO (Chan (GlobalStreamId, MVar HeadersSent, Headers))
+    headers_output            <- newChan :: IO (Chan HeaderOutputMessage)
     data_output               <- newEmptyMVar :: IO (MVar DataOutputToConveyor)
 
     stream2postinputmechanism <- H.new
@@ -268,6 +285,7 @@ http2Session coherent_worker session_id sessions_context =   do
 
     receiving_headers         <- newMVar Nothing
     session_settings          <- newMVar $ SessionSettings { _pushEnabled = True }
+    next_push_stream          <- newMVar 8
 
     -- What about stream cancellation?
     cancelled_streams_mvar    <- newMVar $ NS.empty :: IO (MVar NS.IntSet)
@@ -277,6 +295,8 @@ http2Session coherent_worker session_id sessions_context =   do
         ,_headersOutput = headers_output
         ,_dataOutput = data_output
         ,_streamsCancelled_WTE = cancelled_streams_mvar
+        ,_sessionSettings_WTE = session_settings
+        ,_nextPushStream_WTE = next_push_stream
         }
 
     let session_data  = SessionData {
@@ -287,7 +307,7 @@ http2Session coherent_worker session_id sessions_context =   do
         ,_toEncodeHeaders            = encode_headers_table_mvar
         ,_stream2HeaderBlockFragment = stream_request_headers
         ,_forWorkerThread            = for_worker_thread
-        ,_coherentWorker             = coherent_worker
+        ,_awareWorker                = aware_worker
         ,_streamsCancelled           = cancelled_streams_mvar
         ,_stream2PostInputMechanism  = stream2postinputmechanism
         ,_stream2WorkerThread        = stream2workerthread
@@ -295,6 +315,7 @@ http2Session coherent_worker session_id sessions_context =   do
         ,_receivingHeaders           = receiving_headers
         ,_sessionSettings            = session_settings
         ,_lastGoodStream             = last_good_stream_mvar
+        ,_nextPushStream             = next_push_stream
         }
 
     let
@@ -304,9 +325,11 @@ http2Session coherent_worker session_id sessions_context =   do
         exc_guard component action = E.catch
             action
             (\e -> do
-                INSTRUMENTATION( errorM "HTTP2.Session" "Exception processed" )
+                -- INSTRUMENTATION( errorM "HTTP2.Session" "Exception processed" )
                 exc_handler component e
             )
+
+        use_chunk_length =  sessions_context ^.  sessionsConfig . dataFrameSize
 
     -- Create an input thread that decodes frames...
     forkIO $ exc_guard SessionInputThread_HTTP2SessionComponent
@@ -319,7 +342,7 @@ http2Session coherent_worker session_id sessions_context =   do
     -- Create a thread that captures data and sends it down the tube. This is waiting for
     -- stuff coming from all the workers. This function is also in charge of closing streams
     forkIO $ exc_guard SessionDataOutputThread_HTTP2SessionComponent
-           $ dataOutputThread data_output session_output_mvar
+           $ dataOutputThread use_chunk_length data_output session_output_mvar
 
     -- The two previous threads fill the session_output argument below (they write to it)
     -- the session machinery in the other end is in charge of sending that data through the
@@ -343,19 +366,20 @@ sessionInputThread  = do
     decode_headers_table_mvar <- view toDecodeHeaders
     stream_request_headers    <- view stream2HeaderBlockFragment
     cancelled_streams_mvar    <- view streamsCancelled
-    coherent_worker           <- view coherentWorker
+    coherent_worker           <- view awareWorker
 
     for_worker_thread_uns     <- view forWorkerThread
     stream2workerthread       <- view stream2WorkerThread
     receiving_headers_mvar    <- view receivingHeaders
     last_good_stream_mvar     <- view lastGoodStream
+    current_session_id        <- view sessionIdAtSession
 
     input                     <- liftIO $ readChan session_input
 
     case input of
 
         FirstFrame_SIC (NH2.Frame
-            (NH2.FrameHeader _ 1 null_stream_id ) _ )| NH2.toStreamIdentifier 0 == null_stream_id  -> do
+            (NH2.FrameHeader _ 1 null_stream_id ) _ )| 0 == null_stream_id  -> do
             -- This is a SETTINGS ACK frame, which is okej to have,
             -- do nothing here
             continue
@@ -364,7 +388,7 @@ sessionInputThread  = do
             (NH2.Frame
                 (NH2.FrameHeader _ 0 null_stream_id )
                 (NH2.SettingsFrame settings_list)
-            ) | NH2.toStreamIdentifier 0 == null_stream_id  -> do
+            ) | 0 == null_stream_id  -> do
             -- Good, handle
             handleSettingsFrame settings_list
             continue
@@ -425,8 +449,10 @@ sessionInputThread  = do
                         liftIO $ putMVar last_good_stream_mvar (stream_id)
                       else do
                         -- We are not golden
-                        INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
+                        -- INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
                         closeConnectionBecauseIsInvalid NH2.ProtocolError
+                -- So, now we know, we are ignoring priority frames at the moment
+                -- liftIO . logit $ "Priority: " `mappend` (pack . show $ getHeadersPriority frame)
               else do
                 maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
                 case maybe_rcv_headers_of of
@@ -442,15 +468,18 @@ sessionInputThread  = do
                 liftIO $ modifyMVar_
                     receiving_headers_mvar
                     (\ _ -> return Nothing )
+                -- Lets get a time
+                headers_arrived_time      <- liftIO $ getTime Monotonic
                 -- Let's decode the headers
                 let for_worker_thread     = set streamId stream_id for_worker_thread_uns
                 headers_bytes             <- getHeaderBytes stream_id
                 dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
                 (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
-                -- DEBUG
+#if LOGIT_SWITCH_TIMINGS
                 let
                     (Just path) = He.fetchHeader header_list ":path"
-                -- liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
+                liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
+#endif
                 -- /DEBUG
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here
@@ -485,6 +514,18 @@ sessionInputThread  = do
                   else do
                     return Nothing
 
+                let
+                  perception = Perception {
+                      _startedTime_Pr = headers_arrived_time,
+                      _streamId_Pr = stream_id,
+                      _sessionId_Pr = current_session_id
+                      }
+                  request = Request {
+                      _headers_RQ = header_list_after,
+                      _inputData_RQ = post_data_source,
+                      _perception_RQ = perception
+                      }
+
                 -- TODO: Handle the cases where a request tries to send data
                 -- even if the method doesn't allow for data.
 
@@ -498,10 +539,7 @@ sessionInputThread  = do
                     thread_id <- forkIO $ E.catch
                         (runReaderT
                             (workerThread
-                                   (
-                                      header_list_after `deepseq`
-                                      (header_list_after, post_data_source)
-                                   )
+                                   request
                                    coherent_worker)
                             for_worker_thread
                         )
@@ -533,9 +571,10 @@ sessionInputThread  = do
                 maybe_thread_id <- H.lookup stream2workerthread stream_id
                 case maybe_thread_id  of
                     Nothing ->
-                        -- This is actually more like an internal error, when this
-                        -- happens, cancel the session
-                        error "InterruptingUnexistentStream"
+                        -- This is can actually happen in some implementations: we are asked to
+                        -- cancel an stream we know nothing about. Log which stream it is
+                        logit $  "InterruptingUnexistentStream " `mappend` (pack . show $ stream_id)
+                        -- and don't get too crazy about it.
 
                     Just thread_id -> do
                         -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
@@ -547,7 +586,7 @@ sessionInputThread  = do
           -> unlessReceivingHeaders $ do
             -- So I got data to process
             -- TODO: Handle end of stream
-            let stream_id = NH2.fromStreamIdentifier nh2_stream_id
+            let stream_id = nh2_stream_id
             -- TODO: Handle the cases where the stream_id doesn't match an already existent
             -- stream. In such cases it is justified to reset the connection with a  protocol_error.
 
@@ -570,10 +609,11 @@ sessionInputThread  = do
                 (NH2.WindowUpdateFrame
                     (fromIntegral (B.length somebytes))
                 )
+
             sendOutFrame
                 (NH2.EncodeInfo
                     NH2.defaultFlags
-                    (NH2.toStreamIdentifier 0)
+                    0
                     Nothing
                 )
                 (NH2.WindowUpdateFrame
@@ -599,10 +639,11 @@ sessionInputThread  = do
             sendOutFrame
                 (NH2.EncodeInfo
                     (NH2.setAck NH2.defaultFlags)
-                    (NH2.toStreamIdentifier 0)
+                    0
                     Nothing
                 )
                 (NH2.PingFrame somebytes)
+
 
             continue
 
@@ -619,9 +660,7 @@ sessionInputThread  = do
 
         MiddleFrame_SIC somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
-            -- INSTRUMENTATION( errorM "HTTP2.Session" $  "Received problematic frame: " )
-            -- INSTRUMENTATION( errorM "HTTP2.Session" $  "..  " ++ (show somethingelse) )
-
+            -- liftIO . logit $ "Strange frame:" `mappend` (pack . show $ somethingelse)
             continue
 
   where
@@ -629,23 +668,38 @@ sessionInputThread  = do
 
     -- TODO: Do use the settings!!!
     handleSettingsFrame :: NH2.SettingsList -> ReaderT SessionData IO ()
-    handleSettingsFrame _settings_list =
+    handleSettingsFrame _settings_list = do
+        let
+            enable_push = lookup NH2.SettingsEnablePush _settings_list
+        session_settings_mvar <- view sessionSettings
+        case enable_push of
+            Just 1     -> liftIO $ modifyMVar_ session_settings_mvar
+                                     $ \ old_settings -> return ( pushEnabled .~ True $ old_settings)
+            Just 0     -> liftIO $ modifyMVar_ session_settings_mvar
+                                     $ \ old_settings -> return ( pushEnabled .~ False $ old_settings)
+            Just _    ->  closeConnectionBecauseIsInvalid NH2.ProtocolError
+
+            Nothing   ->  return ()
+        -- liftIO $ logit $ "Settings " `mappend` (pack . show $  _settings_list)
         sendOutFrame
             (NH2.EncodeInfo
                 (NH2.setAck NH2.defaultFlags)
-                (NH2.toStreamIdentifier 0)
-                Nothing )
+                0
+                Nothing
+            )
             (NH2.SettingsFrame [])
 
 
-
-
-sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload -> ReaderT SessionData IO ()
+sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload  -> ReaderT SessionData IO ()
 sendOutFrame encode_info payload = do
     session_output_mvar <- view sessionOutput
 
     session_output <- liftIO $ takeMVar session_output_mvar
-    liftIO $ writeChan session_output $ Right (encode_info, payload)
+    liftIO $ writeChan session_output $ Right (
+      encode_info,
+      payload,
+      -- Not sending effects in this frame, since it is not related...
+      error "sendOutFrameNotFor")
     liftIO $ putMVar session_output_mvar session_output
 
 
@@ -715,11 +769,11 @@ closeConnectionBecauseIsInvalid error_code = do
     sendOutFrame
         (NH2.EncodeInfo
             NH2.defaultFlags
-            (NH2.toStreamIdentifier 0)
+            0
             Nothing
         )
         (NH2.GoAwayFrame
-            (NH2.toStreamIdentifier last_good_stream)
+            last_good_stream
             error_code
             ""
         )
@@ -829,7 +883,7 @@ isStreamCancelled stream_id = do
     return $ NS.member stream_id cancelled_streams
 
 
-sendPrimitive500Error :: IO PrincipalStream
+sendPrimitive500Error :: IO TupledPrincipalStream
 sendPrimitive500Error =
   return (
         [
@@ -843,33 +897,72 @@ sendPrimitive500Error =
     )
 
 
--- Invokes the Coherent worker. Data is send through pipes to
+-- Invokes the Coherent worker. Data is sent through pipes to
 -- the output thread here in this session.
-workerThread :: Request -> CoherentWorker -> WorkerMonad ()
-workerThread req coherent_worker =
+workerThread :: Request -> AwareWorker -> WorkerMonad ()
+workerThread req aware_worker =
   do
     headers_output <- view headersOutput
     stream_id      <- view streamId
+    session_settings_mvar <- view sessionSettings_WTE
+    session_settings <- liftIO $ readMVar session_settings_mvar
+    next_push_stream_mvar <-  view nextPushStream_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
     --       throws an exception signaling that the request is ill-formed
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
-    -- liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
-    (headers, _, data_and_conclussion) <-
+#if LOGIT_SWITCH_TIMINGS
+    liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
+#endif
+    -- (headers, _, data_and_conclussion)
+    principal_stream <-
         liftIO $ E.catch
-            ( do
-                (h, x, d) <- {-# SCC "coherent-worker" #-} (coherent_worker $ {-# SCC "req-eval"  #-} req)
-                return $! (h,x,d)
+            (
+                aware_worker  req
             )
             (
-                const sendPrimitive500Error
-                :: HTTP500PrecursorException -> IO (Headers, PushedStreams, DataAndConclusion)
+                const $ tupledPrincipalStreamToPrincipalStream <$> sendPrimitive500Error
+                :: HTTP500PrecursorException -> IO PrincipalStream
             )
+
+    -- Pieces of the header
+    let
+       headers              = principal_stream ^. headers_PS
+       data_and_conclusion  = principal_stream ^. dataAndConclusion_PS
+       effects              = principal_stream ^. effect_PS
+       pushed_streams       = principal_stream ^. pushedStreams_PS
+
+       can_push             = session_settings ^. pushEnabled
+
+    -- There are several possible moments where the PUSH_PROMISEs can be sent,
+    -- but a default safe one is before sending the response HEADERS, so that
+    -- LINK headers in the response come after any potential promises.
+    data_promises <- if can_push then do
+        forM pushed_streams $ \ pushed_stream_comp -> do
+            -- Initialize pushed stream
+            pushed_stream <- liftIO pushed_stream_comp
+            -- Send the request headers properly wrapped in a "Push Promise", do
+            -- it before sending the actual response headers of this stream
+            let
+                request_headers            = pushed_stream ^. requestHeaders_Psh
+                response_headers           = pushed_stream ^. responseHeaders_Psh
+                pushed_data_and_conclusion = pushed_stream ^. dataAndConclusion_Psh
+
+            child_stream_id <- liftIO $ modifyMVar next_push_stream_mvar
+                                     $ (\ x -> return (x+2,x) )
+
+            liftIO . writeChan headers_output . PushPromise_HM $
+                (stream_id, child_stream_id, request_headers, effects)
+            return (child_stream_id, response_headers, pushed_data_and_conclusion, effects)
+      else
+        return []
+
+
 
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO  newEmptyMVar
-    liftIO $ writeChan headers_output (stream_id, headers_sent, headers)
+    liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers_sent, headers, effects)
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
@@ -884,29 +977,91 @@ workerThread req coherent_worker =
         -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
         -- are let to bubble and managed in this thread fork point...
         (_maybe_footers, _) <- runConduit $
-             transPipe liftIO data_and_conclussion
+             transPipe liftIO data_and_conclusion
             `fuseBothMaybe`
-            sendDataOfStream stream_id headers_sent
+            sendDataOfStream stream_id headers_sent effects
+        -- BIG TODO: Send the footers ... likely stream conclusion semantics
+        -- will need to be changed.
+
+        -- Now, time to fork threads for the pusher streams ....
+        forM_ data_promises
+            $ \ (child_stream_id, response_headers, pushed_data_and_conclusion, effects) -> do
+                  environment <- ask
+                  let
+                      action = pusherThread
+                                    child_stream_id
+                                    response_headers
+                                    pushed_data_and_conclusion
+                                    effects
+                  -- And let the action run in its own thread
+                  liftIO . forkIO $ runReaderT action environment
+
+        return ()
+
+
+
+-- Invokes the Coherent worker. Data is sent through pipes to
+-- the output thread here in this session.
+pusherThread :: GlobalStreamId -> Headers -> DataAndConclusion -> Effect  -> WorkerMonad ()
+pusherThread child_stream_id response_headers pushed_data_and_conclusion effects =
+  do
+    headers_output <- view headersOutput
+    session_settings_mvar <- view sessionSettings_WTE
+    session_settings <- liftIO $ readMVar session_settings_mvar
+
+    -- TODO: Handle exceptions here: what happens if the coherent worker
+    --       throws an exception signaling that the request is ill-formed
+    --       and should be dropped? That could happen in a couple of occassions,
+    --       but really most cases should be handled here in this file...
+    -- (headers, _, data_and_conclussion)
+
+
+    -- Now I send the headers, if that's possible at all
+    headers_sent <- liftIO  newEmptyMVar
+    liftIO . writeChan headers_output
+        $ NormalResponse_HM (child_stream_id, headers_sent, response_headers, effects)
+
+    -- At this moment I should ask if the stream hasn't been cancelled by the browser before
+    -- commiting to the work of sending addtitional data... this is important for pushed
+    -- streams
+    is_stream_cancelled <- isStreamCancelled child_stream_id
+    unless  is_stream_cancelled $ do
+        -- I have a beautiful source that I can de-construct...
+        -- TODO: Optionally pulling data out from a Conduit ....
+        -- liftIO ( data_and_conclussion $$ (_sendDataOfStream stream_id) )
+        --
+        -- This threadlet should block here waiting for the headers to finish going
+        -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
+        -- are let to bubble and managed in this thread fork point...
+        (_maybe_footers, _) <- runConduit $
+             transPipe liftIO pushed_data_and_conclusion
+            `fuseBothMaybe`
+            sendDataOfStream child_stream_id headers_sent effects
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
         -- will need to be changed.
 
         return ()
 
+
+
 --                                                       v-- comp. monad.
-sendDataOfStream :: GlobalStreamId -> MVar HeadersSent -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
-sendDataOfStream stream_id headers_sent = do
+sendDataOfStream :: GlobalStreamId -> MVar HeadersSent -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
+sendDataOfStream stream_id headers_sent effect = do
     data_output <- view dataOutput
     -- Wait for all headers sent
     liftIO $ takeMVar headers_sent
     consumer data_output
   where
+    --delay = effect ^. middlePauseForDelivery_Ef
     consumer data_output = do
         maybe_bytes <- await
         case maybe_bytes of
             Nothing ->
-                liftIO $ putMVar data_output (stream_id, Nothing)
+                -- This is how we finish sending data
+                liftIO $ putMVar data_output (stream_id, Nothing, effect)
             Just bytes -> do
-                liftIO $ putMVar data_output (stream_id, Just bytes)
+                liftIO $ do
+                    putMVar data_output (stream_id, Just bytes, effect)
                 consumer data_output
 
 
@@ -936,11 +1091,16 @@ getHeaderBytes global_stream_id = do
 
 isAboutHeaders :: InputFrame -> Maybe (GlobalStreamId, B.ByteString)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame _ block_fragment   ) )
-    = Just (NH2.fromStreamIdentifier stream_id, block_fragment)
+    = Just (stream_id, block_fragment)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.ContinuationFrame block_fragment) )
-    = Just (NH2.fromStreamIdentifier stream_id, block_fragment)
+    = Just (stream_id, block_fragment)
 isAboutHeaders _
     = Nothing
+
+
+getHeadersPriority :: InputFrame -> Maybe NH2.Priority
+getHeadersPriority (NH2.Frame _ ( NH2.HeadersFrame prio _ ) ) = prio
+getHeadersPriority _                                          = Nothing
 
 
 frameEndsHeaders  :: InputFrame -> Bool
@@ -948,59 +1108,125 @@ frameEndsHeaders (NH2.Frame (NH2.FrameHeader _ flags _) _) = NH2.testEndHeader f
 
 
 streamIdFromFrame :: InputFrame -> GlobalStreamId
-streamIdFromFrame (NH2.Frame (NH2.FrameHeader _ _ stream_id) _) = NH2.fromStreamIdentifier stream_id
+streamIdFromFrame (NH2.Frame (NH2.FrameHeader _ _ stream_id) _) = stream_id
 
 
 -- TODO: Have different size for the headers..... just now going with a default size of 16 k...
 -- TODO: Find a way to kill this thread....
-headersOutputThread :: Chan (GlobalStreamId, MVar HeadersSent, Headers)
+headersOutputThread :: Chan HeaderOutputMessage  --  (GlobalStreamId, MVar HeadersSent, Headers, Effect)
                        -> MVar SessionOutputChannelAbstraction
                        -> ReaderT SessionData IO ()
 headersOutputThread input_chan session_output_mvar = forever $ do
-    (stream_id, headers_ready_mvar, headers) <- liftIO $ readChan input_chan
 
-    -- First encode the headers using the table
-    encode_dyn_table_mvar <- view toEncodeHeaders
+    use_chunk_length <- view $ sessionsContext .  sessionsConfig . dataFrameSize
 
-    encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
-    (new_dyn_table, data_to_send ) <- liftIO $ HP.encodeHeader HP.defaultEncodeStrategy encode_dyn_table headers
-    liftIO $ putMVar encode_dyn_table_mvar new_dyn_table
+    header_output_request <- liftIO $ readChan input_chan
+    case header_output_request of
+        NormalResponse_HM (stream_id, headers_ready_mvar, headers, effect)  -> do
 
-    -- Now split the bytestring in chunks of the needed size....
-    bs_chunks <- return $! bytestringChunk useChunkLength data_to_send
+            -- First encode the headers using the table
+            encode_dyn_table_mvar <- view toEncodeHeaders
 
-    -- And send the chunks through while locking the output place....
-    liftIO $ E.bracket
-        (takeMVar session_output_mvar)
-        (putMVar session_output_mvar )
-        (\ session_output -> do
-            writeIndividualHeaderFrames session_output stream_id bs_chunks True
-            -- And say that the headers for this thread are out
-            -- INSTRUMENTATION( debugM "HTTP2.Session" $ "Headers were output for stream " ++ (show stream_id) )
-            putMVar headers_ready_mvar HeadersSent
-            )
+            encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
+            (new_dyn_table, data_to_send ) <- liftIO $ HP.encodeHeader HP.defaultEncodeStrategy encode_dyn_table headers
+            liftIO $ putMVar encode_dyn_table_mvar new_dyn_table
+
+            -- Now split the bytestring in chunks of the needed size....
+            -- Note that the only way we can
+            let
+                bs_chunks = bytestringChunk use_chunk_length  data_to_send
+
+            -- And send the chunks through while locking the output place....
+            liftIO $ bs_chunks `deepseq` E.bracket
+                (takeMVar session_output_mvar)
+                (putMVar session_output_mvar )
+                (\ session_output -> do
+                    writeIndividualHeaderFrames session_output stream_id bs_chunks True effect
+                    -- And say that the headers for this thread are out
+                    -- INSTRUMENTATION( debugM "HTTP2.Session" $ "Headers were output for stream " ++ (show stream_id) )
+                    putMVar headers_ready_mvar HeadersSent
+                    )
+
+        PushPromise_HM (parent_stream_id, child_stream_id, promise_headers, effect) -> do
+
+            encode_dyn_table_mvar <- view toEncodeHeaders
+            encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
+
+            (new_dyn_table, data_to_send ) <- liftIO $ HP.encodeHeader HP.defaultEncodeStrategy encode_dyn_table promise_headers
+            liftIO $ putMVar encode_dyn_table_mvar new_dyn_table
+
+            -- Now split the bytestring in chunks of the needed size....
+            bs_chunks <- return $! bytestringChunk use_chunk_length data_to_send
+
+            -- And send the chunks through while locking the output place....
+            liftIO $ E.bracket
+                (takeMVar session_output_mvar)
+                (putMVar session_output_mvar )
+                (\ session_output -> do
+                    writePushPromiseFrames session_output parent_stream_id child_stream_id bs_chunks True effect
+                    -- No notification here... but since everyhing headers is serialized here and the next
+                    -- piece of information corresponding to the child stream is a headers sequence, we shouldn't
+                    -- need any other tricks here
+                    )
+
+
   where
     writeIndividualHeaderFrames ::
         SessionOutputChannelAbstraction
         -> GlobalStreamId
         -> [B.ByteString]
         -> Bool
+        -> Effect
         -> IO ()
-    writeIndividualHeaderFrames session_output stream_id (last_fragment:[]) is_first =
+    writeIndividualHeaderFrames session_output stream_id (last_fragment:[]) is_first effect =
         writeChan session_output $ Right ( NH2.EncodeInfo {
             NH2.encodeFlags     = NH2.setEndHeader NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
+            ,NH2.encodeStreamId = stream_id
             ,NH2.encodePadding  = Nothing },
-            (if is_first then NH2.HeadersFrame Nothing last_fragment else  NH2.ContinuationFrame last_fragment)
+            (if is_first then NH2.HeadersFrame Nothing last_fragment else  NH2.ContinuationFrame last_fragment),
+            effect
             )
-    writeIndividualHeaderFrames session_output stream_id  (fragment:xs) is_first = do
+    writeIndividualHeaderFrames session_output stream_id  (fragment:xs) is_first effect = do
         writeChan session_output $ Right ( NH2.EncodeInfo {
             NH2.encodeFlags     = NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
+            ,NH2.encodeStreamId = stream_id
             ,NH2.encodePadding  = Nothing },
-            (if is_first then NH2.HeadersFrame Nothing fragment else  NH2.ContinuationFrame fragment)
+            (if is_first then NH2.HeadersFrame Nothing fragment else  NH2.ContinuationFrame fragment),
+            effect
             )
-        writeIndividualHeaderFrames session_output stream_id xs False
+        writeIndividualHeaderFrames session_output stream_id xs False effect
+
+    writePushPromiseFrames ::
+        SessionOutputChannelAbstraction
+        -> GlobalStreamId
+        -> GlobalStreamId
+        -> [B.ByteString]
+        -> Bool
+        -> Effect
+        -> IO ()
+    writePushPromiseFrames session_output parent_stream_id child_stream_id (last_fragment:[]) is_first effect =
+        writeChan session_output $ Right ( NH2.EncodeInfo {
+            NH2.encodeFlags     = NH2.setEndHeader NH2.defaultFlags
+            ,NH2.encodeStreamId = parent_stream_id
+            ,NH2.encodePadding  = Nothing },
+            (if is_first
+                then NH2.PushPromiseFrame child_stream_id last_fragment
+                else NH2.ContinuationFrame last_fragment
+            ),
+            effect
+            )
+    writePushPromiseFrames session_output parent_stream_id child_stream_id  (fragment:xs) is_first effect = do
+        writeChan session_output $ Right ( NH2.EncodeInfo {
+            NH2.encodeFlags     = NH2.defaultFlags
+            ,NH2.encodeStreamId = parent_stream_id
+            ,NH2.encodePadding  = Nothing },
+            (if is_first
+                then NH2.PushPromiseFrame child_stream_id fragment
+                else  NH2.ContinuationFrame fragment
+            ),
+            effect
+            )
+        writePushPromiseFrames session_output parent_stream_id child_stream_id  xs False effect
 
 
 bytestringChunk :: Int -> B.ByteString -> [B.ByteString]
@@ -1020,11 +1246,12 @@ bytestringChunk len s = h:(bytestringChunk len xs)
 --       way to avoid that is by holding a frame or by augmenting the end-user interface
 --       so that the user can signal which one is the last frame. The first approach
 --       restricts responsiviness, the second one clutters things.
-dataOutputThread :: MVar DataOutputToConveyor
+dataOutputThread :: Int
+                    -> MVar DataOutputToConveyor
                     -> MVar SessionOutputChannelAbstraction
                     -> IO ()
-dataOutputThread input_chan session_output_mvar = forever $ do
-    (stream_id, maybe_contents) <- takeMVar input_chan
+dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
+    (stream_id, maybe_contents, effect) <- takeMVar input_chan
     case maybe_contents of
         Nothing -> do
             liftIO $ do
@@ -1033,9 +1260,10 @@ dataOutputThread input_chan session_output_mvar = forever $ do
                            -- Write an empty data-frame with the right flags
                            writeChan session_output $ Right ( NH2.EncodeInfo {
                                  NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
-                                ,NH2.encodeStreamId  = NH2.toStreamIdentifier stream_id
+                                ,NH2.encodeStreamId  = stream_id
                                 ,NH2.encodePadding   = Nothing },
-                                NH2.DataFrame ""
+                                NH2.DataFrame "",
+                                effect
                                 )
                            -- And then write an-end-of-stream command
                            writeChan session_output $ Left . FinishStream_SOC $ stream_id
@@ -1043,9 +1271,10 @@ dataOutputThread input_chan session_output_mvar = forever $ do
 
         Just contents -> do
             -- And now just simply output it...
-            let bs_chunks = bytestringChunk useChunkLength $! contents
+            let bs_chunks = bytestringChunk use_chunk_length contents
             -- And send the chunks through while locking the output place....
-            writeContinuations bs_chunks stream_id
+            bs_chunks `deepseq` writeContinuations bs_chunks stream_id effect
+            return ()
 
   where
 
@@ -1053,11 +1282,18 @@ dataOutputThread input_chan session_output_mvar = forever $ do
         (takeMVar session_output_mvar)
         (putMVar session_output_mvar) -- <-- There is an implicit argument there!!
 
-    writeContinuations :: [B.ByteString] -> GlobalStreamId  -> IO ()
-    writeContinuations fragments stream_id  = mapM_ (\ fragment ->
-        withLockedSessionOutput (\ session_output -> writeChan session_output $ Right ( NH2.EncodeInfo {
-            NH2.encodeFlags     = NH2.defaultFlags
-            ,NH2.encodeStreamId = NH2.toStreamIdentifier stream_id
-            ,NH2.encodePadding  = Nothing },
-            NH2.DataFrame fragment ) )
-        ) fragments
+    writeContinuations :: [B.ByteString] -> GlobalStreamId -> Effect  -> IO ()
+    writeContinuations fragments stream_id effect =
+      mapM_ (\ fragment ->
+                  withLockedSessionOutput
+                      (\ session_output -> writeChan session_output $ Right (
+                           NH2.EncodeInfo {
+                               NH2.encodeFlags     = NH2.defaultFlags
+                               ,NH2.encodeStreamId = stream_id
+                               ,NH2.encodePadding  = Nothing
+                               },
+                           NH2.DataFrame fragment,
+                           effect )
+                      )
+             )
+             fragments

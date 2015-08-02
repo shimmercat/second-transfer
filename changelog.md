@@ -1,3 +1,10 @@
+- 0.6.0.0 :
+    * Changed the interface to provide more information to and from workers
+    * Implemented HTTP/2 push
+    * Upgraded dependencies to 1.0. for http2 package
+    * Extended channel interface in such a way that latency is reduced, as a result,
+      the test suite is completely broken. Please wait for 0.6.0.1 release.
+
 - 0.5.5.1 :
     * Restricted HTTP2 package version.
     * Fixes #2

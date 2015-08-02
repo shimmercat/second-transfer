@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings #-}
 
-module SecondTransfer.Test.DecoySession where 
+module SecondTransfer.Test.DecoySession where
 
 
 
@@ -14,7 +14,7 @@ import qualified Control.Lens            as L
 import qualified Network.HTTP2           as NH2
 import qualified Network.HPACK           as HP
 
-import qualified Data.ByteString         as B 
+import qualified Data.ByteString         as B
 import qualified Data.ByteString.Lazy    as LB
 
 import           SecondTransfer.Http2
@@ -29,7 +29,7 @@ data DecoySession = DecoySession {
     ,_remainingOutputBit:: MVar B.ByteString
     ,_nh2Settings       :: NH2.Settings
     ,_sessionThrowed    :: MVar Bool
-    ,_waiting           :: MVar ThreadId 
+    ,_waiting           :: MVar ThreadId
     ,_encodeHeadersHere :: MVar HP.DynamicTable
     ,_decodeHeadersHere :: MVar HP.DynamicTable
     }
@@ -41,16 +41,22 @@ L.makeLenses ''DecoySession
 -- Supposed to be an HTTP/2 attendant
 createDecoySession :: Attendant -> IO DecoySession
 createDecoySession attendant = do
-    input_data_channel  <- newChan 
+    input_data_channel  <- newChan
     output_data_channel <- newChan
-    let 
+    let
         push_action  :: PushAction
         push_action = writeChan output_data_channel
-        pull_action  :: PullAction 
+        pull_action  :: PullAction
         pull_action = readChan input_data_channel
-        close_action :: CloseAction 
-        close_action = do
-            return ()
+        close_action :: CloseAction
+        best_effort_pull_action _ = error "NotImplemented"
+        close_action =  return ()
+        attendant_callbacks = AttendantCallbacks {
+            _pushAction_AtC = push_action,
+            _pullAction_AtC = pull_action,
+            _closeAction_AtC = close_action,
+            _bestEffortPullAction_AtC = best_effort_pull_action
+            }
 
     dtable_for_encoding <- HP.newDynamicTableForEncoding 4096
     dtable_for_encoding_mvar <- newMVar dtable_for_encoding
@@ -58,15 +64,15 @@ createDecoySession attendant = do
     dtable_for_decoding_mvar <- newMVar dtable_for_decoding
 
     waiting_mvar <- newEmptyMVar
-        
-    thread_id <- forkIO $ catch 
-        (do 
+
+    thread_id <- forkIO $ catch
+        (do
             attendant push_action pull_action close_action
         )
-        ((\ e -> do 
+        ((\ e -> do
             putStrLn $ "Exception: " ++ (show e)
             maybe_waiting <- tryTakeMVar waiting_mvar
-            case maybe_waiting of 
+            case maybe_waiting of
                 Just thread_id -> throwTo thread_id e
                 Nothing -> return ()
         ):: SomeException -> IO ())
@@ -90,25 +96,25 @@ sessionIsUndone :: DecoySession -> IO Bool
 sessionIsUndone session = error "NotImplemented"
 
 
--- Send a frame to a session 
+-- Send a frame to a session
 sendFrameToSession :: DecoySession -> OutputFrame -> IO ()
-sendFrameToSession session (encode_info, frame_payload) = do 
-    let 
+sendFrameToSession session (encode_info, frame_payload) = do
+    let
         bs_list = NH2.encodeFrameChunks encode_info frame_payload
         input_data_channel = session ^. inputDataChannel
 
-    mapM_ (\ x -> writeChan input_data_channel x ) bs_list
+    writeChan2Chan input_data_channel bs_list
 
 
--- Read a frame from a session... if possible. It will block 
--- until the frame comes out, but should fail if there is 
+-- Read a frame from a session... if possible. It will block
+-- until the frame comes out, but should fail if there is
 -- an exception and/or the session is closed.
 recvFrameFromSession :: DecoySession ->  IO (Maybe NH2.Frame)
 recvFrameFromSession decoy_session = do
-    let 
+    let
         output_data_channel = decoy_session ^. outputDataChannel
         remaining_output_bit_mvar = decoy_session ^. remainingOutputBit
-        pull_action = fmap LB.toStrict $ readChan output_data_channel 
+        pull_action = fmap LB.toStrict $ readChan output_data_channel
         settings = decoy_session ^. nh2Settings
         waiting_for_read = decoy_session ^. waiting
     my_thread_id <- myThreadId
@@ -117,46 +123,46 @@ recvFrameFromSession decoy_session = do
     (packet, rest) <- readNextChunkAndContinue http2FrameLength remaining_output_bit pull_action
     putMVar remaining_output_bit_mvar rest
     takeMVar waiting_for_read
-    let 
+    let
         error_or_frame = NH2.decodeFrame settings packet
-    case error_or_frame of 
-        Left   _      -> return Nothing 
+    case error_or_frame of
+        Left   _      -> return Nothing
         Right  frame  -> return $ Just frame
 
 
--- Encode headers to send to the session 
+-- Encode headers to send to the session
 -- TODO: There is an important bug here... we are using the default encoding
 -- strategy everywhere
 encodeHeadersForSession :: DecoySession -> Headers -> IO B.ByteString
-encodeHeadersForSession decoy_session headers = 
-  do 
-    let 
-        mv = (decoy_session ^. encodeHeadersHere )
-    dtable <- takeMVar mv
-    (dtable', bs ) <- HP.encodeHeader HP.defaultEncodeStrategy dtable headers 
-    putMVar mv dtable'
-    return bs
+encodeHeadersForSession decoy_session headers =
+    do
+        let
+            mv = decoy_session ^. encodeHeadersHere
+        dtable <- takeMVar mv
+        (dtable', bs ) <- HP.encodeHeader HP.defaultEncodeStrategy dtable headers
+        putMVar mv dtable'
+        return bs
 
--- Decode headers to receive them from the session 
-decodeHeadersForSession :: DecoySession -> B.ByteString -> IO Headers 
-decodeHeadersForSession decoy_session bs = 
-  do 
-    let 
-        mv = (decoy_session ^. decodeHeadersHere )
-    dtable <- takeMVar mv 
-    (dtable', headers) <- HP.decodeHeader dtable bs
-    putMVar mv dtable'
-    return headers
+-- Decode headers to receive them from the session
+decodeHeadersForSession :: DecoySession -> B.ByteString -> IO Headers
+decodeHeadersForSession decoy_session bs =
+    do
+        let
+            mv = decoy_session ^. decodeHeadersHere
+        dtable <- takeMVar mv
+        (dtable', headers) <- HP.decodeHeader dtable bs
+        putMVar mv dtable'
+        return headers
 
--- Send raw data to a session 
+-- Send raw data to a session
 sendRawDataToSession :: DecoySession -> B.ByteString -> IO ()
 sendRawDataToSession decoy_session data_to_send = do
-    let 
+    let
         input_data_channel = decoy_session ^. inputDataChannel
         waiting_for_write = decoy_session ^. waiting
 
     thread_id <- myThreadId
-    putMVar waiting_for_write thread_id 
+    putMVar waiting_for_write thread_id
     writeChan input_data_channel data_to_send
     takeMVar waiting_for_write
     return ()
@@ -164,22 +170,22 @@ sendRawDataToSession decoy_session data_to_send = do
 
 -- Send a headers frame to the session that ends the stream...
 performRequestSimple :: DecoySession -> Int -> Headers -> IO ()
-performRequestSimple decoy_session stream_id headers = do 
-    headers_data <- encodeHeadersForSession decoy_session headers 
-    let 
-        frame = NH2.HeadersFrame 
+performRequestSimple decoy_session stream_id headers = do
+    headers_data <- encodeHeadersForSession decoy_session headers
+    let
+        frame = NH2.HeadersFrame
             Nothing  -- No priority
-            headers_data 
+            headers_data
         frame_data_ei = NH2.EncodeInfo {
             NH2.encodeFlags = NH2.setEndStream . NH2.setEndHeader $ NH2.defaultFlags,
-            NH2.encodeStreamId = NH2.toStreamIdentifier stream_id,
+            NH2.encodeStreamId = stream_id,
             NH2.encodePadding = Nothing
             }
-    
+
     sendFrameToSession decoy_session (frame_data_ei,frame)
 
 
 -- Read raw data from a session. Normally blocks until data be available.
--- It returns Nothing when the session is to be considered finished. 
+-- It returns Nothing when the session is to be considered finished.
 recvRawDataFromSession :: DecoySession -> IO (Maybe B.ByteString)
 recvRawDataFromSession decoy_session = error "NotImplemented"

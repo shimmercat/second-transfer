@@ -1,6 +1,8 @@
 /dist
 /.cabal-sandbox*
+/.stack-work/
 .*.swp
 *.pyc
 *.sublime-workspace
 cabal.sandbox.config
+/env-scripts/specific

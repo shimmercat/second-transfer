@@ -19,6 +19,8 @@
 #include <bits/sigthread.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <netinet/tcp.h>
+
 
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
@@ -56,9 +58,13 @@ void close_connection(connection_t* conn);
 int wait_for_connection(connection_t* conn, int microseconds, wired_session_t** wired_session);
 int send_data(wired_session_t* ws, char* buffer, int buffer_size);
 int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_recvd);
+int recv_data_best_effort(wired_session_t* ws, char* inbuffer, int buffer_size, int can_wait, int* data_recvd);
 int get_selected_protocol(wired_session_t* ws){ return ws->protocol_index; }
 void dispose_wired_session(wired_session_t* ws);
 static int thread_setup(void);
+
+// Preprocessor flag: when 1, we will trace ALPN info
+#define TRACE_ALPN_NEGOTIATION 0
 
 
 ////////////////////////////////////////////////////////////////////////
@@ -102,6 +108,7 @@ static int tcpStart (char* hostname, int portno, int* errorh)
     handle = socket (AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(handle, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
     if (handle == -1)
     {
         perror ("Socket could not be created");
@@ -110,29 +117,46 @@ static int tcpStart (char* hostname, int portno, int* errorh)
     }
     else
     {
-        server.sin_family = AF_INET;
-        server.sin_port = htons (portno);
-        server.sin_addr = *((struct in_addr *) host->h_addr);
-        bzero (&(server.sin_zero), 8);
 
-        error = bind (handle, (struct sockaddr *) &server,
-                sizeof (struct sockaddr));
-        if (error == -1)
+        int flag = 1;
+        int result = setsockopt(handle,            /* socket affected */
+                                 IPPROTO_TCP,     /* set option at TCP level */
+                                 TCP_NODELAY,     /* name of option */
+                                 (char *) &flag,  /* the cast is historical
+                                                         cruft */
+                                 sizeof(int));    /* length of option value */
+        if (result < 0)
         {
-            perror ("Bind");
+            perror("Couldn't set TCP_NODELAY");
             handle = 0;
             *errorh = BAD_HAPPENED;
-        }
-        else
+        } else
         {
-            error = listen(handle, 5);
-            if ( error != 0 )
+            server.sin_family = AF_INET;
+            server.sin_port = htons (portno);
+            server.sin_addr = *((struct in_addr *) host->h_addr);
+            bzero (&(server.sin_zero), 8);
+
+            error = bind (handle, (struct sockaddr *) &server,
+                    sizeof (struct sockaddr));
+            if (error == -1)
             {
-                perror("Listen");
+                perror ("Bind");
                 handle = 0;
                 *errorh = BAD_HAPPENED;
             }
+            else
+            {
+                error = listen(handle, 5);
+                if ( error != 0 )
+                {
+                    perror("Listen");
+                    handle = 0;
+                    *errorh = BAD_HAPPENED;
+                }
+            }
         }
+
     }
 
     return handle;
@@ -298,24 +322,32 @@ static int protocol_select (
     connection_t* conn = (connection_t*) arg;
     static char output[64];
 
-    char* incursor = (char*) in;
 
-    while (incursor < (char*)in + inlen )
+#if TRACE_ALPN_NEGOTIATION
+    printf("protocol check starts, offered %d bytes for protocols ^^^^^^^^^^^^^ \n", inlen);
+    int first_run = 1;
+#endif
+    char* stored_cursor = conn->protocol_list;
+
+    while( stored_cursor < conn->protocol_list + conn->protocol_list_length)
     {
-        // Got a protocol.... can I satisfy it?
-        char sublen = *incursor;
-        //printf("offered prot %.*s \n", sublen, incursor+1);
-
-        char* stored_cursor = conn->protocol_list;
+        char* incursor = (char*) in;
         int sto_protocol = 0;
+        char sublen2 = *stored_cursor;
 
-        while( stored_cursor < conn->protocol_list + conn->protocol_list_length)
+        while (incursor < (char*)in + inlen )
         {
-            char sublen2 = *stored_cursor;
+            // Got a protocol.... can I satisfy it?
+            char sublen = *incursor;
+
+#if TRACE_ALPN_NEGOTIATION
+            if (first_run)
+                printf("offered prot %.*s \n", sublen, incursor+1);
+#endif
 
             if (sublen != sublen2)
             {
-
+                // No match, just continue
             } else {
                 int cmpresult = strncmp( incursor + 1, stored_cursor + 1, sublen);
                 if (cmpresult == 0)
@@ -323,19 +355,29 @@ static int protocol_select (
                     // They are equal, choose this one...
                     strncpy( output, stored_cursor+1, sublen);
                     *outlen = sublen;
-                    *out = output;
-
-
+                    *out = (unsigned char*)output;
+#if TRACE_ALPN_NEGOTIATION
+                    printf("protocol check ends by match vvvvvvvvvvv \n");
+#endif
                     return SSL_TLSEXT_ERR_OK;
                 }
             }
-            sto_protocol += 1;
-            stored_cursor += (1+sublen2);
+
+            incursor += (1+sublen);
         }
 
-        incursor += (1+sublen);
+#if TRACE_ALPN_NEGOTIATION
+        first_run = 0;
+#endif
+
+        sto_protocol += 1;
+        stored_cursor += (1+sublen2);
+
     }
 
+#if TRACE_ALPN_NEGOTIATION
+    printf("protocol check ends without match vvvvvvvvvvv \n");
+#endif
     // I think this is what should be returned
     return -1;
 }
@@ -608,6 +650,19 @@ int wait_for_connection(
         return BAD_HAPPENED;
     }
 
+    int flag = 1;
+    int nresult =  setsockopt(newsockfd,            /* socket affected */
+                                 IPPROTO_TCP,     /* set option at TCP level */
+                                 TCP_NODELAY,     /* name of option */
+                                 (char *) &flag,  /* the cast is historical
+                                                         cruft */
+                                 sizeof(int));    /* length of option value */
+    if ( nresult < 0)
+    {
+        perror("Couldn't set TCP_NODELAY");
+        return BAD_HAPPENED;
+    }
+
     // Create an SSL struct for the connection
 
     result->socket = newsockfd;
@@ -687,28 +742,60 @@ int send_data(wired_session_t* ws, char* buffer, int buffer_size)
     }
 }
 
+// Now this function does a very good effort to get as much data as requested, and it
+// doesn't return until then. That works well for HTTP/2 sessions which are almost
+// never closed naturally. It is however more tricky for EOF cases....
 int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_recvd)
 {
     int received=0, count = 0;
-    char buffer[1024];
 
     // printf("Recvd entered\n");
 
-    if (ws)
+    while ( count < buffer_size )
     {
-        received = SSL_read (ws->sslHandle, inbuffer, buffer_size);
+        if (ws)
+        {
+            received = SSL_read (ws->sslHandle, inbuffer+count, buffer_size - count );
+        }
+        if ( received <= 0 )
+        {
+            ERR_print_errors_fp (stderr);
+            return BAD_HAPPENED;
+        } else
+        {
+            // Continue reading
+            count += received ;
+        }
+    }
+
+    // printf("Recvd exited\n");
+    *data_recvd=count ;
+    return ALL_OK;
+}
+
+
+int recv_data_best_effort(wired_session_t* ws, char* inbuffer, int buffer_size, int can_wait, int* data_recvd)
+{
+    int received=0, count = 0;
+
+    if (ws && ( can_wait || SSL_pending(ws->sslHandle) ) )
+    {
+        received = SSL_read (ws->sslHandle, inbuffer+count, buffer_size - count );
     }
     if ( received <= 0 )
     {
         ERR_print_errors_fp (stderr);
         return BAD_HAPPENED;
+    } else
+    {
+        // Continue reading
+        count += received ;
     }
-    *data_recvd = received ;
 
-    // printf("Recvd exited\n");
-
+    *data_recvd=count ;
     return ALL_OK;
 }
+
 
 #define MUTEX_TYPE       pthread_mutex_t
 #define MUTEX_SETUP(x)   pthread_mutex_init(&(x), NULL)

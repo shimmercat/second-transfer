@@ -1,0 +1,13 @@
+flags:
+  second-transfer:
+    debug: false
+    develop: true
+packages:
+- '.'
+- location:
+    git: https://github.com/DanielG/ghc-mod.git
+    commit: ed858e6dfd19270f3980f78d8a7fbe5b2cf05132
+extra-deps:
+- cabal-helper-0.3.6.0
+- cabal-install-1.22.6.0
+resolver: nightly-2015-07-30
