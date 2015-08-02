@@ -1,3 +1,10 @@
+- 0.6.0.0 :
+    * Changed the interface to provide more information to and from workers
+    * Implemented HTTP/2 push
+    * Upgraded dependencies to 1.0. for http2 package
+    * Extended channel interface in such a way that latency is reduced, as a result,
+      the test suite is completely broken. Please wait for 0.6.0.1 release.
+
 - 0.5.5.0 :
     * Made HeaderEditor a Monoid instance
     * Trying to WINDOW_UPDATE an unexistent stream aborts the session, as it should

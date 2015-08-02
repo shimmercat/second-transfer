@@ -57,10 +57,6 @@ Done:
 
 Pending:
 
-- Better examples.
-
-- Epoll I/O management
-
 - Benchmarking.
 
 Internal
