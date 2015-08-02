@@ -53,11 +53,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-<<<<<<< HEAD
-  tag:      0.5.5.1
-=======
   tag:      0.6.0.0
->>>>>>> performance
 
 library
 
