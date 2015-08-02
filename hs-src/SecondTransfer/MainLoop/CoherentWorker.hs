@@ -91,7 +91,7 @@ data Perception = Perception {
   -- HTTP/1.1 session.
   _streamId_Pr :: Int,
   -- You know better than to use this for normal web request
-  -- processing. But otherwise a number uniquely identifying the session. 
+  -- processing. But otherwise a number uniquely identifying the session.
   _sessionId_Pr :: Int
   }
 

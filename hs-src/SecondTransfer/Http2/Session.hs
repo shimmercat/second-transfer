@@ -571,9 +571,10 @@ sessionInputThread  = do
                 maybe_thread_id <- H.lookup stream2workerthread stream_id
                 case maybe_thread_id  of
                     Nothing ->
-                        -- This is actually more like an internal error, when this
-                        -- happens, cancel the session
-                        error "InterruptingUnexistentStream"
+                        -- This is can actually happen in some implementations: we are asked to
+                        -- cancel an stream we know nothing about. Log which stream it is
+                        logit $  "InterruptingUnexistentStream " `mappend` (pack . show $ stream_id)
+                        -- and don't get too crazy about it.
 
                     Just thread_id -> do
                         -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
