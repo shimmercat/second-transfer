@@ -19,6 +19,7 @@ import           Data.Conduit.List                       (consume)
 
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag, sessionsConfig)
 
 -- Logging utilities
@@ -98,9 +99,11 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                         _headers_RQ = modified_headers,
                         _inputData_RQ = Nothing,
                         _perception_RQ = Perception {
-                          _startedTime_Pr = started_time,
-                          _streamId_Pr    = reuse_no,
-                          _sessionId_Pr   = session_tag
+                          _startedTime_Pr       = started_time,
+                          _streamId_Pr          = reuse_no,
+                          _sessionId_Pr         = session_tag,
+                          _protocol_Pr          = Http11_HPV,
+                          _anouncedProtocols_Pr = Nothing
                         }
                     }
                 let

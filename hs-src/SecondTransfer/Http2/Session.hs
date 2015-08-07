@@ -66,6 +66,7 @@ import           System.Clock                            (getTime, TimeSpec, Clo
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
+import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler,
                                                          SessionsContext,
@@ -518,7 +519,9 @@ sessionInputThread  = do
                   perception = Perception {
                       _startedTime_Pr = headers_arrived_time,
                       _streamId_Pr = stream_id,
-                      _sessionId_Pr = current_session_id
+                      _sessionId_Pr = current_session_id,
+                      _protocol_Pr = Http2_HPV,
+                      _anouncedProtocols_Pr = Nothing
                       }
                   request = Request {
                       _headers_RQ = header_list_after,
