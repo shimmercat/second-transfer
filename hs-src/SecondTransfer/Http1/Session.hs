@@ -8,6 +8,7 @@ module SecondTransfer.Http1.Session(
 import           Control.Lens
 import           Control.Exception                       (catch)
 import           Control.Concurrent                      (forkIO)
+import           Control.Monad.IO.Class                  (liftIO)
 
 import qualified Data.ByteString                         as B
 -- import qualified Data.ByteString.Lazy                   as LB
@@ -15,6 +16,7 @@ import qualified Data.ByteString                         as B
 -- import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Conduit.List                       (consume)
+import           Data.IORef
 -- import           Data.Monoid                            (mconcat, mappend)
 
 import           SecondTransfer.MainLoop.CoherentWorker
@@ -42,7 +44,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
     =
     do
         new_session_tag <- acquireNewSessionTag sessions_context
-        infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
+        -- infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
         forkIO $ go new_session_tag (Just "") 1
         return ()
   where
@@ -53,13 +55,15 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
 
     go :: Int -> Maybe B.ByteString -> Int -> IO ()
     go session_tag (Just leftovers) reuse_no = do
-        infoM "Session.Session_HTTP11" $ "(Re)Using session with tag: " ++ (show session_tag)
+        -- infoM "Session.Session_HTTP11" $ "(Re)Using session with tag: " ++ (show session_tag)
         maybe_leftovers <- add_data newIncrementalHttp1Parser leftovers session_tag reuse_no
         go session_tag maybe_leftovers (reuse_no + 1)
 
     go _ Nothing _  =
         return ()
 
+    -- This function will invoke itself as long as data is coming for the currently-being-parsed
+    -- request/response.
     add_data :: IncrementalHttp1Parser  -> B.ByteString -> Int -> Int -> IO (Maybe B.ByteString)
     add_data parser bytes session_tag reuse_no = do
         let
@@ -79,7 +83,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                     ( (\ _e -> do
                         -- This is a pretty harmless condition that happens
                         -- often when the remote peer closes the connection
-                        debugM "Session.HTTP1" "Could not receive data"
+                        -- debugM "Session.HTTP1" "Could not receive data"
                         close_action
                         return Nothing
                     ) :: IOProblem -> IO (Maybe B.ByteString) )
@@ -120,18 +124,74 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                         return $ Just leftovers
                     )
                     ((\ _e -> do
-                        debugM "Session.HTTP1" "Session abandoned"
+                        -- debugM "Session.HTTP1" "Session abandoned"
                         close_action
                         return Nothing
                     ) :: IOProblem -> IO (Maybe B.ByteString) )
 
-            HeadersAndBody_H1PC _headers _stopcondition _recv_leftovers -> do
-                -- print "HeadersAndBody_H1PC"
-                -- Let's see if I can go through the basic movements first, then through
-                -- more complicated things.
-                -- TODO: Implement posts and other requests with bodies....
-                close_action
-                error "NotImplemented requests with bodies"
+            HeadersAndBody_H1PC headers stopcondition recv_leftovers -> do
+                let
+                    modified_headers = addExtraHeaders sessions_context headers
+                started_time <- getTime Monotonic
+                set_leftovers <- newIORef ""
+
+                principal_stream <- coherent_worker Request {
+                        _headers_RQ = modified_headers,
+                        _inputData_RQ = Just $ counting_read recv_leftovers stopcondition set_leftovers,
+                        _perception_RQ = Perception {
+                          _startedTime_Pr       = started_time,
+                          _streamId_Pr          = reuse_no,
+                          _sessionId_Pr         = session_tag,
+                          _protocol_Pr          = Http11_HPV,
+                          _anouncedProtocols_Pr = Nothing
+                        }
+                    }
+                let
+                    data_and_conclusion = principal_stream ^. dataAndConclusion_PS
+                    response_headers    = principal_stream ^. headers_PS
+                (_, fragments) <- runConduit $ fuseBoth data_and_conclusion consume
+                channel_leftovers <- readIORef set_leftovers
+                let
+                    response_text =
+                        serializeHTTPResponse response_headers fragments
+
+                catch
+                    (do
+                        push_action response_text
+                        return $ Just channel_leftovers
+                    )
+                    ((\ _e -> do
+                        -- debugM "Session.HTTP1" "Session abandoned"
+                        close_action
+                        return Nothing
+                    ) :: IOProblem -> IO (Maybe B.ByteString) )
+
+    counting_read :: B.ByteString -> BodyStopCondition -> IORef B.ByteString -> Source IO B.ByteString
+    counting_read leftovers un@(UseBodyLength_BSC n) set_leftovers = do
+        -- Can I continue?
+        if n == 0 then
+          do
+            liftIO $ writeIORef set_leftovers leftovers
+            return ()
+        else
+          do
+            let
+                lngh_leftovers = B.length leftovers
+            if lngh_leftovers > 0 then
+                if lngh_leftovers <= n then
+                  do
+                    yield leftovers
+                    counting_read "" (UseBodyLength_BSC (n - lngh_leftovers )) set_leftovers
+                else
+                  do
+                    let
+                      (pass, new_leftovers) = B.splitAt n leftovers
+                    yield pass
+                    counting_read new_leftovers (UseBodyLength_BSC 0) set_leftovers
+            else
+              do
+                more_text <- liftIO $ best_effort_pull_action True
+                counting_read more_text un set_leftovers
 
 
 addExtraHeaders :: SessionsContext -> Headers -> Headers

@@ -48,8 +48,7 @@ import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 
-import           Prelude
-
+--import           Debug.Trace                            (traceIO, traceShowId)
 
 data IncrementalHttp1Parser = IncrementalHttp1Parser {
     _fullText :: Bu.Builder
@@ -193,9 +192,10 @@ elaborateHeaders full_text crlf_positions last_headers_position =
             ((":status", status_str): headers_1, not excludes_body)
 
     -- Still we need to lower-case header names, and trim them
-    headers_3 = [
+    headers_3 =  [
         ( (stripBs . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
         ]
+
 
     content_length :: Int
     content_length =
@@ -203,7 +203,11 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         cnt_length_header = find (\ x -> (fst x) == "content-length" ) headers_3
       in case cnt_length_header of
         Just (_, hv) -> read . unpack $ hv
-        Nothing -> throw ContentLengthMissingException
+
+        -- Some tools omit Content-Length sometimes.... what is the correct way to
+        -- handle that?
+        -- Nothing -> throw ContentLengthMissingException
+        Nothing -> 0
 
     leftovers = B.drop (last_headers_position + 4) full_headers_text
   in
