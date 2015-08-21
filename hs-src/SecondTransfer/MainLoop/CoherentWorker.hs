@@ -27,6 +27,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , CoherentWorker
     , InputDataStream
     , TupledPrincipalStream
+    , TupledRequest
     , FragmentDeliveryCallback
 
     , headers_RQ
@@ -84,14 +85,14 @@ type InputDataStream = Source IO B.ByteString
 
 -- | Data related to the request
 data Perception = Perception {
-  -- Monotonic time close to when the request was first seen in
+  -- | Monotonic time close to when the request was first seen in
   -- the processing pipeline.
   _startedTime_Pr :: TimeSpec,
-  -- The HTTP/2 stream id. Or the serial number of the request in an
+  -- | The HTTP/2 stream id. Or the serial number of the request in an
   -- HTTP/1.1 session.
   _streamId_Pr :: Int,
-  -- You know better than to use this for normal web request
-  -- processing. But otherwise a number uniquely identifying the session.
+  -- | A number uniquely identifying the session. This number is unique and
+  --   the same for each TPC connection that a client opens using a given protocol.
   _sessionId_Pr :: Int
   }
 
@@ -197,15 +198,22 @@ makeLenses ''PrincipalStream
 --   cancels the stream
 type AwareWorker = Request -> IO PrincipalStream
 
--- | A CoherentWorker is a less fuzzy worker, but less aware.
-type CoherentWorker =  (Headers, Maybe InputDataStream) -> IO (Headers, PushedStreams, DataAndConclusion)
+-- | A CoherentWorker is a simplified callback that you can implement to handle requests.
+--  Then you can convert it to an AwareWorker with `tupledPrincipalStreamToPrincipalStream`.
+type CoherentWorker =  TupledRequest -> IO TupledPrincipalStream
 
--- | Not exactly equivalent of the prinicipal stream
+-- | A tuple representing the data alone that you usually need to give as a response, that
+--   is, the headers in the response (including the HTTP/2 :status), any pushed streams,
+--   a stream with the response data and the footers.
 type TupledPrincipalStream = (Headers, PushedStreams, DataAndConclusion)
 
+-- | A tuple representing the data alone usually needed to create a response. That is,
+--   the headers (including HTTP/2 :path, :authority, etc) and maybe an input data stream
+--   for requests that include it, that is, POST and PUT.
 type TupledRequest = (Headers, Maybe InputDataStream)
 
 
+-- | Convert between the two types of callback.
 tupledPrincipalStreamToPrincipalStream :: TupledPrincipalStream -> PrincipalStream
 tupledPrincipalStreamToPrincipalStream (headers, pushed_streams, data_and_conclusion) = PrincipalStream
       {

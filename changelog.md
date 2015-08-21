@@ -1,3 +1,9 @@
+- 0.6.1.0 :
+    * Improved documentation.
+    * Improved ALPN negotiation handling.
+    * Messages with a body are now handled by the HTTP/1.1 speaking part of this
+      library.
+
 - 0.6.0.0 :
     * Changed the interface to provide more information to and from workers
     * Implemented HTTP/2 push

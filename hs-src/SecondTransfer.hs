@@ -6,6 +6,9 @@ Maintainer  : alcidesv@zunzun.se
 Stability   : experimental
 Portability : POSIX
 
+SecondTransfer is a HTTP/1.1 and HTTP/2 server session library, with an emphasis towards
+experimentation (so far).
+
 This library implements enough of the HTTP/2  to build
 compliant HTTP/2 servers. It also implements enough of
 HTTP/1.1 so you can actually use it to build polyglot web-servers.
@@ -60,9 +63,11 @@ saysHello = do
     -- if you wish.
     -- If you do multiple yields, no data will be left buffered between them,
     -- so that you can for example implement a chat client in a single HTTP/2 stream.
-    -- Pity browsers hardly support that.
+    -- Not that browsers support that. 
     yield "Hello world!"
-    -- No footers
+    -- The HTTP/2 protocol supports sending headers *after* stream data. So, you usually
+    -- return an empty list to signal that you don't want any of those headers. 
+    -- In these docs, the post headers are often called "footers".
     return []
 
 
@@ -104,7 +109,10 @@ main = do
 
 `AwareWorker` is the type of the basic callback function that you need to implement, but
 most times you can do with a simplified version called `CoherentWorker`. The function
-`coherentToAwareWorker` does the conversion.
+`coherentToAwareWorker` does the conversion. The difference between the two callbacks is 
+the level of information that you manage. With AwareWorker, you get a record on the request
+with all sort of details, things like the session id and the 
+
 The callback is used to handle all requests to the server on a given negotiated ALPN
 protocol. If you need routing functionality (and you most certainly will need it), you need
 to build that functionality inside the callback.
