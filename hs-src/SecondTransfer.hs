@@ -15,9 +15,6 @@ Kazu Yamamoto's <http://hackage.haskell.org/package/http2 http2> package.
 This library just takes care of making sense of sent and received
 frames.
 
-You can find more detailed information about this library at the page
-<https://www.httptwo.com/second-transfer/>.
-
 The library
 
   * Is concurrent, meaning that you can use amazing Haskell lightweight threads to
