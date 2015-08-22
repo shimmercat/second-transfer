@@ -4,9 +4,7 @@ flags:
     develop: true
 packages:
 - '.'
-- location:
-    git: https://github.com/DanielG/ghc-mod.git
-    commit: ed858e6dfd19270f3980f78d8a7fbe5b2cf05132
+- examples/attempt_bust
 extra-deps:
 - cabal-helper-0.3.6.0
 - cabal-install-1.22.6.0
