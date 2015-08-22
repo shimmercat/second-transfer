@@ -357,8 +357,6 @@ http2Session aware_worker session_id sessions_context =   do
 --- more robust.
 sessionInputThread :: ReaderT SessionData IO ()
 sessionInputThread  = do
-    INSTRUMENTATION( debugM "HTTP2.Session" "Entering sessionInputThread" )
-
     -- This is an introductory and declarative block... all of this is tail-executed
     -- every time that  a packet needs to be processed. It may be a good idea to abstract
     -- these values in a closure...
