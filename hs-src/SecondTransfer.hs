@@ -6,14 +6,14 @@ Maintainer  : alcidesv@zunzun.se
 Stability   : experimental
 Portability : POSIX
 
-SecondTransfer is a HTTP/1.1 and HTTP/2 server session library, with an emphasis towards
+SecondTransfer is a HTTP\/1.1 and HTTP\/2 server session library, with an emphasis towards
 experimentation (so far).
 
-This library implements enough of the HTTP/2  to build
-compliant HTTP/2 servers. It also implements enough of
-HTTP/1.1 so you can actually use it to build polyglot web-servers.
+This library implements enough of the HTTP\/2  to build
+compliant HTTP\/2 servers. It also implements enough of
+HTTP\/1.1 so you can actually use it to build polyglot web-servers.
 
-For HTTP/2, frame encoding and decoding is done with
+For HTTP\/2, frame encoding and decoding is done with
 Kazu Yamamoto's <http://hackage.haskell.org/package/http2 http2> package.
 This library just takes care of making sense of sent and received
 frames.
@@ -111,7 +111,8 @@ main = do
 most times you can do with a simplified version called `CoherentWorker`. The function
 `coherentToAwareWorker` does the conversion. The difference between the two callbacks is 
 the level of information that you manage. With AwareWorker, you get a record on the request
-with all sort of details, things like the session id and the 
+with all sort of details, things like the session id, the protocol the client is using and in
+the future things like the remote address. 
 
 The callback is used to handle all requests to the server on a given negotiated ALPN
 protocol. If you need routing functionality (and you most certainly will need it), you need
