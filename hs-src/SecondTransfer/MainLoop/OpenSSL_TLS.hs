@@ -310,8 +310,6 @@ provideActions wired_ptr = do
         pushAction datum = withMVar can_write_mvar  $ \ can_write ->
             if can_write
               then
-                throwIO $ TLSLayerGenericProblem "Tried to send data on closed handle"
-              else
                 BU.unsafeUseAsCStringLen (LB.toStrict datum) $ \ (pchar, len) -> do
                     result <- sendData wired_ptr pchar (fromIntegral len)
                     case result of
@@ -326,8 +324,6 @@ provideActions wired_ptr = do
         pullAction bytes_to_get =  withMVar can_read_mvar  $ \ can_read ->
             if can_read
               then
-                throwIO $ TLSLayerGenericProblem "Tried to receive on closed handle"
-              else
                 allocaBytes bytes_to_get $ \ pcharbuffer ->
                     alloca $ \ data_recvd_ptr -> do
                         result <- recvData wired_ptr pcharbuffer (fromIntegral bytes_to_get) data_recvd_ptr
@@ -344,8 +340,6 @@ provideActions wired_ptr = do
         bestEffortPullAction can_wait = withMVar can_read_mvar  $ \ can_read ->
             if can_read
               then
-                throwIO $ TLSLayerGenericProblem "Tried to receive on closed handle"
-              else
                 allocaBytes useBufferSize $ \ pcharbuffer ->
                     alloca $ \ data_recvd_ptr -> do
                         result <- recvDataBestEffort
