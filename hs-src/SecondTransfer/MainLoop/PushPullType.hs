@@ -47,20 +47,29 @@ type PullAction  = Int -> IO B.ByteString
 --   is severed suddenly.
 type CloseAction = IO ()
 
-
+-- | A set of functions describing how to do I/O in a session.
+--   As usual, we provide lenses accessors.
 data AttendantCallbacks = AttendantCallbacks {
+    -- | put some data in the channel
     _pushAction_AtC               :: PushAction,
+    -- | get exactly this much data from the channel. This function can
+    --   be used by HTTP/2 since lengths are pretty well built inside the
+    --   protocoll itself.
     _pullAction_AtC               :: PullAction,
+    -- | pull data from the channel, as much as the TCP stack wants to provide.
+    --   we have no option but use this one when talking HTTP/1.1, where the best
+    --   way to know the length is to scan until a Content-Length is found.
     _bestEffortPullAction_AtC     :: BestEffortPullAction,
+    -- | this is called when we wish to close the channel.
     _closeAction_AtC              :: CloseAction
     }
 
 makeLenses ''AttendantCallbacks
 
--- | A function which takes three arguments: the first one says
---   how to send data (on a socket or similar transport), and the second one how
---   to receive data on the transport. The third argument encapsulates
---   the sequence of steps needed for a clean shutdown.
+-- | This is an intermediate type. It represents what you obtain
+--   by combining something that speaks the protocol and an AwareWorker.
+--   In turn, you need to feed a bundle of callbacks implementing I/O
+--   to finally start a server.
 --
 --   You can implement one of these to let somebody else  supply the
 --   push, pull and close callbacks. For example, 'tlsServeWithALPN' will
