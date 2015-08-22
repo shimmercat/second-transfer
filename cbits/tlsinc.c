@@ -508,6 +508,9 @@ static connection_t *sslStart (
         // Give the impression that we are using SNI
         SSL_CTX_set_tlsext_servername_callback(c->sslContext, ssl_servername_cb);
 
+        // Disable the session cache
+        SSL_CTX_set_session_cache_mode(c->sslContext, SSL_SESS_CACHE_OFF);
+
 
         // The only cipher supported by HTTP/2 ... sort of.
         result = SSL_CTX_set_cipher_list(c->sslContext,
@@ -832,16 +835,31 @@ void dispose_wired_session(wired_session_t* ws)
 {
     if (ws == 0)
         return ;
+
     if ( ws-> sslHandle )
     {
-        SSL_shutdown( ws->sslHandle );
-        ws -> sslHandle = 0;
+        int rr = SSL_shutdown( ws->sslHandle );
+        // printf("rr=%d\n", rr);
+        int err = SSL_get_error(ws->sslHandle, rr);
+        if ( err < 0)
+        {
+            if ( err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE )
+            {
+                printf("error when closing socket / wait-for-data\n");
+            } else if (err != 0 ){
+                printf("cause openssl error code %d \n",err);
+            }
+        }
     }
+
+    SSL_free(ws->sslHandle);
+    ws -> sslHandle = 0;
     if (ws->socket)
     {
         close(ws->socket);
         ws -> socket = 0;
     }
+
     free(ws);
 }
 

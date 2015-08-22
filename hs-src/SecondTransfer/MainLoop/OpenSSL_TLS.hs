@@ -303,12 +303,12 @@ smallWaitTime = 50000
 -- provideActions :: Wired_Ptr -> IO (LB.ByteString -> IO (), Int -> IO B.ByteString, IO ())
 provideActions :: Wired_Ptr -> IO AttendantCallbacks
 provideActions wired_ptr = do
-    already_closed_mvar <- newMVar False
+    can_write_mvar <- newMVar True
+    can_read_mvar  <- newMVar True
     let
         pushAction :: LB.ByteString -> IO ()
-        pushAction datum = do
-            already_closed <- readMVar already_closed_mvar
-            if already_closed
+        pushAction datum = withMVar can_write_mvar  $ \ can_write ->
+            if can_write
               then
                 throwIO $ TLSLayerGenericProblem "Tried to send data on closed handle"
               else
@@ -319,11 +319,12 @@ provideActions wired_ptr = do
                                 return ()
                           | r == badHappened     ->
                                 throwIO $ TLSLayerGenericProblem "Could not send data"
+            else
+              throwIO $ TLSLayerGenericProblem "CouldNotWriteData--SocketAlreadyClosed"
 
         pullAction :: Int -> IO B.ByteString
-        pullAction bytes_to_get =  do
-            already_closed <- readMVar already_closed_mvar
-            if already_closed
+        pullAction bytes_to_get =  withMVar can_read_mvar  $ \ can_read ->
+            if can_read
               then
                 throwIO $ TLSLayerGenericProblem "Tried to receive on closed handle"
               else
@@ -336,11 +337,12 @@ provideActions wired_ptr = do
                                     throwIO $ TLSLayerGenericProblem "Could not receive data"
 
                         B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
+              else
+                throwIO $ TLSLayerGenericProblem "CouldNotReadData--SocketAlreadyClosed"
 
         bestEffortPullAction :: Bool -> IO B.ByteString
-        bestEffortPullAction can_wait =  do
-            already_closed <- readMVar already_closed_mvar
-            if already_closed
+        bestEffortPullAction can_wait = withMVar can_read_mvar  $ \ can_read ->
+            if can_read
               then
                 throwIO $ TLSLayerGenericProblem "Tried to receive on closed handle"
               else
@@ -358,14 +360,22 @@ provideActions wired_ptr = do
                                     throwIO $ TLSLayerGenericProblem "Could not receive data"
 
                         B.packCStringLen (pcharbuffer, fromIntegral recvd_bytes)
+              else
+                throwIO $ TLSLayerGenericProblem "CouldNotReadData--SocketAlreadyClosed"
+
 
         closeAction :: IO ()
         -- Ensure that the socket and the struct are only closed once
-        closeAction = do
-            b <- readMVar already_closed_mvar
-            unless b $  do
-                modifyMVar_ already_closed_mvar (\ _ -> return True)
-                disposeWiredSession wired_ptr
+        closeAction =
+            modifyMVar_ can_write_mvar $ \ can_write ->
+                modifyMVar can_read_mvar $ \ can_read ->
+                    if can_write && can_read
+                      then do
+                          disposeWiredSession wired_ptr
+                          return (False,False)
+                      else
+                          return (False,False)
+
     return  AttendantCallbacks {
         _pushAction_AtC = pushAction,
         _pullAction_AtC = pullAction,
