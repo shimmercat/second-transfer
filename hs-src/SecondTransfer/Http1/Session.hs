@@ -8,6 +8,7 @@ module SecondTransfer.Http1.Session(
 import           Control.Lens
 import           Control.Exception                       (catch)
 import           Control.Concurrent                      (forkIO)
+import           Control.Monad.IO.Class                  (liftIO)
 
 import qualified Data.ByteString                         as B
 -- import qualified Data.ByteString.Lazy                   as LB
@@ -15,6 +16,7 @@ import qualified Data.ByteString                         as B
 -- import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Conduit.List                       (consume)
+import           Data.IORef
 -- import           Data.Monoid                            (mconcat, mappend)
 
 import           SecondTransfer.MainLoop.CoherentWorker
