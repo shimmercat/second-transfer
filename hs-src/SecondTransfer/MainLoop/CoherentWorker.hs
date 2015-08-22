@@ -43,6 +43,8 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , startedTime_Pr
     , streamId_Pr
     , sessionId_Pr
+    , anouncedProtocols_Pr
+    , protocol_Pr
     , fragmentDeliveryCallback_Ef
     , priorityEffect_Ef
 
@@ -55,10 +57,12 @@ module SecondTransfer.MainLoop.CoherentWorker(
 
 
 import           Control.Lens
-import qualified Data.ByteString   as B
+import qualified Data.ByteString                       as B
 import           Data.Conduit
-import           Data.Foldable     (find)
-import           System.Clock      (TimeSpec)
+import           Data.Foldable                         (find)
+import           System.Clock                          (TimeSpec)
+
+import           SecondTransfer.MainLoop.Protocol      (HttpProtocolVersion)
 
 
 -- | The name part of a header
@@ -85,15 +89,19 @@ type InputDataStream = Source IO B.ByteString
 
 -- | Data related to the request
 data Perception = Perception {
-  -- | Monotonic time close to when the request was first seen in
-  -- the processing pipeline.
-  _startedTime_Pr :: TimeSpec,
-  -- | The HTTP/2 stream id. Or the serial number of the request in an
-  -- HTTP/1.1 session.
-  _streamId_Pr :: Int,
-  -- | A number uniquely identifying the session. This number is unique and
-  --   the same for each TPC connection that a client opens using a given protocol.
-  _sessionId_Pr :: Int
+    -- | The HTTP/2 stream id. Or the serial number of the request in an
+    -- HTTP/1.1 session.
+    _streamId_Pr :: Int,
+    -- | A number uniquely identifying the session. This number is unique and
+    --   the same for each TPC connection that a client opens using a given protocol.
+    _sessionId_Pr :: Int,
+    -- | Monotonic time close to when the request was first seen in
+    -- the processing pipeline.
+    _startedTime_Pr       :: TimeSpec,
+    -- | Which protocol is serving the request
+    _protocol_Pr          :: HttpProtocolVersion,
+    -- | For new connections, probably a list of anounced protocols
+    _anouncedProtocols_Pr :: Maybe [B.ByteString]
   }
 
 makeLenses ''Perception

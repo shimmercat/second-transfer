@@ -75,6 +75,7 @@ library
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.PushPullType
+                , SecondTransfer.MainLoop.Protocol
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
                 , SecondTransfer.MainLoop.Logging

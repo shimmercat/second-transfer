@@ -48,8 +48,6 @@ import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 
-import           Prelude
-
 
 data IncrementalHttp1Parser = IncrementalHttp1Parser {
     _fullText :: Bu.Builder

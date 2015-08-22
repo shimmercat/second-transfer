@@ -135,7 +135,7 @@ data FramerSessionData = FramerSessionData {
     , _closeAction           :: CloseAction
 
     -- Global id of the session, used for e.g. error reporting.
-    , _sessionIdAtFramer     :: Int
+    , _sessionIdAtFramer     :: !Int
 
     -- Sessions context, used for thing like e.g. error reporting
     , _sessionsContext       :: SessionsContext
@@ -166,7 +166,7 @@ wrapSession aware_worker sessions_context attendant_callbacks = do
 
     new_session_id <- modifyMVarMasked
         session_id_mvar $
-        \ session_id -> return (session_id+1, session_id)
+        \ session_id -> return $ session_id `seq` (session_id + 1, session_id)
 
     (session_input, session_output) <- http2Session
                                         aware_worker

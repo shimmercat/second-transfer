@@ -66,6 +66,7 @@ import           System.Clock                            (getTime, TimeSpec, Clo
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
+import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler,
                                                          SessionsContext,
@@ -356,8 +357,6 @@ http2Session aware_worker session_id sessions_context =   do
 --- more robust.
 sessionInputThread :: ReaderT SessionData IO ()
 sessionInputThread  = do
-    INSTRUMENTATION( debugM "HTTP2.Session" "Entering sessionInputThread" )
-
     -- This is an introductory and declarative block... all of this is tail-executed
     -- every time that  a packet needs to be processed. It may be a good idea to abstract
     -- these values in a closure...
@@ -518,7 +517,9 @@ sessionInputThread  = do
                   perception = Perception {
                       _startedTime_Pr = headers_arrived_time,
                       _streamId_Pr = stream_id,
-                      _sessionId_Pr = current_session_id
+                      _sessionId_Pr = current_session_id,
+                      _protocol_Pr = Http2_HPV,
+                      _anouncedProtocols_Pr = Nothing
                       }
                   request = Request {
                       _headers_RQ = header_list_after,
