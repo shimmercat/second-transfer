@@ -195,7 +195,6 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         ( (stripBs . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
         ]
 
-
     content_length :: Int
     content_length =
       let
