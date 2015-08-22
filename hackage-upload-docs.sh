@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-cabal configure && cabal build && cabal haddock --hyperlink-source \
-                                    --html-location='/package/$pkg-$version/docs' \
-                                    --contents-location='/package/$pkg'
+stack haddock
+docs_at="$(stack path --local-install-root)/doc/"
 S=$?
 if [ "${S}" -eq "0" ]; then
-    cd "dist/doc/html"
+    cd "$docs_at"
     DDIR="${1}-${2}-docs"
-    cp -r "${1}" "${DDIR}" && tar -c -v -z --format=ustar -f "${DDIR}.tar.gz" "${DDIR}"
+    cp -r "${1}-${2}" "${DDIR}" && tar -c -v -z --format=ustar -f "${DDIR}.tar.gz" "${DDIR}"
     CS=$?
     if [ "${CS}" -eq "0" ]; then
         echo "Uploading to Hackage…"
