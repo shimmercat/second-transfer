@@ -46,6 +46,7 @@ import           System.Log.Logger
 
 import qualified Data.HashTable.IO                      as H
 import           System.Clock                           (Clock(..),getTime)
+-- import           System.Mem.Weak
 
 import           SecondTransfer.Sessions.Internal       (
                                                          sessionExceptionHandler,
@@ -472,11 +473,11 @@ outputGatherer session_output = do
                    INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
                    releaseFramer
 
-               Left (FinishStream_SOC stream_id ) ->
+               Left (FinishStream_SOC stream_id ) -> do
                    -- Session knows that we are done with the given stream, and that we can release
                    -- the flow control structures
                    -- NOTICE: Unfortunately, this doesn't work, so ignore the message for now
-                   -- finishFlowControlForStream stream_id.
+                   finishFlowControlForStream stream_id
                    cont
 
                Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _), ef ) -> do
@@ -574,13 +575,12 @@ startStreamOutputQueue stream_id priority = do
 
     s2o_mvar <- view stream2outputBytes
 
-    liftIO . withMVar s2o_mvar $ \ s2o ->  H.insert s2o stream_id (bytes_chan, ordinal_num)
+    liftIO . withMVar s2o_mvar $ {-# SCC e1  #-}  \ s2o ->  H.insert s2o stream_id (bytes_chan, ordinal_num)
 
     stream2flow_mvar <- view stream2flow
 
 
-    liftIO . withMVar stream2flow_mvar  $ \ s2c ->  H.insert s2c stream_id command_chan
-
+    liftIO . withMVar stream2flow_mvar  $  {-# SCC e2  #-}  \ s2c ->  H.insert s2c stream_id command_chan
     --
     initial_cap_mvar <- view defaultStreamWindow
     initial_cap <- liftIO $ readMVar initial_cap_mvar
@@ -592,23 +592,22 @@ startStreamOutputQueue stream_id priority = do
     -- And don't forget the thread itself
     let
         close_on_error session_id session_context comp =
-            E.finally
                 (E.catch
                     comp
                     (exc_handler session_id session_context)
                 )
-                close_action
 
         exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
         exc_handler x y e = do
             -- Let's also decree that other streams don't even try
             modifyMVar_ output_is_forbidden_mvar ( \ _ -> return True)
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
+            close_action
 
 
     read_state <- ask
     liftIO $ forkIO $ close_on_error session_id' sessions_context  $ runReaderT
-        (flowControlOutput stream_id priority initial_cap 0 "" command_chan bytes_chan)
+        ({-# SCC forkFlowControlOutput  #-} flowControlOutput stream_id priority initial_cap 0 "" command_chan bytes_chan)
         read_state
 
     return (bytes_chan , command_chan)
@@ -699,14 +698,21 @@ sendBytes bs = do
 --
 -- There is one of these for each stream
 --
-flowControlOutput :: Int -> Int -> Int -> Int ->  LB.ByteString -> MVar FlowControlCommand -> MVar LB.ByteString ->  FramerSession ()
+flowControlOutput :: Int
+                     -> Int
+                     -> Int
+                     -> Int
+                     ->  LB.ByteString
+                     -> MVar FlowControlCommand
+                     -> MVar LB.ByteString
+                     ->  FramerSession ()
 flowControlOutput stream_id priority capacity ordinal leftovers commands_chan bytes_chan =
-    if leftovers == ""
-      then do
+    ordinal `seq` if leftovers == ""
+      then {-# SCC fcOBranch1  #-} do
         -- Get more data (possibly block waiting for it)
-        bytes_to_send <- liftIO $ takeMVar bytes_chan
+        bytes_to_send <- liftIO $ {-# SCC perfectlyHarmlessExceptionPoint #-} takeMVar bytes_chan
         flowControlOutput stream_id priority capacity ordinal  bytes_to_send commands_chan bytes_chan
-      else do
+      else {-# SCC fcOBranch2  #-}  do
         -- Length?
         let amount = fromIntegral  (LB.length leftovers - 9)
         if  amount <= capacity
@@ -715,11 +721,11 @@ flowControlOutput stream_id priority capacity ordinal leftovers commands_chan by
             -- I can send ... if no headers are in process....
             -- liftIO . logit $ "set-priority (stream_id, prio, ordinal) " `mappend` (pack . show) (__stream_id, priority, ordinal)
             withPrioritySend priority stream_id ordinal leftovers
-            flowControlOutput  stream_id priority (capacity - amount) (ordinal+1) "" commands_chan bytes_chan
+            flowControlOutput  stream_id priority (capacity - amount) (ordinal+1 ) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead
-            command <- liftIO $ takeMVar commands_chan
-            case command of
+            command <- liftIO $ {-# SCC t2 #-} takeMVar commands_chan
+            case  {-# SCC t3 #-} command of
                 AddBytes_FCM delta_cap ->
                     -- liftIO $ putStrLn $ "Flow control delta_cap stream " ++ (show stream_id)
                     flowControlOutput stream_id priority (capacity + delta_cap) ordinal leftovers commands_chan bytes_chan
