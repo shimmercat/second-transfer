@@ -1,3 +1,4 @@
+
 -- The framer has two functions: to convert bytes to Frames and the other way around,
 -- and two keep track of flow-control quotas.
 {-# LANGUAGE OverloadedStrings, StandaloneDeriving, FlexibleInstances,
