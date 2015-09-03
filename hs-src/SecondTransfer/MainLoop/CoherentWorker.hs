@@ -165,7 +165,7 @@ type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
 data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway /after/ this stream finishes delivery
                        |InterruptConnectionNow_IEf    -- ^ Close and send GoAway /without/ delivering this stream.  This implies that
                                                       --   other fields of the PrincipalStream record will be ignored.
-                       |InterruptThisStream_IEf       -- ^ Just reset this stream
+                    -- |InterruptThisStream_IEf       -- ^ Just reset this stream, disabled for now.
 
 
 -- | Sometimes a response needs to be handled a bit specially,

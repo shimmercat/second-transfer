@@ -222,12 +222,15 @@ data SessionData = SessionData {
 
     -- Use to encode
     ,_toEncodeHeaders            :: MVar HP.DynamicTable
+
     -- And used to decode
     ,_toDecodeHeaders            :: MVar HP.DynamicTable
+
     -- While I'm receiving headers, anything which
     -- is not a header should end in the connection being
     -- closed
     ,_receivingHeaders           :: MVar (Maybe Int)
+
     -- _lastGoodStream is used both to report the last good stream in the
     -- GoAwayFrame and to keep track of streams oppened by the client. In
     -- other words, it contains the stream_id of the last valid client
@@ -906,9 +909,6 @@ workerThread req aware_worker =
   do
     headers_output <- view headersOutput
     stream_id      <- view streamId
-    session_settings_mvar <- view sessionSettings_WTE
-    session_settings <- liftIO $ readMVar session_settings_mvar
-    next_push_stream_mvar <-  view nextPushStream_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
     --       throws an exception signaling that the request is ill-formed
@@ -929,13 +929,44 @@ workerThread req aware_worker =
 
     -- Pieces of the header
     let
+       effects              = principal_stream ^. effect_PS
+       interrupt_maybe      = effects          ^. interrupt_Ef
+
+
+
+    case interrupt_maybe of
+
+        Nothing -> do
+            normallyHandleStream principal_stream
+
+        Just (InterruptConnectionAfter_IEf) -> do
+            normallyHandleStream principal_stream
+            liftIO . writeChan headers_output $ GoAway_HM (stream_id, effects)
+
+        Just (InterruptConnectionNow_IEf) -> do
+            -- Not one hundred-percent sure of this being correct, but we don't want
+            -- to acknowledge reception of this stream then
+            let use_stream_id = stream_id - 1
+            liftIO . writeChan headers_output $ GoAway_HM (use_stream_id, effects)
+
+
+normallyHandleStream :: PrincipalStream -> WorkerMonad ()
+normallyHandleStream principal_stream = do
+    headers_output <- view headersOutput
+    stream_id      <- view streamId
+    session_settings_mvar <- view sessionSettings_WTE
+    session_settings <- liftIO $ readMVar session_settings_mvar
+    next_push_stream_mvar <-  view nextPushStream_WTE
+
+    -- Pieces of the header
+    let
        headers              = principal_stream ^. headers_PS
        data_and_conclusion  = principal_stream ^. dataAndConclusion_PS
        effects              = principal_stream ^. effect_PS
-       interrupt_maybe      = effects          ^. interrupt_Ef
        pushed_streams       = principal_stream ^. pushedStreams_PS
-
        can_push             = session_settings ^. pushEnabled
+
+      -- This gets executed in normal conditions, when no interruption is required.
 
     -- There are several possible moments where the PUSH_PROMISEs can be sent,
     -- but a default safe one is before sending the response HEADERS, so that
@@ -959,7 +990,6 @@ workerThread req aware_worker =
             return (child_stream_id, response_headers, pushed_data_and_conclusion, effects)
       else
         return []
-
 
 
     -- Now I send the headers, if that's possible at all
@@ -999,7 +1029,6 @@ workerThread req aware_worker =
                   liftIO . forkIO $ runReaderT action environment
 
         return ()
-
 
 
 -- Invokes the Coherent worker. Data is sent through pipes to
@@ -1124,6 +1153,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
 
     header_output_request <- liftIO $ readChan input_chan
     case header_output_request of
+
         NormalResponse_HM (stream_id, headers_ready_mvar, headers, effect)  -> do
 
             -- First encode the headers using the table
@@ -1148,6 +1178,15 @@ headersOutputThread input_chan session_output_mvar = forever $ do
                     -- INSTRUMENTATION( debugM "HTTP2.Session" $ "Headers were output for stream " ++ (show stream_id) )
                     putMVar headers_ready_mvar HeadersSent
                     )
+
+        GoAway_HM (stream_id, _effect) -> do
+           -- This is in charge of sending an interrupt message to the framer
+           let
+               message = Left (SpecificTerminate_SOC stream_id)
+           liftIO . withMVar session_output_mvar $
+               (\session_output -> do
+                   writeChan session_output message
+               )
 
         PushPromise_HM (parent_stream_id, child_stream_id, promise_headers, effect) -> do
 
