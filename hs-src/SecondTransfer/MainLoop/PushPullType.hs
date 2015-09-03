@@ -60,7 +60,9 @@ data AttendantCallbacks = AttendantCallbacks {
     --   we have no option but use this one when talking HTTP/1.1, where the best
     --   way to know the length is to scan until a Content-Length is found.
     _bestEffortPullAction_AtC     :: BestEffortPullAction,
-    -- | this is called when we wish to close the channel.
+    -- | this is called when we wish to close the channel. Notice that this function
+    --   should do its thing only once, even if it get's called multiple times for this
+    --   library for a single session.
     _closeAction_AtC              :: CloseAction
     }
 

@@ -29,6 +29,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , TupledPrincipalStream
     , TupledRequest
     , FragmentDeliveryCallback
+    , InterruptEffect(..)
 
     , headers_RQ
     , inputData_RQ
@@ -47,6 +48,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , protocol_Pr
     , fragmentDeliveryCallback_Ef
     , priorityEffect_Ef
+    , interrupt_Ef
 
     , defaultEffects
     , coherentToAwareWorker
@@ -157,16 +159,30 @@ makeLenses ''PushedStream
 type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
 
 
+-- | Types of interrupt effects that can be signaled by aware workers. These include whole
+--   connection shutdowns and stream resets. In all the cases, the reason given will be
+--   NO_ERROR.
+data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway /after/ this stream finishes delivery
+                       |InterruptConnectionNow_IEf    -- ^ Close and send GoAway /without/ delivering this stream.  This implies that
+                                                      --   other fields of the PrincipalStream record will be ignored.
+                       |InterruptThisStream_IEf       -- ^ Just reset this stream
+
+
 -- | Sometimes a response needs to be handled a bit specially,
 --   for example by reporting delivery details back to the worker
 data Effect = Effect {
+  -- | A callback to be called whenever a data-packet for this stream is called.
   _fragmentDeliveryCallback_Ef :: Maybe FragmentDeliveryCallback
 
-  -- In certain circunstances a stream can use an internal priority,
+  -- | In certain circunstances a stream can use an internal priority,
   -- not given by the browser and the protocol. Lowest values here are
   -- given more priority. Default (when Nothing) is given zero. Cases
   -- with negative numbers also work.
   ,_priorityEffect_Ef :: Maybe Int
+
+  -- | There are situations when it is desirable to close a stream or the entire
+  --   connection. Use this member to indicate that.
+  ,_interrupt_Ef :: Maybe InterruptEffect
   }
 
 makeLenses ''Effect
@@ -174,7 +190,8 @@ makeLenses ''Effect
 defaultEffects :: Effect
 defaultEffects = Effect {
   _fragmentDeliveryCallback_Ef = Nothing,
-  _priorityEffect_Ef = Nothing
+  _priorityEffect_Ef = Nothing,
+  _interrupt_Ef = Nothing
    }
 
 

@@ -93,11 +93,16 @@ data HeadersSent = HeadersSent
 -- end of data. Middle value is delay in microseconds
 type DataOutputToConveyor = (GlobalStreamId, Maybe B.ByteString, Effect)
 
-
+-- What to do regarding headers
 data HeaderOutputMessage =
+    -- Send the headers of the principal stream
     NormalResponse_HM (GlobalStreamId, MVar HeadersSent, Headers, Effect)
-    --
+    -- Send a push-promise
     |PushPromise_HM   (GlobalStreamId, GlobalStreamId, Headers, Effect)
+    -- Send a reset stream notification for the stream given below
+    |ResetStream_HM   (GlobalStreamId, Effect)
+    -- Send a GoAway, where last-stream is the stream given below.
+    |GoAway_HM (GlobalStreamId, Effect)
 
 
 -- Settings imposed by the peer
@@ -181,7 +186,14 @@ data SessionInputCommand =
 
 -- temporary
 data  SessionOutputCommand =
-    CancelSession_SOC
+    -- Command sent to the framer to close the session as harshly as possible. The framer
+    -- will pick its own last valid stream.
+    CancelSession_SOC NH2.ErrorCodeId
+    -- Command sent to the framer to close the session specifying a specific last-stream.
+    -- The reason used will be "NoError"
+    |SpecificTerminate_SOC GlobalStreamId
+    -- Command sent to the framer to notify it of a normal end of stream
+    -- condition, this is used to naturally close each stream.
     |FinishStream_SOC GlobalStreamId
   deriving Show
 
@@ -192,6 +204,7 @@ type SessionMaker = SessionsContext -> IO Session
 
 -- Here is how we make a session wrapping a CoherentWorker
 type CoherentSession = AwareWorker -> SessionMaker
+
 
 data PostInputMechanism = PostInputMechanism (MVar (Maybe B.ByteString), InputDataStream)
 
@@ -229,6 +242,7 @@ data SessionData = SessionData {
     -- I make copies of it in different contexts, and as needed.
     ,_forWorkerThread            :: WorkerThreadEnvironment
 
+    -- This is the worker taking care of actually generating a response.
     ,_awareWorker                :: AwareWorker
 
     -- Some streams may be cancelled
@@ -763,21 +777,8 @@ validateIncomingHeaders headers_editor = do
 closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO a
 closeConnectionBecauseIsInvalid error_code = do
     -- liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
-    last_good_stream_mvar <- view lastGoodStream
-    last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput
     stream2workerthread <- view stream2WorkerThread
-    sendOutFrame
-        (NH2.EncodeInfo
-            NH2.defaultFlags
-            0
-            Nothing
-        )
-        (NH2.GoAwayFrame
-            last_good_stream
-            error_code
-            ""
-        )
 
     liftIO $ do
         -- Close all active threads for this session
@@ -791,7 +792,7 @@ closeConnectionBecauseIsInvalid error_code = do
         -- that it stops accepting frames from connected sources
         -- (Streams?)
         session_output <- takeMVar session_output_mvar
-        writeChan session_output $ Left CancelSession_SOC
+        writeChan session_output $ Left (CancelSession_SOC error_code)
         putMVar session_output_mvar session_output
 
         -- And unwind the input thread in the session, so that the
@@ -916,7 +917,6 @@ workerThread req aware_worker =
 #if LOGIT_SWITCH_TIMINGS
     liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
 #endif
-    -- (headers, _, data_and_conclussion)
     principal_stream <-
         liftIO $ E.catch
             (
@@ -932,6 +932,7 @@ workerThread req aware_worker =
        headers              = principal_stream ^. headers_PS
        data_and_conclusion  = principal_stream ^. dataAndConclusion_PS
        effects              = principal_stream ^. effect_PS
+       interrupt_maybe      = effects          ^. interrupt_Ef
        pushed_streams       = principal_stream ^. pushedStreams_PS
 
        can_push             = session_settings ^. pushEnabled
