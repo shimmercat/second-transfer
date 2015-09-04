@@ -41,27 +41,13 @@ following command from the project's directory:
 Example
 -------
 
-There is a very basic example at `tests/tests-hs-src/compiling_ok.hs`.
+There is a very basic example at `tests/tests-hs-src/compiling_ok.hs`, and a somewhat more complicated one at
+`examples/attempt_bust`; that one shows how to do HTTP/2.0 push from the library.
 
-Roadmap
--------
 
-Done:
+Development
+-----------
 
-- Version 0.1: Having something that can run. No unit-testing, nothing
-               fancy.
-
-- Version 0.2: Absolutely minimal amount of unit tests.
-
-- Version 0.3: More sensible logging.
-
-Pending:
-
-- Benchmarking.
-
-Internal
---------
-
-Uploading documentation (provided you have access to the package):
+Uploading documentation (provided you have access to the package in Hackage):
 
     $ ./hackage-upload-docs.sh second-transfer 0.5.4.0 <hackage-user> <hackage-password>
