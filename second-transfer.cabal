@@ -177,6 +177,7 @@ Test-Suite compiling-ok
 
 
 
+
 Test-Suite hunit-tests
   type               : exitcode-stdio-1.0
   main-is            : hunit_tests.hs
@@ -230,9 +231,13 @@ Test-Suite hunit-tests
                        , SecondTransfer.MainLoop.Tokens
                        , SecondTransfer.MainLoop.Framer
                        , SecondTransfer.MainLoop.Logging
+                       , SecondTransfer.MainLoop.Protocol
                        , SecondTransfer.Sessions.Internal
                        , SecondTransfer.Utils
                        , SecondTransfer.Http2.Framer
                        , SecondTransfer.Http2.MakeAttendant
                        , SecondTransfer.Http2.Session
                        , SecondTransfer.Http1.Session
+                       , Tests.HTTP1Parse
+                       , Tests.HTTP2Session
+                       , Tests.Utils

@@ -1,7 +1,6 @@
 flags:
   second-transfer:
     debug: false
-    develop: true
 packages:
 - '.'
 - examples/attempt_bust

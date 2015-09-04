@@ -18,6 +18,7 @@ import           SecondTransfer.Sessions
 import           SecondTransfer.Test.DecoySession
 import           SecondTransfer.Types
 import           SecondTransfer.Utils.HTTPHeaders (fetchHeader)
+import          SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
 
 
 
@@ -148,8 +149,9 @@ testFirstFrameMustBeSettings2 = TestCase $ do
     -- Send a settings frame now
     sendFrameToSession
         decoy_session
-        ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
-          (NH2.SettingsFrame []) )
+        ( (NH2.EncodeInfo NH2.defaultFlags 0 Nothing),
+          (NH2.SettingsFrame [])
+        )
 
     -- Check session is alive
     got_error <- readMVar errors_mvar
@@ -167,7 +169,7 @@ testFirstFrameMustBeSettings3 = TestCase $ do
     decoy_session <- createDecoySession attendant
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
-    let d2 = ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
+    let d2 = ( (NH2.EncodeInfo NH2.defaultFlags 0 Nothing),
           (NH2.PingFrame "01234567") )
 
     -- Send a ping frame now, so that we get an error
@@ -200,7 +202,7 @@ testIGet500Status = TestCase $ do
     -- Send a settings frame now, otherwise the session will bark....
     sendFrameToSession
         decoy_session
-        ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
+        ( (NH2.EncodeInfo NH2.defaultFlags 0 Nothing),
           (NH2.SettingsFrame []) )
 
     -- Now perform a simple, mocking request
@@ -260,7 +262,7 @@ testSessionBreaksOnLateError = TestCase $ do
     -- Send a settings frame now, otherwise the session will bark....
     sendFrameToSession
         decoy_session
-        ( (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing),
+        ( (NH2.EncodeInfo NH2.defaultFlags 0 Nothing),
           (NH2.SettingsFrame []) )
 
     -- Now perform a simple, mocking request
@@ -342,13 +344,13 @@ testUpdateWindowFrameAborts = TestCase $ do
     -- Send a settings frame now
     sendFrameToSession
         decoy_session
-        ( NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 0) Nothing,
+        ( NH2.EncodeInfo NH2.defaultFlags 0 Nothing,
           NH2.SettingsFrame [] )
 
     -- And now send a WindowUpdate frame
     sendFrameToSession
         decoy_session
-        (NH2.EncodeInfo NH2.defaultFlags (NH2.toStreamIdentifier 51) Nothing,
+        (NH2.EncodeInfo NH2.defaultFlags 51 Nothing,
          NH2.WindowUpdateFrame 10 )
 
     -- Now we read a few frames

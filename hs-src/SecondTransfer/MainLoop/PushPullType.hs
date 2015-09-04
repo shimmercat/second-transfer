@@ -3,6 +3,7 @@
 module SecondTransfer.MainLoop.PushPullType (
     PushAction
     ,PullAction
+    ,BestEffortPullAction
     ,Attendant
     ,CloseAction
     ,AttendantCallbacks(..)
