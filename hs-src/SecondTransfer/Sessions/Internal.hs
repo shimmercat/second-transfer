@@ -7,7 +7,7 @@ import SecondTransfer.Sessions.Config
 import           Control.Concurrent.MVar (MVar, newMVar,modifyMVar)
 -- import           Control.Exception       (SomeException)
 import qualified Control.Exception       as E
-import           Control.Lens            ((^.), makeLenses)
+import           Control.Lens            ((^.), makeLenses, Lens' )
 
 
 import            System.Log.Logger
@@ -18,13 +18,24 @@ import            System.Log.Logger
 --   sessions created in the program. Use the lenses
 --   interface to access members of this struct.
 --
+-- TODO: members of this record should be renamed to the "suffix" convention.
 data SessionsContext = SessionsContext {
+    -- | Read-only configuration information passed-in at construction time
      _sessionsConfig  :: SessionsConfig
+    -- | MVar with enumerator for sessions
     ,_nextSessionId   :: MVar Int
     }
 
 
 makeLenses ''SessionsContext
+
+
+sessionsConfig_Sctx :: Lens' SessionsContext SessionsConfig
+sessionsConfig_Sctx = sessionsConfig
+
+
+nextSessionId_Sctx ::  Lens' SessionsContext (MVar Int)
+nextSessionId_Sctx = nextSessionId
 
 
 -- Session tags are simple session identifiers
@@ -44,6 +55,9 @@ makeSessionsContext sessions_config = do
         _nextSessionId = next_session_id_mvar
         }
 
+
+makeDefaultSessionsContext :: IO SessionsContext
+makeDefaultSessionsContext = makeSessionsContext defaultSessionsConfig
 
 
 sessionExceptionHandler ::

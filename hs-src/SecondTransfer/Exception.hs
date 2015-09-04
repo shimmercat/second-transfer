@@ -38,13 +38,16 @@ instance Show HTTP2SessionException where
 
 instance Exception HTTP2SessionException
 
+
 convertHTTP2SessionExceptionToException :: Exception e => e -> SomeException
 convertHTTP2SessionExceptionToException = toException . HTTP2SessionException
+
 
 getHTTP2SessionExceptionFromException :: Exception e => SomeException -> Maybe e
 getHTTP2SessionExceptionFromException x = do
     HTTP2SessionException a <- fromException x
     cast a
+
 
 -- | Concrete exception. Used internally to signal that the client violated
 --   the protocol. Clients of the library shall never see this exception.
