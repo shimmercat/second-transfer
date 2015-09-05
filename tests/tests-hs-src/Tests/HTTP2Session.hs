@@ -18,7 +18,8 @@ import           SecondTransfer.Sessions
 import           SecondTransfer.Test.DecoySession
 import           SecondTransfer.Types
 import           SecondTransfer.Utils.HTTPHeaders (fetchHeader)
-import          SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
+import           SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
+import           SecondTransfer.MainLoop.ClientPetitioner
 
 
 
@@ -65,6 +66,14 @@ throwingWorker2  = coherentToAwareWorker . const .  return $ (
             liftIO $ throwIO Internal500Exception
             return []
     )
+
+
+simpleRequestHeaders :: Headers
+simpleRequestHeaders = [
+    (":path", "/"),
+    (":authority", "www.example.com"),
+    (":scheme", "https")
+    ]
 
 
 setError :: MVar Bool -> ErrorCallback
@@ -379,3 +388,44 @@ testUpdateWindowFrameAborts = TestCase $ do
         assertFailure "Exception raised unexpectedly"
     else
         return ()
+
+testClosedInteraction0 :: Test
+testClosedInteraction0 = TestCase $ do
+    errors_mvar <- newMVar False
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let
+        attendant = http2Attendant sessions_context simpleWorker
+    decoy_session <- createDecoySession attendant
+    let
+        start_client =  decoy_session ^. startClientSessionCallback
+    start_client
+    got_error <- readMVar errors_mvar
+    if got_error then do
+        assertFailure "Exception raised unexpectedly"
+    else
+        return ()
+
+
+testClosedInteraction1 :: Test
+testClosedInteraction1 = TestCase $ do
+    errors_mvar <- newMVar False
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let
+        attendant = http2Attendant sessions_context simpleWorker
+    decoy_session <- createDecoySession attendant
+    let
+        start_client =  decoy_session ^. startClientSessionCallback
+    client_state <- start_client
+    got_error <- readMVar errors_mvar
+    if got_error then do
+        assertFailure "Exception raised unexpectedly"
+    else
+        return ()
+
+    (headers, input_data_stream) <- request client_state simpleRequestHeaders (return ())
+    if length headers <= 0
+      then
+        assertFailure "NoHeadersBack"
+      else
+        return ()
+    return ()

@@ -10,7 +10,7 @@ module SecondTransfer.Http2.Session(
     ,sendFirstFrameToSession
     ,sendMiddleFrameToSession
     ,sendCommandToSession
-
+    ,makeClientState
     ,pendingRequests_ClS
 
     ,CoherentSession
@@ -227,6 +227,19 @@ data ClientState = ClientState {
     }
 
 makeLenses ''ClientState
+
+
+makeClientState :: IO ClientState
+makeClientState = do
+    request_chan <- newChan
+    next_stream_mvar <- newMVar 3
+    new_h <- H.new
+
+    return ClientState {
+        _pendingRequests_ClS = request_chan
+        ,_nextStream_ClS = next_stream_mvar
+        ,_response2Waiter_ClS = new_h
+        }
 
 
 handleRequest' :: ClientState -> Headers -> InputDataStream -> IO (Headers,InputDataStream)

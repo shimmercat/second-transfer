@@ -27,6 +27,8 @@ tests = TestList [
     ,TestLabel "testIGet500Status" testIGet500Status
     ,TestLabel "testSessionBreaksOnLateError" testSessionBreaksOnLateError
     ,TestLabel "WindowUpdate to unexistent stream" testUpdateWindowFrameAborts
+    ,TestLabel "testClosedInteraction0" testClosedInteraction0
+    ,TestLabel "testClosedInteraction1" testClosedInteraction1
     ]
 
 
