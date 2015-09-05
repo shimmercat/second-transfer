@@ -197,7 +197,7 @@ defaultEffects = Effect {
 
 -- | You use this type to answer a request. The `Headers` are thus response
 --   headers and they should contain the :status pseudo-header. The `PushedStreams`
---   is a list of pushed streams...(I don't thaink that I'm handling those yet)
+--   is a list of pushed streams... they will be pushed to the client.
 data PrincipalStream = PrincipalStream {
   _headers_PS              :: Headers,
   _pushedStreams_PS        :: PushedStreams,

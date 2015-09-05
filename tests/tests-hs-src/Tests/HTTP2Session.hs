@@ -42,12 +42,32 @@ simpleWorker = coherentToAwareWorker . const $ return (
     saysHello
     )
 
+
+erringWorker :: AwareWorker
+erringWorker = coherentToAwareWorker . const $ return (
+    [
+        (":status", "500")
+    ],
+    [], -- No pushed streams
+    saysHello
+    )
+
+
+abortingWorker :: AwareWorker
+abortingWorker request = do
+    pr1 <- erringWorker request
+    let
+        pr2 = L.set (effect_PS . interrupt_Ef) (Just InterruptConnectionAfter_IEf) pr1
+    return pr2
+
+
 data Internal500Exception = Internal500Exception
     deriving (Typeable, Show)
 
 instance Exception Internal500Exception where
     toException = convertHTTP500PrecursorExceptionToException
     fromException = getHTTP500PrecursorExceptionFromException
+
 
 throwingWorker :: AwareWorker
 throwingWorker _ = throwIO Internal500Exception
@@ -65,6 +85,16 @@ throwingWorker2  = coherentToAwareWorker . const .  return $ (
             liftIO $ throwIO Internal500Exception
             return []
     )
+
+
+-- Some headers to send in a fake request
+sampleHeadersForRequest :: Headers
+sampleHeadersForRequest = [
+    (":path", "/"),
+    (":authority", "www.example.com"),
+    (":scheme", "https"),
+    (":method", "GET")
+    ]
 
 
 setError :: MVar Bool -> ErrorCallback
@@ -378,3 +408,76 @@ testUpdateWindowFrameAborts = TestCase $ do
         assertFailure "Exception raised unexpectedly"
     else
         return ()
+
+
+-- ATTENTION: This test is not ready and not working so far, since
+-- testing for it requires some sort of smarter client.
+testWorkerCanFinishSession :: Test
+testWorkerCanFinishSession = TestCase $ do
+    errors_mvar <- newMVar False
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let
+        attendant = http2Attendant sessions_context abortingWorker
+    decoy_session <- createDecoySession attendant
+    sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+    maybe_frame <- recvFrameFromSession decoy_session
+    case maybe_frame of
+        Nothing ->
+            assertFailure "Waiting a frame, received none"
+        Just (NH2.Frame _ (NH2.SettingsFrame _)) -> -- Ok
+            return ()
+
+        _ ->
+            assertFailure "Waiting a settings frame, received something else"
+
+    -- Send a settings frame now
+    sendFrameToSession
+        decoy_session
+        ( NH2.EncodeInfo NH2.defaultFlags 0 Nothing,
+          NH2.SettingsFrame [] )
+
+    -- Send a request (Streams initiated by a client must be odd-numbered
+    -- stream identifiers)
+    performRequestSimple decoy_session 3 simpleHeadersForRequest
+
+    -- Now we read a few frames
+    seen <- return False
+    f0 <- recvFrameFromSession decoy_session
+    seen1 <- frameIsGoAwayBecauseProtocolError decoy_session seen f0
+
+    f1 <- recvFrameFromSession decoy_session
+    seen2 <- frameIsGoAwayBecauseInternalError decoy_session seen1 f1
+
+    -- f2 <- recvFrameFromSession decoy_session
+    -- seen3 <- frameIsGoAwayBecauseProtocolError decoy_session seen2 f2
+
+    -- f3 <- recvFrameFromSession decoy_session
+    -- seen4 <- frameIsGoAwayBecauseProtocolError decoy_session seen3 f3
+
+    if not seen2 then do
+        assertFailure "Didn't see GoAwayFrame"
+    else
+        return ()
+
+    -- Check session is alive
+    got_error <- readMVar errors_mvar
+    if got_error then do
+        assertFailure "Exception raised unexpectedly"
+    else
+        return ()
+
+
+
+frameIsGoAwayBecauseWorkerAsks :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool
+frameIsGoAwayBecauseWorkerAsks decoy_session prev maybe_frame = do
+    case prev of
+        True -> return True
+        False ->
+            case maybe_frame of
+                Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do
+                    case ec of
+                        NH2.NoError       -> return True
+                        _                 -> return False
+
+                _ ->
+                    return False

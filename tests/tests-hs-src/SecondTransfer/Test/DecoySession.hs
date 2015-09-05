@@ -229,6 +229,12 @@ recvFrameFromSession decoy_session = do
         Left   _      -> return Nothing
         Right  frame  -> return $ Just frame
 
+-- Reads all frames from a session and assembles a response. Notice that this is a buggy hack,
+-- because continuation frames and such are not considered.
+-- T
+-- readResponseFromSession :: DecoySession -> NH2.StreamId -> IO (Headers, B.ByteString, [NH2.Frame])
+
+
 
 -- Encode headers to send to the session
 -- TODO: There is an important bug here... we are using the default encoding
