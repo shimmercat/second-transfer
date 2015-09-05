@@ -29,7 +29,7 @@ module SecondTransfer.Http2.Session(
 #include "Logging.cpphs"
 
 -- System grade utilities
-import           Control.Concurrent                     (ThreadId, forkIO, threadDelay)
+import           Control.Concurrent                     (ThreadId, forkIO)
 import           Control.Concurrent.Chan
 import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
@@ -74,7 +74,7 @@ import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
-import           SecondTransfer.MainLoop.Logging        (logWithExclusivity, logit)
+import           SecondTransfer.MainLoop.Logging        (logit)
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to
 -- use :-(
@@ -362,16 +362,16 @@ sessionInputThread  = do
     -- these values in a closure...
     session_input             <- view sessionInput
 
-    decode_headers_table_mvar <- view toDecodeHeaders
-    stream_request_headers    <- view stream2HeaderBlockFragment
+    -- decode_headers_table_mvar <- view toDecodeHeaders
+    -- stream_request_headers    <- view stream2HeaderBlockFragment
     cancelled_streams_mvar    <- view streamsCancelled
-    coherent_worker           <- view awareWorker
+    -- coherent_worker           <- view awareWorker
 
-    for_worker_thread_uns     <- view forWorkerThread
+    -- for_worker_thread_uns     <- view forWorkerThread
     stream2workerthread       <- view stream2WorkerThread
-    receiving_headers_mvar    <- view receivingHeaders
-    last_good_stream_mvar     <- view lastGoodStream
-    current_session_id        <- view sessionIdAtSession
+    -- receiving_headers_mvar    <- view receivingHeaders
+    -- last_good_stream_mvar     <- view lastGoodStream
+    -- current_session_id        <- view sessionIdAtSession
 
     input                     <- liftIO $ readChan session_input
 
@@ -423,145 +423,13 @@ sessionInputThread  = do
         -- TODO: As it stands now, the server will happily start a new stream with
         -- a CONTINUATION frame instead of a HEADERS frame. That's against the
         -- protocol.
-        MiddleFrame_SIC frame | Just (stream_id, bytes) <- isAboutHeaders frame -> do
+        MiddleFrame_SIC frame | Just (_stream_id, _bytes) <- isAboutHeaders frame -> do
             -- Just append the frames to streamRequestHeaders
-            opens_stream <- appendHeaderFragmentBlock stream_id bytes
-
-            if opens_stream
-              then do
-                maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
-                case maybe_rcv_headers_of of
-                  Just _ -> do
-                    -- Bad client, it is already sending headers
-                    -- and trying to open another one
-                    closeConnectionBecauseIsInvalid NH2.ProtocolError
-                    -- An exception will be thrown above, so to not complicate
-                    -- control flow here too much.
-                  Nothing -> do
-                    -- Signal that we are receiving headers now, for this stream
-                    liftIO $ putMVar receiving_headers_mvar (Just stream_id)
-                    -- And go to check if the stream id is valid
-                    last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
-                    if (odd stream_id ) && (stream_id > last_good_stream)
-                      then do
-                        -- We are golden, set the new good stream
-                        liftIO $ putMVar last_good_stream_mvar (stream_id)
-                      else do
-                        -- We are not golden
-                        -- INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
-                        closeConnectionBecauseIsInvalid NH2.ProtocolError
-                -- So, now we know, we are ignoring priority frames at the moment
-                -- liftIO . logit $ "Priority: " `mappend` (pack . show $ getHeadersPriority frame)
-              else do
-                maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
-                case maybe_rcv_headers_of of
-                    Just a_stream_id | a_stream_id == stream_id -> do
-                        -- Nothing to complain about
-                        liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
-
-                    Nothing -> error "InternalError, this should be set"
-
-            if frameEndsHeaders frame then
-              do
-                -- Ok, let it be known that we are not receiving more headers
-                liftIO $ modifyMVar_
-                    receiving_headers_mvar
-                    (\ _ -> return Nothing )
-                -- Lets get a time
-                headers_arrived_time      <- liftIO $ getTime Monotonic
-                -- Let's decode the headers
-                let for_worker_thread     = set streamId stream_id for_worker_thread_uns
-                headers_bytes             <- getHeaderBytes stream_id
-                dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
-                (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
-#if LOGIT_SWITCH_TIMINGS
-                let
-                    (Just path) = He.fetchHeader header_list ":path"
-                liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
-#endif
-                -- /DEBUG
-                -- Good moment to remove the headers from the table.... we don't want a space
-                -- leak here
-                liftIO $ do
-                    H.delete stream_request_headers stream_id
-                    putMVar decode_headers_table_mvar new_table
-
-                -- TODO: Validate headers, abort session if the headers are invalid.
-                -- Otherwise other invariants will break!!
-                -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
-                let
-                    headers_editor = He.fromList header_list
-
-                maybe_good_headers_editor <- validateIncomingHeaders headers_editor
-
-                good_headers <- case maybe_good_headers_editor of
-                    Just yes_they_are_good -> return yes_they_are_good
-                    Nothing -> closeConnectionBecauseIsInvalid NH2.ProtocolError
-
-                -- Add any extra headers, on demand
-                headers_extra_good      <- addExtraHeaders good_headers
-                let
-                    header_list_after = He.toList headers_extra_good
-                -- liftIO $ putStrLn $ "header list after " ++ (show header_list_after)
-
-                -- If the headers end the request....
-                post_data_source <- if not (frameEndsStream frame)
-                  then do
-                    mechanism <- createMechanismForStream stream_id
-                    let source = postDataSourceFromMechanism mechanism
-                    return $ Just source
-                  else do
-                    return Nothing
-
-                let
-                  perception = Perception {
-                      _startedTime_Pr = headers_arrived_time,
-                      _streamId_Pr = stream_id,
-                      _sessionId_Pr = current_session_id,
-                      _protocol_Pr = Http2_HPV,
-                      _anouncedProtocols_Pr = Nothing
-                      }
-                  request = Request {
-                      _headers_RQ = header_list_after,
-                      _inputData_RQ = post_data_source,
-                      _perception_RQ = perception
-                      }
-
-                -- TODO: Handle the cases where a request tries to send data
-                -- even if the method doesn't allow for data.
-
-                -- I'm clear to start the worker, in its own thread
-                --
-                -- NOTE: Some late internal errors from the worker thread are
-                --       handled here by clossing the session.
-                --
-                -- TODO: Log exceptions handled here.
-                liftIO $ do
-                    thread_id <- forkIO $ E.catch
-                        (runReaderT
-                            (workerThread
-                                   request
-                                   coherent_worker)
-                            for_worker_thread
-                        )
-                        (
-                            (   \ _ ->  do
-                                -- Actions to take when the thread breaks....
-                                writeChan session_input InternalAbort_SIC
-                            )
-                            :: HTTP500PrecursorException -> IO ()
-                        )
-
-                    H.insert stream2workerthread stream_id thread_id
-
-                return ()
-            else
-                -- Frame doesn't end the headers... it was added before... so
-                -- probably do nothing
-                return ()
-
+            serverProcessIncomingHeaders frame
             continue
 
+        -- Peer can order a stream aborted, meaning that we shall not send any more data
+        -- on it.
         MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             liftIO $ do
@@ -689,6 +557,155 @@ sessionInputThread  = do
                 Nothing
             )
             (NH2.SettingsFrame [])
+
+
+serverProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
+serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders frame = do
+
+    -- Just append the frames to streamRequestHeaders
+    opens_stream              <- appendHeaderFragmentBlock stream_id bytes
+    receiving_headers_mvar    <- view receivingHeaders
+    last_good_stream_mvar     <- view lastGoodStream
+    for_worker_thread_uns     <- view forWorkerThread
+    decode_headers_table_mvar <- view toDecodeHeaders
+    stream_request_headers    <- view stream2HeaderBlockFragment
+    coherent_worker           <- view awareWorker
+    current_session_id        <- view sessionIdAtSession
+    session_input             <- view sessionInput
+    stream2workerthread       <- view stream2WorkerThread
+
+    if opens_stream
+      then do
+        maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
+        case maybe_rcv_headers_of of
+          Just _ -> do
+            -- Bad peer, it is already sending headers
+            -- and trying to open another one
+            closeConnectionBecauseIsInvalid NH2.ProtocolError
+            -- An exception will be thrown above, so to not complicate
+            -- control flow here too much.
+          Nothing -> do
+            -- Signal that we are receiving headers now, for this stream
+            liftIO $ putMVar receiving_headers_mvar (Just stream_id)
+            -- And go to check if the stream id is valid
+            last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
+            if (odd stream_id ) && (stream_id > last_good_stream)
+              then do
+                -- We are golden, set the new good stream
+                liftIO $ putMVar last_good_stream_mvar (stream_id)
+              else do
+                -- We are not golden
+                -- INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
+        -- So, now we know, we are ignoring priority frames at the moment
+        -- liftIO . logit $ "Priority: " `mappend` (pack . show $ getHeadersPriority frame)
+      else do
+        maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
+        case maybe_rcv_headers_of of
+            Just a_stream_id | a_stream_id == stream_id -> do
+                -- Nothing to complain about
+                liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
+
+            Nothing -> error "InternalError, this should be set"
+
+    if frameEndsHeaders frame then
+      do
+        -- Ok, let it be known that we are not receiving more headers
+        liftIO $ modifyMVar_
+            receiving_headers_mvar
+            (\ _ -> return Nothing )
+        -- Lets get a time
+        headers_arrived_time      <- liftIO $ getTime Monotonic
+        -- Let's decode the headers
+        let for_worker_thread     = set streamId stream_id for_worker_thread_uns
+        headers_bytes             <- getHeaderBytes stream_id
+        dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
+        (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
+#if LOGIT_SWITCH_TIMINGS
+        let
+            (Just path) = He.fetchHeader header_list ":path"
+        liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
+#endif
+        -- /DEBUG
+        -- Good moment to remove the headers from the table.... we don't want a space
+        -- leak here
+        liftIO $ do
+            H.delete stream_request_headers stream_id
+            putMVar decode_headers_table_mvar new_table
+
+        -- TODO: Validate headers, abort session if the headers are invalid.
+        -- Otherwise other invariants will break!!
+        -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
+        let
+            headers_editor = He.fromList header_list
+
+        maybe_good_headers_editor <- validateIncomingHeaders headers_editor
+
+        good_headers <- case maybe_good_headers_editor of
+            Just yes_they_are_good -> return yes_they_are_good
+            Nothing -> closeConnectionBecauseIsInvalid NH2.ProtocolError
+
+        -- Add any extra headers, on demand
+        headers_extra_good      <- addExtraHeaders good_headers
+        let
+            header_list_after = He.toList headers_extra_good
+        -- liftIO $ putStrLn $ "header list after " ++ (show header_list_after)
+
+        -- If the headers end the request....
+        post_data_source <- if not (frameEndsStream frame)
+          then do
+            mechanism <- createMechanismForStream stream_id
+            let source = postDataSourceFromMechanism mechanism
+            return $ Just source
+          else do
+            return Nothing
+
+        let
+          perception = Perception {
+              _startedTime_Pr = headers_arrived_time,
+              _streamId_Pr = stream_id,
+              _sessionId_Pr = current_session_id,
+              _protocol_Pr = Http2_HPV,
+              _anouncedProtocols_Pr = Nothing
+              }
+          request = Request {
+              _headers_RQ = header_list_after,
+              _inputData_RQ = post_data_source,
+              _perception_RQ = perception
+              }
+
+        -- TODO: Handle the cases where a request tries to send data
+        -- even if the method doesn't allow for data.
+
+        -- I'm clear to start the worker, in its own thread
+        --
+        -- NOTE: Some late internal errors from the worker thread are
+        --       handled here by clossing the session.
+        --
+        -- TODO: Log exceptions handled here.
+        liftIO $ do
+            thread_id <- forkIO $ E.catch
+                (runReaderT
+                    (workerThread
+                           request
+                           coherent_worker)
+                    for_worker_thread
+                )
+                (
+                    (   \ _ ->  do
+                        -- Actions to take when the thread breaks....
+                        writeChan session_input InternalAbort_SIC
+                    )
+                    :: HTTP500PrecursorException -> IO ()
+                )
+
+            H.insert stream2workerthread stream_id thread_id
+
+        return ()
+    else
+        -- Frame doesn't end the headers... it was added before... so
+        -- probably do nothing
+        return ()
 
 
 sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload  -> ReaderT SessionData IO ()

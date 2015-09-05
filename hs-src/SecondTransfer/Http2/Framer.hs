@@ -160,10 +160,10 @@ wrapSession aware_worker sessions_context attendant_callbacks = do
 
     let
         session_id_mvar = view nextSessionId sessions_context
-        push_action = attendant_callbacks ^. pushAction_AtC
-        pull_action = attendant_callbacks ^. pullAction_AtC
-        close_action = attendant_callbacks ^. closeAction_AtC
-        best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_AtC
+        push_action = attendant_callbacks ^. pushAction_IOC
+        pull_action = attendant_callbacks ^. pullAction_IOC
+        close_action = attendant_callbacks ^. closeAction_IOC
+        -- best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
 
 
     new_session_id <- modifyMVarMasked
@@ -228,7 +228,7 @@ wrapSession aware_worker sessions_context attendant_callbacks = do
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True)
-            INSTRUMENTATION( errorM "HTTP2.Framer" "Exception went up" )
+            -- INSTRUMENTATION( errorM "HTTP2.Framer" "Exception went up" )
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
         io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
@@ -354,7 +354,8 @@ inputGatherer pull_action session_input = do
             -- and probably wrong
             throwIO BadPrefaceException
       else
-        INSTRUMENTATION(  debugM "HTTP2.Framer" "Prologue validated" )
+        -- INSTRUMENTATION(  debugM "HTTP2.Framer" "Prologue validated" )
+        return ()
     let
         source::Source FramerSession (Maybe NH2.Frame)
         source = transPipe liftIO $ readNextFrame pull_action
@@ -471,7 +472,7 @@ outputGatherer session_output = do
 
                Left CancelSession_SOC -> do
                    -- The session wants to cancel things
-                   INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
+                   -- INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
                    releaseFramer
 
                Left (FinishStream_SOC stream_id ) -> do

@@ -48,10 +48,10 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
         forkIO $ go new_session_tag (Just "") 1
         return ()
   where
-    push_action = attendant_callbacks ^. pushAction_AtC
-    -- pull_action = attendant_callbacks ^. pullAction_AtC
-    close_action = attendant_callbacks ^. closeAction_AtC
-    best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_AtC
+    push_action = attendant_callbacks ^. pushAction_IOC
+    -- pull_action = attendant_callbacks ^. pullAction_IOC
+    close_action = attendant_callbacks ^. closeAction_IOC
+    best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
 
     go :: Int -> Maybe B.ByteString -> Int -> IO ()
     go session_tag (Just leftovers) reuse_no = do

@@ -8,25 +8,25 @@ import           Control.Concurrent
 import           Control.Concurrent.STM.TMVar
 import           Control.Concurrent.STM.TChan
 import           Control.Exception
-import           Control.Lens            (view, (^.), over)
-import qualified Control.Lens            as L
-import           Control.Monad.STM       (atomically)
+import           Control.Lens                     (view, (^.), over)
+import qualified Control.Lens                     as L
+import           Control.Monad.STM                (atomically)
 
-import qualified Network.HTTP2           as NH2
-import qualified Network.HPACK           as HP
+import qualified Network.HTTP2                    as NH2
+import qualified Network.HPACK                    as HP
 
-import qualified Data.ByteString         as B
-import qualified Data.ByteString.Lazy    as LB
-import qualified Data.ByteString.Builder as Bu
-import qualified Data.Sequence           as Sq
-import           Data.Sequence           ( (<|), (|>), ViewL(..), Seq )
+import qualified Data.ByteString                  as B
+import qualified Data.ByteString.Lazy             as LB
+import qualified Data.ByteString.Builder          as Bu
+import qualified Data.Sequence                    as Sq
+import           Data.Sequence                    ( (<|), (|>), ViewL(..), Seq )
 
 import           SecondTransfer.Http2
 import           SecondTransfer.Types
 import           SecondTransfer.MainLoop.Internal
 
 -- "Internal imports"
-import          SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
+import           SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
 
 
 data DataContinuityEngine = DataContinuityEngine {
@@ -145,11 +145,11 @@ createDecoySession attendant = do
 
         close_action :: CloseAction
         close_action =  return ()
-        attendant_callbacks = AttendantCallbacks {
-            _pushAction_AtC = push_action,
-            _pullAction_AtC = pull_action,
-            _closeAction_AtC = close_action,
-            _bestEffortPullAction_AtC = best_effort_pull_action
+        attendant_callbacks = IOCallbacks {
+            _pushAction_IOC = push_action,
+            _pullAction_IOC = pull_action,
+            _closeAction_IOC = close_action,
+            _bestEffortPullAction_IOC = best_effort_pull_action
             }
 
     dtable_for_encoding <- HP.newDynamicTableForEncoding 4096
