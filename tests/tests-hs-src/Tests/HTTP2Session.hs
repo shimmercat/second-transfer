@@ -72,7 +72,8 @@ simpleRequestHeaders :: Headers
 simpleRequestHeaders = [
     (":path", "/"),
     (":authority", "www.example.com"),
-    (":scheme", "https")
+    (":scheme", "https"),
+    (":method", "GET")
     ]
 
 

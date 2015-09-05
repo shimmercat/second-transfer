@@ -691,7 +691,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
           Just _ -> do
             -- Bad peer, it is already sending headers
             -- and trying to open another one
-            closeConnectionBecauseIsInvalid NH2.ProtocolError
+            {-# SCC ccB1 #-} closeConnectionBecauseIsInvalid NH2.ProtocolError
             -- An exception will be thrown above, so to not complicate
             -- control flow here too much.
           Nothing -> do
@@ -706,7 +706,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
               else do
                 -- We are not golden
                 -- INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
-                closeConnectionBecauseIsInvalid NH2.ProtocolError
+                {-# SCC ccB2 #-} closeConnectionBecauseIsInvalid NH2.ProtocolError
         -- So, now we know, we are ignoring priority frames at the moment
         -- liftIO . logit $ "Priority: " `mappend` (pack . show $ getHeadersPriority frame)
       else do
@@ -753,7 +753,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
 
         good_headers <- case maybe_good_headers_editor of
             Just yes_they_are_good -> return yes_they_are_good
-            Nothing -> closeConnectionBecauseIsInvalid NH2.ProtocolError
+            Nothing -> {-# SCC ccB3 #-} closeConnectionBecauseIsInvalid NH2.ProtocolError
 
         -- Add any extra headers, on demand
         headers_extra_good      <- addExtraHeaders good_headers
