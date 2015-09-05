@@ -128,6 +128,7 @@ testFirstFrameMustBeSettings = TestCase $ do
         _ ->
             assertFailure "Waiting a settings frame, received something else"
 
+
 testFirstFrameMustBeSettings2 :: Test
 testFirstFrameMustBeSettings2 = TestCase $ do
     errors_mvar <- newMVar False

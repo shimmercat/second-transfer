@@ -4,11 +4,14 @@
 {-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell, OverloadedStrings #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http2.Session(
-    http2Session
+    http2ServerSession
+    ,http2ClientSession
     ,getFrameFromSession
     ,sendFirstFrameToSession
     ,sendMiddleFrameToSession
     ,sendCommandToSession
+
+    ,pendingRequests_ClS
 
     ,CoherentSession
     ,SessionInput(..)
@@ -20,6 +23,8 @@ module SecondTransfer.Http2.Session(
     ,SessionsCallbacks(..)
     ,SessionsConfig(..)
     ,ErrorCallback
+    ,ClientState(..)
+    ,SessionRole(..)
 
     -- Internal stuff
     ,OutputFrame
@@ -67,6 +72,8 @@ import           System.Clock                            (getTime, TimeSpec, Clo
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
 import           SecondTransfer.MainLoop.Protocol
+import           SecondTransfer.MainLoop.ClientPetitioner
+
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler,
                                                          SessionsContext,
@@ -75,6 +82,8 @@ import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import           SecondTransfer.MainLoop.Logging        (logit)
+
+import           Debug.Trace
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to
 -- use :-(
@@ -106,7 +115,6 @@ data SessionSettings = SessionSettings {
     }
 
 makeLenses ''SessionSettings
-
 
 
 -- Whatever a worker thread is going to need comes here....
@@ -179,12 +187,19 @@ data SessionInputCommand =
   deriving Show
 
 
--- temporary
+-- Session output commands indicating something to the Framer
 data  SessionOutputCommand =
     CancelSession_SOC
     |FinishStream_SOC GlobalStreamId
   deriving Show
 
+
+-- The role of a session is either server or client. There are small
+-- differences between both.
+data SessionRole  =
+    Client_SR
+   |Server_SR
+  deriving (Eq,Show)
 
 -- Here is how we make a session
 type SessionMaker = SessionsContext -> IO Session
@@ -195,7 +210,48 @@ type CoherentSession = AwareWorker -> SessionMaker
 
 data PostInputMechanism = PostInputMechanism (MVar (Maybe B.ByteString), InputDataStream)
 
+------------- Regarding client state
+type Message = (Headers,InputDataStream)
 
+data ClientState = ClientState {
+    -- Holds a queue. The client here puts the message (the request) and an VAR
+    -- where it will receive the response.
+    _pendingRequests_ClS       :: Chan (Message, MVar Message)
+
+    -- This is the id of the next available stream
+    ,_nextStream_ClS           :: MVar Int
+
+    -- A dictionary from stream id to the client which is waiting for the
+    -- message
+    ,_response2Waiter_ClS      ::HashTable GlobalStreamId (MVar Message)
+    }
+
+makeLenses ''ClientState
+
+
+handleRequest' :: ClientState -> Headers -> InputDataStream -> IO (Headers,InputDataStream)
+handleRequest' client_state headers input_data = runReaderT (handleRequest headers input_data) client_state
+
+type ClientMonad = ReaderT ClientState IO
+
+handleRequest :: Headers -> InputDataStream -> ClientMonad Message
+handleRequest headers input_data = do
+    pending_requests <- view pendingRequests_ClS
+    response_mvar <- liftIO $ newEmptyMVar
+    liftIO $ writeChan pending_requests ((headers,input_data),response_mvar)
+    liftIO $ takeMVar response_mvar
+
+
+instance ClientPetitioner ClientState where
+
+    request = handleRequest'
+
+-------------- Regarding client state
+
+
+-- SessionData is the actual state of the session, including the channels to the framer
+-- outside.
+--
 -- NH2.Frame != Frame
 data SessionData = SessionData {
     -- ATTENTION: Ignore the warning coming from here for now
@@ -209,12 +265,15 @@ data SessionData = SessionData {
 
     -- Use to encode
     ,_toEncodeHeaders            :: MVar HP.DynamicTable
+
     -- And used to decode
     ,_toDecodeHeaders            :: MVar HP.DynamicTable
     -- While I'm receiving headers, anything which
     -- is not a header should end in the connection being
     -- closed
+
     ,_receivingHeaders           :: MVar (Maybe Int)
+
     -- _lastGoodStream is used both to report the last good stream in the
     -- GoAwayFrame and to keep track of streams oppened by the client. In
     -- other words, it contains the stream_id of the last valid client
@@ -229,7 +288,12 @@ data SessionData = SessionData {
     -- I make copies of it in different contexts, and as needed.
     ,_forWorkerThread            :: WorkerThreadEnvironment
 
+    -- When acting as a server, this is the handler for processing requests
     ,_awareWorker                :: AwareWorker
+
+    -- When acting as a client, this is where new requests are taken
+    -- from
+    ,_simpleClient               :: ClientState
 
     -- Some streams may be cancelled
     ,_streamsCancelled           :: MVar NS.IntSet
@@ -251,15 +315,26 @@ data SessionData = SessionData {
 
     -- What is the next stream available for push?
     ,_nextPushStream             :: MVar Int
-    }
 
+    -- What role does this session has?
+    ,_sessionRole                :: SessionRole
+    }
 
 makeLenses ''SessionData
 
 
+http2ServerSession :: AwareWorker -> Int -> SessionsContext -> IO Session
+http2ServerSession a i sctx = http2Session Server_SR a (error "NotAClient") i sctx
+
+
+http2ClientSession :: ClientState -> Int -> SessionsContext -> IO Session
+http2ClientSession client_state session_id sctx =
+    http2Session Client_SR (error "NotAServer") client_state session_id sctx
+
+
 --                                v- {headers table size comes here!!}
-http2Session :: AwareWorker -> Int -> SessionsContext -> IO Session
-http2Session aware_worker session_id sessions_context =   do
+http2Session :: SessionRole -> AwareWorker -> ClientState  -> Int -> SessionsContext -> IO Session
+http2Session session_role aware_worker client_state session_id sessions_context =   do
     session_input             <- newChan
     session_output            <- newChan
     session_output_mvar       <- newMVar session_output
@@ -309,6 +384,7 @@ http2Session aware_worker session_id sessions_context =   do
         ,_stream2HeaderBlockFragment = stream_request_headers
         ,_forWorkerThread            = for_worker_thread
         ,_awareWorker                = aware_worker
+        ,_simpleClient               = client_state
         ,_streamsCancelled           = cancelled_streams_mvar
         ,_stream2PostInputMechanism  = stream2postinputmechanism
         ,_stream2WorkerThread        = stream2workerthread
@@ -317,18 +393,25 @@ http2Session aware_worker session_id sessions_context =   do
         ,_sessionSettings            = session_settings
         ,_lastGoodStream             = last_good_stream_mvar
         ,_nextPushStream             = next_push_stream
+        ,_sessionRole                = session_role
         }
 
     let
         exc_handler :: SessionComponent -> HTTP2SessionException -> IO ()
         exc_handler component e = sessionExceptionHandler component session_id sessions_context e
         exc_guard :: SessionComponent -> IO () -> IO ()
-        exc_guard component action = E.catch
-            action
-            (\e -> do
-                -- INSTRUMENTATION( errorM "HTTP2.Session" "Exception processed" )
-                exc_handler component e
-            )
+        exc_guard component action =
+            --E.catch
+                (E.catch
+                     action
+                     (\e -> do
+                         -- INSTRUMENTATION( errorM "HTTP2.Session" "Exception processed" )
+                         exc_handler component e
+                     )
+                )
+                -- (( \ ee ->
+                --        putStrLn  $ "ee -> " ++ show ee
+                -- ):: E.SomeException -> IO () )
 
         use_chunk_length =  sessions_context ^.  sessionsConfig . dataFrameSize
 
@@ -344,6 +427,13 @@ http2Session aware_worker session_id sessions_context =   do
     -- stuff coming from all the workers. This function is also in charge of closing streams
     forkIO $ exc_guard SessionDataOutputThread_HTTP2SessionComponent
            $ dataOutputThread use_chunk_length data_output session_output_mvar
+
+    -- If I'm a client, I also need a thread to poll for requests
+    when (session_role == Client_SR) $ do
+         forkIO $ exc_guard SessionClientPollThread_HTTP2SessionComponent
+                $ sessionPollThread session_data headers_output
+         return ()
+
 
     -- The two previous threads fill the session_output argument below (they write to it)
     -- the session machinery in the other end is in charge of sending that data through the
@@ -373,7 +463,8 @@ sessionInputThread  = do
     -- last_good_stream_mvar     <- view lastGoodStream
     -- current_session_id        <- view sessionIdAtSession
 
-    input                     <- liftIO $ readChan session_input
+    input                     <- {-# SCC session_input #-} liftIO $ readChan session_input
+    session_role              <- view sessionRole
 
     case input of
 
@@ -423,10 +514,16 @@ sessionInputThread  = do
         -- TODO: As it stands now, the server will happily start a new stream with
         -- a CONTINUATION frame instead of a HEADERS frame. That's against the
         -- protocol.
-        MiddleFrame_SIC frame | Just (_stream_id, _bytes) <- isAboutHeaders frame -> do
-            -- Just append the frames to streamRequestHeaders
-            serverProcessIncomingHeaders frame
-            continue
+        MiddleFrame_SIC frame | Just (_stream_id, _bytes) <- isAboutHeaders frame ->
+            case session_role of
+                Server_SR -> do
+                    -- Just append the frames to streamRequestHeaders
+                    serverProcessIncomingHeaders frame
+                    continue
+
+                Client_SR -> do
+                    clientProcessIncomingHeaders frame
+                    continue
 
         -- Peer can order a stream aborted, meaning that we shall not send any more data
         -- on it.
@@ -639,7 +736,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
         let
             headers_editor = He.fromList header_list
 
-        maybe_good_headers_editor <- validateIncomingHeaders headers_editor
+        maybe_good_headers_editor <- validateIncomingHeadersServer headers_editor
 
         good_headers <- case maybe_good_headers_editor of
             Just yes_they_are_good -> return yes_they_are_good
@@ -708,6 +805,113 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
         return ()
 
 
+clientProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
+clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders frame = do
+
+    opens_stream              <- appendHeaderFragmentBlock stream_id bytes
+    receiving_headers_mvar    <- view receivingHeaders
+    last_good_stream_mvar     <- view lastGoodStream
+    for_worker_thread_uns     <- view forWorkerThread
+    decode_headers_table_mvar <- view toDecodeHeaders
+    stream_request_headers    <- view stream2HeaderBlockFragment
+    coherent_worker           <- view awareWorker
+    current_session_id        <- view sessionIdAtSession
+    session_input             <- view sessionInput
+    stream2workerthread       <- view stream2WorkerThread
+    response2waiter           <- view (simpleClient . response2Waiter_ClS)
+
+    if opens_stream
+      then do
+        maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
+        case maybe_rcv_headers_of of
+          Just _ -> do
+            -- Bad peer, it is already sending headers
+            -- and trying to open another one
+            closeConnectionBecauseIsInvalid NH2.ProtocolError
+            -- An exception will be thrown above, so to not complicate
+            -- control flow here too much.
+          Nothing -> do
+            -- Signal that we are receiving headers now, for this stream
+            liftIO $ putMVar receiving_headers_mvar (Just stream_id)
+            -- And go to check if the stream id is valid
+            last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
+            stream_initiated_by_client <- streamInitiatedByClient stream_id
+            if (odd stream_id ) && stream_initiated_by_client
+              then do
+                -- We are golden, set the new good stream
+                liftIO $ putMVar last_good_stream_mvar (stream_id)
+              else do
+                -- We are not golden
+                -- TODO: Control for pushed streams here.
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
+        -- So, now we know, we are ignoring priority frames at the moment
+        -- liftIO . logit $ "Priority: " `mappend` (pack . show $ getHeadersPriority frame)
+      else do
+        maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
+        case maybe_rcv_headers_of of
+            Just a_stream_id | a_stream_id == stream_id -> do
+                -- Nothing to complain about
+                liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
+
+            Nothing -> error "InternalError, this should be set"
+
+    if frameEndsHeaders frame then
+      do
+        -- Ok, let it be known that we are not receiving more headers
+        liftIO $ modifyMVar_
+            receiving_headers_mvar
+            (\ _ -> return Nothing )
+        -- Lets get a time
+        headers_arrived_time      <- liftIO $ getTime Monotonic
+        -- Let's decode the headers
+        headers_bytes             <- getHeaderBytes stream_id
+        dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
+        (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
+
+        -- Good moment to remove the headers from the table.... we don't want a space
+        -- leak here
+        liftIO $ do
+            H.delete stream_request_headers stream_id
+            putMVar decode_headers_table_mvar new_table
+
+        -- TODO: Validate headers, abort session if the headers are invalid.
+        -- Otherwise other invariants will break!!
+        -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
+        let
+            headers_editor = He.fromList header_list
+
+        maybe_good_headers_editor <- validateIncomingHeadersClient headers_editor
+
+        good_headers <- case maybe_good_headers_editor of
+            Just yes_they_are_good -> return yes_they_are_good
+            Nothing -> closeConnectionBecauseIsInvalid NH2.ProtocolError
+
+
+        -- If the headers end the request....
+        post_data_source <- if not (frameEndsStream frame)
+          then do
+            mechanism <-  createMechanismForStream stream_id
+            return $ postDataSourceFromMechanism mechanism
+          else
+            return $ return ()
+
+        (Just response_mvar) <- liftIO $ H.lookup response2waiter stream_id
+        liftIO $ putMVar response_mvar (He.toList good_headers, post_data_source)
+
+        return ()
+    else
+        -- Frame doesn't end the headers... it was added before... so
+        -- probably do nothing
+        return ()
+
+
+streamInitiatedByClient :: GlobalStreamId -> ReaderT SessionData IO Bool
+streamInitiatedByClient stream_id = do
+    response2waiter <- view (simpleClient . response2Waiter_ClS)
+    response_handle_maybe <- liftIO $ H.lookup response2waiter stream_id
+    return $ isJust response_handle_maybe
+
+
 sendOutFrame :: NH2.EncodeInfo -> NH2.FramePayload  -> ReaderT SessionData IO ()
 sendOutFrame encode_info payload = do
     session_output_mvar <- view sessionOutput
@@ -747,8 +951,9 @@ addExtraHeaders headers_editor = do
         else return headers_editor
 
 
-validateIncomingHeaders :: He.HeaderEditor -> ReaderT SessionData IO (Maybe He.HeaderEditor)
-validateIncomingHeaders headers_editor = do
+-- TODO: Close connection on unexepcted pseudo-headers
+validateIncomingHeadersServer :: He.HeaderEditor -> ReaderT SessionData IO (Maybe He.HeaderEditor)
+validateIncomingHeadersServer headers_editor = do
     -- Check that the headers block comes with all mandatory headers.
     -- Right now I'm not checking that they come in the mandatory order though...
     --
@@ -769,6 +974,26 @@ validateIncomingHeaders headers_editor = do
         (isJust maybe_method) &&
         (isJust maybe_scheme) &&
         (isJust maybe_path )
+        then
+            return (Just h1)
+        else
+            return Nothing
+
+validateIncomingHeadersClient :: He.HeaderEditor -> ReaderT SessionData IO (Maybe He.HeaderEditor)
+validateIncomingHeadersClient headers_editor = do
+    -- Check that the headers block comes with all mandatory headers.
+    -- Right now I'm not checking that they come in the mandatory order though...
+    --
+    -- Notice that this function will transform a "host" header to an ":authority"
+    -- one.
+    let
+        h1 = He.replaceHostByAuthority headers_editor
+        -- Check that headers are lowercase
+        headers_are_lowercase = He.headersAreLowercaseAtHeaderEditor headers_editor
+        -- Check that we have mandatory headers
+        maybe_status = h1 ^. (He.headerLens ":status")
+
+    if (isJust maybe_status)
         then
             return (Just h1)
         else
@@ -976,8 +1201,6 @@ workerThread req aware_worker =
       else
         return []
 
-
-
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO  newEmptyMVar
     liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers_sent, headers, effects)
@@ -1138,8 +1361,8 @@ headersOutputThread input_chan session_output_mvar = forever $ do
 
     use_chunk_length <- view $ sessionsContext .  sessionsConfig . dataFrameSize
 
-    header_output_request <- liftIO $ readChan input_chan
-    case header_output_request of
+    header_output_request <- {-# SCC input_chan  #-} liftIO $ readChan input_chan
+    {-# SCC case_ #-} case header_output_request of
         NormalResponse_HM (stream_id, headers_ready_mvar, headers, effect)  -> do
 
             -- First encode the headers using the table
@@ -1315,3 +1538,52 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
                       )
              )
              fragments
+
+
+sessionPollThread :: SessionData -> Chan HeaderOutputMessage -> IO ()
+sessionPollThread  session_data headers_output = do
+    let
+        pending_requests_chan  = session_data ^. (simpleClient . pendingRequests_ClS)
+        client_next_stream_mvar  = session_data ^. (simpleClient . nextStream_ClS)
+        response2waiter       = session_data ^. (simpleClient . response2Waiter_ClS)
+        for_worker_thread  = session_data ^. forWorkerThread
+        session_input  = session_data ^. sessionInput
+
+    ((headers, input_data_stream), response_mvar) <- readChan pending_requests_chan
+
+    new_stream_id <- modifyMVar client_next_stream_mvar (\ n -> return (n + 1, n) )
+    let
+        worker_environment = set streamId new_stream_id for_worker_thread
+        effects = defaultEffects
+
+    -- Store the response place
+    H.insert response2waiter new_stream_id response_mvar
+
+    -- Start by sending the headers of the request
+    headers_sent <- liftIO  newEmptyMVar
+    liftIO $ writeChan headers_output $ NormalResponse_HM (new_stream_id, headers_sent, headers, effects)
+
+    liftIO . forkIO $ E.catch
+        (runReaderT
+            (clientWorkerThread new_stream_id effects response_mvar headers_sent input_data_stream )
+            worker_environment
+        )
+        (
+            (   \ _ ->  do
+                -- Actions to take when the thread breaks....
+                writeChan session_input InternalAbort_SIC
+            )
+            :: HTTP500PrecursorException -> IO ()
+        )
+
+    sessionPollThread session_data headers_output
+
+
+clientWorkerThread :: GlobalStreamId -> Effect -> MVar Message -> MVar HeadersSent -> InputDataStream -> WorkerMonad ()
+clientWorkerThread stream_id effects response_mvar headers_sent input_data_stream = do
+    -- And now work on sending the data, if any...
+    runConduit $
+        transPipe liftIO input_data_stream
+        `fuseBothMaybe`
+        sendDataOfStream stream_id headers_sent effects
+    return ()

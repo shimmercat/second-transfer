@@ -6,6 +6,7 @@
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http2.Framer (
     BadPrefaceException,
+    SessionPayload(..),
 
     wrapSession,
     http2FrameLength,
@@ -147,6 +148,9 @@ data FramerSessionData = FramerSessionData {
 
     -- For sending data orderly
     , _prioritySendState     :: PrioritySendState
+
+    -- Need to know this for the preface
+    , _sessionRole_FSD       :: SessionRole
     }
 
 L.makeLenses ''FramerSessionData
@@ -154,26 +158,40 @@ L.makeLenses ''FramerSessionData
 
 type FramerSession = ReaderT FramerSessionData IO
 
+data SessionPayload =
+    AwareWorker_SP AwareWorker   -- I'm a server
+    |ClientState_SP ClientState  -- I'm a client
 
-wrapSession :: AwareWorker -> SessionsContext -> Attendant
-wrapSession aware_worker sessions_context attendant_callbacks = do
+wrapSession :: SessionPayload -> SessionsContext -> Attendant
+wrapSession session_payload sessions_context io_callbacks = do
 
     let
         session_id_mvar = view nextSessionId sessions_context
-        push_action = attendant_callbacks ^. pushAction_IOC
-        pull_action = attendant_callbacks ^. pullAction_IOC
-        close_action = attendant_callbacks ^. closeAction_IOC
-        -- best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
+        push_action = io_callbacks ^. pushAction_IOC
+        pull_action = io_callbacks ^. pullAction_IOC
+        close_action = io_callbacks ^. closeAction_IOC
+        -- best_effort_pull_action = io_callbacks ^. bestEffortPullAction_IOC
 
 
     new_session_id <- modifyMVarMasked
         session_id_mvar $
         \ session_id -> return $ session_id `seq` (session_id + 1, session_id)
 
-    (session_input, session_output) <- http2Session
-                                        aware_worker
-                                        new_session_id
-                                        sessions_context
+    (session_input, session_output) <- case session_payload of
+        AwareWorker_SP aware_worker ->  http2ServerSession
+                                            aware_worker
+                                            new_session_id
+                                            sessions_context
+        ClientState_SP client_state -> http2ClientSession
+                                            client_state
+                                            new_session_id
+                                            sessions_context
+
+    let
+        session_role = case session_payload of
+            AwareWorker_SP _ ->  Server_SR
+            ClientState_SP _ ->  Client_SR
+
 
     -- TODO : Add type annotations....
     s2f                       <- H.new
@@ -208,6 +226,7 @@ wrapSession aware_worker sessions_context attendant_callbacks = do
                                     _semToSend = sem_to_send,
                                     _prioQ = prio_mvar
                                 }
+        ,_sessionRole_FSD     = session_role
         }
 
 
@@ -267,7 +286,7 @@ addCapacity ::
         GlobalStreamId ->
         Int           ->
         FramerSession Bool
-addCapacity 0         delta_cap =
+addCapacity 0         _delta_cap =
     -- TODO: Implement session flow control
     return True
 addCapacity stream_id delta_cap =
@@ -344,18 +363,19 @@ readNextFrame pull_action  = do
 -- quota updates on the streams.
 inputGatherer :: PullAction -> SessionInput -> FramerSession ()
 inputGatherer pull_action session_input = do
-    -- We can start by reading off the prefix....
-    prefix <- liftIO $ pull_action http2PrefixLength
-    if prefix /= NH2.connectionPreface
-      then do
-        sendGoAwayFrame NH2.ProtocolError
-        liftIO $
-            -- We just use the GoAway frame, although this is awfully early
-            -- and probably wrong
-            throwIO BadPrefaceException
-      else
-        -- INSTRUMENTATION(  debugM "HTTP2.Framer" "Prologue validated" )
-        return ()
+
+    session_role <- view sessionRole_FSD
+
+    when (session_role == Server_SR) $ do
+        -- We can start by reading off the prefix....
+        prefix <- liftIO $ pull_action http2PrefixLength
+        when (prefix /= NH2.connectionPreface) $ do
+            sendGoAwayFrame NH2.ProtocolError
+            liftIO $
+                -- We just use the GoAway frame, although this is awfully early
+                -- and probably wrong
+                throwIO BadPrefaceException
+
     let
         source::Source FramerSession (Maybe NH2.Frame)
         source = transPipe liftIO $ readNextFrame pull_action
@@ -450,6 +470,13 @@ inputGatherer pull_action session_input = do
 -- All the output frames come this way first
 outputGatherer :: SessionOutput -> FramerSession ()
 outputGatherer session_output = do
+
+    session_role <- view sessionRole_FSD
+
+    -- When acting as a client, the first step is to send the prefix...
+    when (session_role == Client_SR) $
+        pushPrefix
+
     frame_sent_report_callback <- view $
        sessionsContext            .
        sessionsConfig             .
@@ -553,6 +580,7 @@ updateLastStream :: GlobalStreamId  -> FramerSession ()
 updateLastStream stream_id = do
     last_stream_id_mvar <- view lastStream
     liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
+
 
 startStreamOutputQueueIfNotExists :: GlobalStreamId -> Int -> FramerSession ()
 startStreamOutputQueueIfNotExists stream_id priority = do
@@ -668,6 +696,12 @@ pushFrame :: NH2.EncodeInfo
              -> NH2.FramePayload -> FramerSession ()
 pushFrame p1 p2 = do
     let bs = LB.fromStrict $ NH2.encodeFrame p1 p2
+    sendBytes bs
+
+
+pushPrefix :: FramerSession ()
+pushPrefix = do
+    let bs = LB.fromStrict NH2.connectionPreface
     sendBytes bs
 
 

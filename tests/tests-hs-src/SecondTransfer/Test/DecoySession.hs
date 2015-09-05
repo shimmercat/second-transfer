@@ -24,6 +24,7 @@ import           Data.Sequence                    ( (<|), (|>), ViewL(..), Seq )
 import           SecondTransfer.Http2
 import           SecondTransfer.Types
 import           SecondTransfer.MainLoop.Internal
+import           Debug.Trace
 
 -- "Internal imports"
 import           SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
@@ -217,11 +218,11 @@ recvFrameFromSession decoy_session = do
         waiting_for_read = decoy_session ^. waiting
     my_thread_id <- myThreadId
     packet <- atomically $ do
-        putTMVar waiting_for_read my_thread_id
-        remaining_output_bit <- takeTMVar remaining_output_bit_mvar
-        (packet, rest) <- readNextChunkAndContinue http2FrameLength remaining_output_bit pull_action
-        putTMVar remaining_output_bit_mvar rest
-        takeTMVar waiting_for_read
+        {-# SCC aT #-} putTMVar waiting_for_read my_thread_id
+        remaining_output_bit <- {-# SCC bT #-}  takeTMVar remaining_output_bit_mvar
+        (packet, rest) <-  {-# SCC cT #-}  readNextChunkAndContinue http2FrameLength remaining_output_bit pull_action
+        {-# SCC dT #-} putTMVar remaining_output_bit_mvar rest
+        {-# SCC eT #-} takeTMVar waiting_for_read
         return packet
     let
         error_or_frame = NH2.decodeFrame settings packet
