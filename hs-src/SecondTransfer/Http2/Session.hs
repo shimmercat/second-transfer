@@ -637,6 +637,12 @@ sessionInputThread  = do
             handleSettingsFrame settings_list
             continue
 
+        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _ _ )) -> do
+            -- I was sent a go away, so go-away...
+            closeConnectionBecauseIsInvalid NH2.NoError
+            return ()
+
+
         MiddleFrame_SIC somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
             -- liftIO . logit $ "Strange frame:" `mappend` (pack . show $ somethingelse)

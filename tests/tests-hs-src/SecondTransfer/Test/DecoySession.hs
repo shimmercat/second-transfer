@@ -90,14 +90,22 @@ data DecoySession = DecoySession {
     ,_encodeHeadersHere   :: TMVar HP.DynamicTable
     ,_decodeHeadersHere   :: TMVar HP.DynamicTable
 
-    ,_incomingData               :: TMVar DataContinuityEngine
-    ,_clientState                :: ClientState
+    ,_incomingData        :: TMVar DataContinuityEngine
+    ,_clientState         :: ClientState
     -- Execute this when you want to use a powerfull client session
     ,_startClientSessionCallback :: IO ClientState
+    -- Some sort of exception that I got....
+    ,_clientException     :: TMVar Bool
     }
 
 
 L.makeLenses ''DecoySession
+
+
+
+-- errorsSessionConfig :: MVar Bool -> SessionsConfig
+-- errorsSessionConfig mvar = set (sessionsCallbacks . reportErrorCallback_SC)
+--      (Just $ setError mvar) defaultSessionsConfig
 
 
 channelsToIOCallbacks :: TChan B.ByteString -> TChan B.ByteString -> TMVar DataContinuityEngine -> IOCallbacks
