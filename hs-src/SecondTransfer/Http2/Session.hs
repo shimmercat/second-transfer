@@ -824,13 +824,8 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
     opens_stream              <- appendHeaderFragmentBlock stream_id bytes
     receiving_headers_mvar    <- view receivingHeaders
     last_good_stream_mvar     <- view lastGoodStream
-    for_worker_thread_uns     <- view forWorkerThread
     decode_headers_table_mvar <- view toDecodeHeaders
     stream_request_headers    <- view stream2HeaderBlockFragment
-    coherent_worker           <- view awareWorker
-    current_session_id        <- view sessionIdAtSession
-    session_input             <- view sessionInput
-    stream2workerthread       <- view stream2WorkerThread
     response2waiter           <- view (simpleClient . response2Waiter_ClS)
 
     if opens_stream
