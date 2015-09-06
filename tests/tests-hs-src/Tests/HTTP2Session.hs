@@ -84,16 +84,16 @@ throwingWorker _ = throwIO Internal500Exception
 
 throwingWorker2 :: AwareWorker
 throwingWorker2  = coherentToAwareWorker . const .  return $ (
-        [
-            -- These headers will be already sent by the time
-            -- the exception is discovered...
-            (":status", "200")
-        ],
-        [], -- No pushed streams
-        do
-            yield "Error coming down"
-            liftIO $ throwIO Internal500Exception
-            return []
+    [
+        -- These headers will be already sent by the time
+        -- the exception is discovered...
+        (":status", "200")
+    ],
+    [], -- No pushed streams
+    do
+        yield "Error coming down"
+        liftIO $ throwIO Internal500Exception
+        return []
     )
 
 
@@ -118,24 +118,38 @@ setError :: MVar Bool -> ErrorCallback
 setError mvar = const $ modifyMVar_ mvar (const $ return True )
 
 
+errorForPrefaceOk :: MVar Bool ->  ErrorCallback
+errorForPrefaceOk ok_mvar (_, _, some_exception) = do
+    let
+        maybe_blocked :: Maybe BlockedIndefinitelyOnMVar
+        maybe_blocked = fromException some_exception
+    case maybe_blocked of
+        Just _ -> modifyMVar_ ok_mvar (const . return $ True)
+        Nothing -> modifyMVar_ ok_mvar (const . return $ False)
+
+
 errorsSessionConfig :: MVar Bool -> SessionsConfig
 errorsSessionConfig mvar = set (sessionsCallbacks . reportErrorCallback_SC)
     (Just $ setError mvar) defaultSessionsConfig
+
+errorsSessionConfigForMVar :: MVar Bool -> SessionsConfig
+errorsSessionConfigForMVar mvar = set (sessionsCallbacks . reportErrorCallback_SC)
+    (Just $ errorForPrefaceOk mvar) defaultSessionsConfig
 
 
 testPrefaceChecks :: Test
 testPrefaceChecks = TestCase $ do
     errors_mvar <- newMVar False
-    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    sessions_context <- makeSessionsContext (errorsSessionConfigForMVar errors_mvar)
     let
         attendant = http2Attendant sessions_context simpleWorker
     decoy_session <- createDecoySession attendant
     -- This should work
     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
     threadDelay 1000000
-    got_error <- readMVar errors_mvar
-    if got_error then
-        assertFailure "Exception raised"
+    error_ok <- readMVar errors_mvar
+    if not error_ok then
+        assertFailure "TypeOfErrorNotOK"
     else
         return ()
 
