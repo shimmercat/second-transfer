@@ -56,8 +56,8 @@ erringWorker = coherentToAwareWorker . const $ return (
 
 
 abortingWorker :: AwareWorker
-abortingWorker request = do
-    pr1 <- erringWorker request
+abortingWorker req_ = do
+    pr1 <- erringWorker req_
     let
         pr2 = L.set (effect_PS . interrupt_Ef) (Just InterruptConnectionAfter_IEf) pr1
     return pr2
@@ -489,3 +489,44 @@ testClosedInteraction3 = TestCase $ do
         return ()
       else
         assertFailure "IWasExpectingAnError--"
+
+
+
+testWorkerClosesAfter :: Test
+testWorkerClosesAfter = TestCase $ do
+    errors_mvar <- newMVar False
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let
+        attendant = http2Attendant sessions_context abortingWorker
+    decoy_session <- createDecoySession attendant
+    let
+        start_client =  decoy_session ^. startClientSessionCallback
+    client_state <- start_client
+    got_error <- readMVar errors_mvar
+    if got_error then do
+        assertFailure "Exception raised unexpectedly"
+    else
+        return ()
+
+    (headers, _) <- request client_state simpleRequestHeaders (return ())
+    if length headers <= 0
+      then
+        assertFailure "NoHeadersBack"
+      else
+        return ()
+
+    -- Now, when I try to connect, something bad should happen, since the server must
+    -- be closed
+
+    got_error2 <- newMVar False
+    catch
+        (request client_state simpleRequestHeaders (return ()) >> return () )
+        ((\ _ -> modifyMVar_ got_error2 ( \ _ -> return $ True)  ):: BlockedIndefinitelyOnMVar -> IO ()  )
+    ee <- readMVar got_error2
+    if ee
+      then
+        return ()
+      else
+        assertFailure "Server Must Be Closed"
+
+    return ()

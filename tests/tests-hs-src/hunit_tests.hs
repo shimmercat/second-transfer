@@ -30,6 +30,7 @@ tests = TestList [
     ,TestLabel "testClosedInteraction0" testClosedInteraction0
     ,TestLabel "testClosedInteraction1" testClosedInteraction1
     ,TestLabel "testClosedInteraction3" testClosedInteraction3
+    ,TestLabel "testWorkerClosesAfter"  testWorkerClosesAfter
     ]
 
 
