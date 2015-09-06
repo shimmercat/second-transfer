@@ -232,10 +232,13 @@ type RequestResult = Either ConnectionCloseReason Message
 data ClientState = ClientState {
     -- Holds a queue. The client here puts the message (the request) and an VAR
     -- where it will receive the response.
-    _pendingRequests_ClS       :: Chan (Message, MVar RequestResult)
+    _pendingRequests_ClS       :: MVar (Message, MVar RequestResult)
 
     -- This is the id of the next available stream
     ,_nextStream_ClS           :: MVar Int
+
+    -- Says if the client has been closed
+    ,_clientIsClosed_ClS      :: MVar Bool
 
     -- A dictionary from stream id to the client which is waiting for the
     -- message
@@ -247,14 +250,16 @@ makeLenses ''ClientState
 
 makeClientState :: IO ClientState
 makeClientState = do
-    request_chan <- newChan
+    request_chan <- newEmptyMVar
     next_stream_mvar <- newMVar 3
+    client_is_closed_mvar <- newMVar False
     new_h <- H.new
 
     return ClientState {
         _pendingRequests_ClS = request_chan
         ,_nextStream_ClS = next_stream_mvar
         ,_response2Waiter_ClS = new_h
+        ,_clientIsClosed_ClS = client_is_closed_mvar
         }
 
 
@@ -267,14 +272,18 @@ handleRequest :: Headers -> InputDataStream -> ClientMonad Message
 handleRequest headers input_data = do
     pending_requests <- view pendingRequests_ClS
     response_mvar <- liftIO $ newEmptyMVar
-    message <- liftIO $ do
-        writeChan pending_requests ((headers,input_data),response_mvar)
-        either_reason_or_message <- takeMVar response_mvar
-        case either_reason_or_message of
-            Left break_reason -> E.throw $ ClientSessionAbortedException break_reason
-            Right message -> return message
 
-    return message
+    liftIO $ E.catch
+       (do
+           {-# SCC cause1 #-} putMVar pending_requests ((headers,input_data),response_mvar)
+           either_reason_or_message <- {-# SCC cause2 #-} liftIO $ takeMVar response_mvar
+           case either_reason_or_message of
+               Left break_reason -> E.throw $ ClientSessionAbortedException break_reason
+               Right message -> return message
+       )
+       ( ( \ _ -> E.throw $ ClientSessionAbortedException SessionAlreadyClosed_CCR ):: E.BlockedIndefinitelyOnMVar -> IO Message )
+
+
 
 
 instance ClientPetitioner ClientState where
@@ -433,8 +442,18 @@ http2Session session_role aware_worker client_state session_id sessions_context 
         }
 
     let
+        io_exc_handler :: SessionComponent -> E.BlockedIndefinitelyOnMVar -> IO ()
+        io_exc_handler component e = do
+           case session_role of
+               Server_SR -> do
+                   sessionExceptionHandler component session_id sessions_context e
+
+               Client_SR -> do
+                   clientSideTerminate client_state IOChannelClosed_CCR
+
+
         exc_handler :: SessionComponent -> HTTP2SessionException -> IO ()
-        exc_handler component e =
+        exc_handler component e = do
             case session_role of
                 Server_SR ->
                     sessionExceptionHandler component session_id sessions_context e
@@ -447,38 +466,29 @@ http2Session session_role aware_worker client_state session_id sessions_context 
                         maybe_protocol_error :: Maybe HTTP2ProtocolException
                         maybe_protocol_error | HTTP2SessionException ee <- e = cast ee
 
-                        terminate :: ConnectionCloseReason -> IO ()
-                        terminate reason =
-                            H.mapM_
-                                (\(_k,v) -> tryPutMVar v (Left reason))
-                                (client_state ^. response2Waiter_ClS)
-
                     case maybe_client_session_aborted of
                         Just (ClientSessionAbortedException reason) -> do
-                            terminate reason
+                            clientSideTerminate client_state reason
 
 
                         Nothing ->
                             if isJust maybe_protocol_error
                                 then
-                                    terminate ProtocolError_CCR
+                                    clientSideTerminate client_state ProtocolError_CCR
                                 else do
-                                    putStrLn "UnknownProtocolError"
                                     E.throw e
 
         exc_guard :: SessionComponent -> IO () -> IO ()
         exc_guard component action =
-            --E.catch
-                (E.catch
-                     action
-                     (\e -> do
-                         -- INSTRUMENTATION( errorM "HTTP2.Session" "Exception processed" )
-                         exc_handler component e
-                     )
-                )
-                -- (( \ ee ->
-                --        putStrLn  $ "ee -> " ++ show ee
-                -- ):: E.SomeException -> IO () )
+                E.catch
+                    (E.catch
+                         action
+                         (\e -> do
+                             -- INSTRUMENTATION( errorM "HTTP2.Session" "Exception processed" )
+                             exc_handler component e
+                         )
+                    )
+                    (io_exc_handler component)
 
         use_chunk_length =  sessions_context ^.  sessionsConfig . dataFrameSize
 
@@ -1143,6 +1153,8 @@ closeConnectionForClient error_code = do
             ""
         )
 
+    client_is_closed_mvar <- view (simpleClient . clientIsClosed_ClS )
+
     liftIO $ do
         -- Close all active threads for this session
         H.mapM_
@@ -1157,6 +1169,10 @@ closeConnectionForClient error_code = do
         session_output <- takeMVar session_output_mvar
         writeChan session_output . Left . CancelSession_SOC $ error_code
         putMVar session_output_mvar session_output
+
+        -- Let's also mark the session as closed from the client side, so that
+        -- any further requests end with the correct exception
+        modifyMVar_ client_is_closed_mvar (\ _ -> return True)
 
         -- And unwind the input thread in the session, so that the
         -- exception handler runs....
@@ -1457,10 +1473,13 @@ sendDataOfStream stream_id headers_sent effect = do
             Nothing ->
                 -- This is how we finish sending data
                 liftIO $ putMVar data_output (stream_id, Nothing, effect)
-            Just bytes -> do
-                liftIO $ do
-                    putMVar data_output (stream_id, Just bytes, effect)
-                consumer data_output
+            Just bytes
+                | B.length bytes > 0 -> do
+                    liftIO $ do
+                        putMVar data_output (stream_id, Just bytes, effect)
+                    consumer data_output
+                | otherwise ->
+                    liftIO $ putMVar data_output (stream_id, Nothing, effect)
 
 
 -- Returns if the frame is the first in the stream
@@ -1706,17 +1725,16 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
              fragments
 
 
-
 sessionPollThread :: SessionData -> Chan HeaderOutputMessage -> IO ()
 sessionPollThread  session_data headers_output = do
     let
-        pending_requests_chan  = session_data ^. (simpleClient . pendingRequests_ClS)
+        pending_requests_mvar  = session_data ^. (simpleClient . pendingRequests_ClS)
         client_next_stream_mvar  = session_data ^. (simpleClient . nextStream_ClS)
         response2waiter       = session_data ^. (simpleClient . response2Waiter_ClS)
         for_worker_thread  = session_data ^. forWorkerThread
         session_input  = session_data ^. sessionInput
 
-    ((headers, input_data_stream), response_mvar) <- readChan pending_requests_chan
+    ((headers, input_data_stream), response_mvar) <- takeMVar pending_requests_mvar
 
     new_stream_id <- modifyMVar client_next_stream_mvar (\ n -> return (n + 1, n) )
     let
@@ -1724,7 +1742,7 @@ sessionPollThread  session_data headers_output = do
         effects = defaultEffects
 
     -- Store the response place
-    H.insert response2waiter new_stream_id response_mvar
+    new_stream_id `seq` H.insert response2waiter new_stream_id response_mvar
 
     -- Start by sending the headers of the request
     headers_sent <- liftIO  newEmptyMVar
@@ -1754,3 +1772,37 @@ clientWorkerThread stream_id effects headers_sent input_data_stream = do
         `fuseBothMaybe`
         sendDataOfStream stream_id headers_sent effects
     return ()
+
+
+clientSideTerminate  :: ClientState -> ConnectionCloseReason  -> IO ()
+clientSideTerminate client_state reason = do
+    let
+        terminateOnQueue :: ConnectionCloseReason -> MVar (Message, MVar RequestResult) -> IO ()
+        terminateOnQueue reason' q = do
+            w <- tryTakeMVar q
+            case w of
+                Just (_, m) -> do
+                    tryPutMVar m (Left reason')
+                    return ()
+
+                Nothing ->
+                    return ()
+
+
+        terminate :: ConnectionCloseReason -> IO ()
+        terminate reason' = do
+            terminateOnQueue reason' (client_state ^. pendingRequests_ClS)
+
+            -- Kill any waiters in the map
+            H.mapM_
+                (\(_k,v) -> tryPutMVar v (Left reason))
+                (client_state ^. response2Waiter_ClS)
+
+        client_is_closed_mvar = client_state ^. clientIsClosed_ClS
+
+    -- Let's also mark the session as closed from the client side, so that
+    -- any further requests end with the correct exception
+    modifyMVar_ client_is_closed_mvar $ \ client_is_closed -> do
+            unless client_is_closed $
+                terminate reason
+            return True

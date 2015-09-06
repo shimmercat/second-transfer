@@ -61,8 +61,10 @@ instance Exception HTTP2ProtocolException where
 
 -- | Reasons for a remote server interrupting a connectionn of this client
 data ConnectionCloseReason =
-    NormalTermination_CCR   -- ^ Corresponds to NO_ERROR
-    |ProtocolError_CCR       -- ^ Any other reason
+    NormalTermination_CCR     -- ^ Corresponds to NO_ERROR
+    |SessionAlreadyClosed_CCR -- ^ A request was done after the session was previously closed.
+    |IOChannelClosed_CCR      -- ^ This one happens when one of the IO channels is closed and a BlockedIndefinitelyOnMVar bubbles up. It should only happen in the test suite, as the OpenSSL_TLS channel uses a specialized exception type. If you see it in the wild, it is a bug.
+    |ProtocolError_CCR        -- ^ Any other reason
     deriving Show
 
 -- | Concrete Exception. Used internally to signal that the server broke

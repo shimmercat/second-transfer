@@ -63,6 +63,14 @@ abortingWorker req_ = do
     return pr2
 
 
+earlyAbortingWorker :: AwareWorker
+earlyAbortingWorker req_ = do
+    pr1 <- erringWorker req_
+    let
+        pr2 = L.set (effect_PS . interrupt_Ef) (Just InterruptConnectionNow_IEf) pr1
+    return pr2
+
+
 data Internal500Exception = Internal500Exception
     deriving (Typeable, Show)
 
@@ -521,7 +529,36 @@ testWorkerClosesAfter = TestCase $ do
     got_error2 <- newMVar False
     catch
         (request client_state simpleRequestHeaders (return ()) >> return () )
-        ((\ _ -> modifyMVar_ got_error2 ( \ _ -> return $ True)  ):: BlockedIndefinitelyOnMVar -> IO ()  )
+        ((\ _ -> modifyMVar_ got_error2 ( \ _ -> return $ True)  )::ClientSessionAbortedException -> IO () )
+    ee <- readMVar got_error2
+    if ee
+      then
+        return ()
+      else
+        assertFailure "Server Must Be Closed"
+
+    return ()
+
+testWorkerClosesBefore :: Test
+testWorkerClosesBefore = TestCase $ do
+    errors_mvar <- newMVar False
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let
+        attendant = http2Attendant sessions_context earlyAbortingWorker
+    decoy_session <- createDecoySession attendant
+    let
+        start_client =  decoy_session ^. startClientSessionCallback
+    client_state <- start_client
+    got_error <- readMVar errors_mvar
+    if got_error then do
+        assertFailure "Exception raised unexpectedly"
+    else
+        return ()
+
+    got_error2 <- newMVar False
+    catch
+        (request client_state simpleRequestHeaders (return ()) >> return () )
+        ((\ _ -> modifyMVar_ got_error2 ( \ _ -> return $ True)  )::ClientSessionAbortedException -> IO () )
     ee <- readMVar got_error2
     if ee
       then
