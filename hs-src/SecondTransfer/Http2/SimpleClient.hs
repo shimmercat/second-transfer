@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
-
+-- TODO: Remove this file, it is not needed!!
 module SecondTransfer.Http2.SimpleClient (
     ClientState(..)  -- reduced functionality is exported to the user, but
                      -- the framework may need a lot.

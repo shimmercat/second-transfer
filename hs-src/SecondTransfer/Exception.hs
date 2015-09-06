@@ -9,7 +9,9 @@ module SecondTransfer.Exception (
     ,BadPrefaceException (..)
     ,HTTP11Exception (..)
     ,HTTP11SyntaxException (..)
+    ,ClientSessionAbortedException(..)
     ,HTTP500PrecursorException (..)
+    ,ConnectionCloseReason(..)
     ,convertHTTP500PrecursorExceptionToException
     ,getHTTP500PrecursorExceptionFromException
     ,ContentLengthMissingException (..)
@@ -55,6 +57,23 @@ instance Exception HTTP2ProtocolException where
     toException   = convertHTTP2SessionExceptionToException
     fromException = getHTTP2SessionExceptionFromException
 
+-- TODO below: add the other protocol reasons
+
+-- | Reasons for a remote server interrupting a connectionn of this client
+data ConnectionCloseReason =
+    NormalTermination_CCR   -- ^ Corresponds to NO_ERROR
+    |ProtocolError_CCR       -- ^ Any other reason
+    deriving Show
+
+-- | Concrete Exception. Used internally to signal that the server broke
+--   the connection. This is a public exception that clients of the library
+--   will see when acting as an HTTP client.
+data ClientSessionAbortedException = ClientSessionAbortedException ConnectionCloseReason
+    deriving (Typeable, Show)
+
+instance Exception ClientSessionAbortedException where
+    toException = convertHTTP2SessionExceptionToException
+    fromException = getHTTP2SessionExceptionFromException
 
 -- | Abstract exception. Thrown when encoding/decoding of a frame fails
 data FramerException = forall e . Exception e => FramerException e

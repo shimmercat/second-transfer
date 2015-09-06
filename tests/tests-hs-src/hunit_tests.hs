@@ -29,7 +29,7 @@ tests = TestList [
     ,TestLabel "WindowUpdate to unexistent stream" testUpdateWindowFrameAborts
     ,TestLabel "testClosedInteraction0" testClosedInteraction0
     ,TestLabel "testClosedInteraction1" testClosedInteraction1
---    ,TestLabel "testClosedInteraction3" testClosedInteraction3
+    ,TestLabel "testClosedInteraction3" testClosedInteraction3
     ]
 
 

@@ -53,6 +53,7 @@ import           Data.Conduit
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
 import           Data.Maybe                             (isJust)
+import           Data.Typeable
 #ifndef IMPLICIT_MONOID
 import           Data.Monoid                            (mappend)
 #endif
@@ -83,7 +84,7 @@ import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import           SecondTransfer.MainLoop.Logging        (logit)
 
-import           Debug.Trace
+--import           Debug.Trace
 
 -- Unfortunately the frame encoding API of Network.HTTP2 is a bit difficult to
 -- use :-(
@@ -213,17 +214,19 @@ data PostInputMechanism = PostInputMechanism (MVar (Maybe B.ByteString), InputDa
 ------------- Regarding client state
 type Message = (Headers,InputDataStream)
 
+type RequestResult = Either ConnectionCloseReason Message
+
 data ClientState = ClientState {
     -- Holds a queue. The client here puts the message (the request) and an VAR
     -- where it will receive the response.
-    _pendingRequests_ClS       :: Chan (Message, MVar Message)
+    _pendingRequests_ClS       :: Chan (Message, MVar RequestResult)
 
     -- This is the id of the next available stream
     ,_nextStream_ClS           :: MVar Int
 
     -- A dictionary from stream id to the client which is waiting for the
     -- message
-    ,_response2Waiter_ClS      ::HashTable GlobalStreamId (MVar Message)
+    ,_response2Waiter_ClS      ::HashTable GlobalStreamId (MVar RequestResult)
     }
 
 makeLenses ''ClientState
@@ -251,8 +254,14 @@ handleRequest :: Headers -> InputDataStream -> ClientMonad Message
 handleRequest headers input_data = do
     pending_requests <- view pendingRequests_ClS
     response_mvar <- liftIO $ newEmptyMVar
-    liftIO $ writeChan pending_requests ((headers,input_data),response_mvar)
-    liftIO $ takeMVar response_mvar
+    message <- liftIO $ do
+        writeChan pending_requests ((headers,input_data),response_mvar)
+        either_reason_or_message <- takeMVar response_mvar
+        case either_reason_or_message of
+            Left break_reason -> E.throw $ ClientSessionAbortedException break_reason
+            Right message -> return message
+
+    return message
 
 
 instance ClientPetitioner ClientState where
@@ -411,7 +420,38 @@ http2Session session_role aware_worker client_state session_id sessions_context 
 
     let
         exc_handler :: SessionComponent -> HTTP2SessionException -> IO ()
-        exc_handler component e = sessionExceptionHandler component session_id sessions_context e
+        exc_handler component e =
+            case session_role of
+                Server_SR ->
+                    sessionExceptionHandler component session_id sessions_context e
+
+                Client_SR -> do
+                    let
+                        maybe_client_session_aborted :: Maybe ClientSessionAbortedException
+                        maybe_client_session_aborted | HTTP2SessionException ee <- e  = cast ee
+
+                        maybe_protocol_error :: Maybe HTTP2ProtocolException
+                        maybe_protocol_error | HTTP2SessionException ee <- e = cast ee
+
+                        terminate :: ConnectionCloseReason -> IO ()
+                        terminate reason =
+                            H.mapM_
+                                (\(_k,v) -> tryPutMVar v (Left reason))
+                                (client_state ^. response2Waiter_ClS)
+
+                    case maybe_client_session_aborted of
+                        Just (ClientSessionAbortedException reason) -> do
+                            terminate reason
+
+
+                        Nothing ->
+                            if isJust maybe_protocol_error
+                                then
+                                    terminate ProtocolError_CCR
+                                else do
+                                    putStrLn "UnknownProtocolError"
+                                    E.throw e
+
         exc_guard :: SessionComponent -> IO () -> IO ()
         exc_guard component action =
             --E.catch
@@ -637,10 +677,17 @@ sessionInputThread  = do
             handleSettingsFrame settings_list
             continue
 
-        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _ _ )) -> do
-            -- I was sent a go away, so go-away...
-            closeConnectionBecauseIsInvalid NH2.NoError
-            return ()
+        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _ _ ))
+            | Server_SR <- session_role -> do
+                -- I was sent a go away, so go-away...
+                closeConnectionBecauseIsInvalid NH2.NoError
+                return ()
+
+            | Client_SR <- session_role -> do
+                -- I was sent a go away, so go-away, but use the kind of exception
+                -- that will unwind the stack gracefully
+                closeConnectionForClient NH2.NoError
+                return ()
 
 
         MiddleFrame_SIC somethingelse ->  unlessReceivingHeaders $ do
@@ -876,7 +923,7 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
             receiving_headers_mvar
             (\ _ -> return Nothing )
         -- Lets get a time
-        headers_arrived_time      <- liftIO $ getTime Monotonic
+        -- headers_arrived_time      <- liftIO $ getTime Monotonic
         -- Let's decode the headers
         headers_bytes             <- getHeaderBytes stream_id
         dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
@@ -910,7 +957,7 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
             return $ return ()
 
         (Just response_mvar) <- liftIO $ H.lookup response2waiter stream_id
-        liftIO $ putMVar response_mvar (He.toList good_headers, post_data_source)
+        liftIO $ putMVar response_mvar $ Right (He.toList good_headers, post_data_source)
 
         return ()
     else
@@ -1053,6 +1100,53 @@ closeConnectionBecauseIsInvalid error_code = do
         -- And unwind the input thread in the session, so that the
         -- exception handler runs....
         E.throw HTTP2ProtocolException
+
+
+-- Sends a GO_AWAY frame and raises an exception, effectively terminating the input
+-- thread of the session. This one for the client is different because it throws
+-- an exception of type ClientSessionAbortedException
+closeConnectionForClient :: NH2.ErrorCodeId -> ReaderT SessionData IO a
+closeConnectionForClient error_code = do
+    let
+        use_reason = case error_code of
+            NH2.NoError -> NormalTermination_CCR
+            _           -> ProtocolError_CCR
+
+    -- liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
+    last_good_stream_mvar <- view lastGoodStream
+    last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
+    session_output_mvar <- view sessionOutput
+    stream2workerthread <- view stream2WorkerThread
+    sendOutFrame
+        (NH2.EncodeInfo
+            NH2.defaultFlags
+            0
+            Nothing
+        )
+        (NH2.GoAwayFrame
+            last_good_stream
+            error_code
+            ""
+        )
+
+    liftIO $ do
+        -- Close all active threads for this session
+        H.mapM_
+            ( \(_stream_id, thread_id) ->
+                    throwTo thread_id StreamCancelledException
+            )
+            stream2workerthread
+
+        -- Notify the framer that the session is closing, so
+        -- that it stops accepting frames from connected sources
+        -- (Streams?)
+        session_output <- takeMVar session_output_mvar
+        writeChan session_output $ Left CancelSession_SOC
+        putMVar session_output_mvar session_output
+
+        -- And unwind the input thread in the session, so that the
+        -- exception handler runs....
+        E.throw $ ClientSessionAbortedException use_reason
 
 
 frameEndsStream :: InputFrame -> Bool
@@ -1579,7 +1673,7 @@ sessionPollThread  session_data headers_output = do
 
     liftIO . forkIO $ E.catch
         (runReaderT
-            (clientWorkerThread new_stream_id effects response_mvar headers_sent input_data_stream )
+            (clientWorkerThread new_stream_id effects headers_sent input_data_stream )
             worker_environment
         )
         (
@@ -1593,8 +1687,8 @@ sessionPollThread  session_data headers_output = do
     sessionPollThread session_data headers_output
 
 
-clientWorkerThread :: GlobalStreamId -> Effect -> MVar Message -> MVar HeadersSent -> InputDataStream -> WorkerMonad ()
-clientWorkerThread stream_id effects response_mvar headers_sent input_data_stream = do
+clientWorkerThread :: GlobalStreamId -> Effect -> MVar HeadersSent -> InputDataStream -> WorkerMonad ()
+clientWorkerThread stream_id effects headers_sent input_data_stream = do
     -- And now work on sending the data, if any...
     runConduit $
         transPipe liftIO input_data_stream

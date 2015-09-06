@@ -94,8 +94,6 @@ data DecoySession = DecoySession {
     ,_clientState         :: ClientState
     -- Execute this when you want to use a powerfull client session
     ,_startClientSessionCallback :: IO ClientState
-    -- Some sort of exception that I got....
-    ,_clientException     :: TMVar Bool
     }
 
 

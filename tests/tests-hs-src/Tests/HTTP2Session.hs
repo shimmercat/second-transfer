@@ -440,33 +440,31 @@ testClosedInteraction1 = TestCase $ do
     return ()
 
 
--- TODO: Apparently the client exception is not good enough, improve.
--- testClosedInteraction3 :: Test
--- testClosedInteraction3 = TestCase $ do
---     errors_mvar <- newMVar False
---     sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
---     let
---         attendant = http2Attendant sessions_context simpleWorker
---     decoy_session <- createDecoySession attendant
---     let
---         start_client =  decoy_session ^. startClientSessionCallback
---     client_state <- start_client
---     got_error <- readMVar errors_mvar
 
---     ee_mvar <- newMVar False
---     catch
---         (do
---             request client_state badRequestHeaders (return ())
---             return ()
---         )
---         ((\ _ -> modifyMVar_ ee_mvar ( \ _ -> return $ True)  ):: HTTP2SessionException -> IO ()  )
---     if got_error then do
---         return ()
---     else
---         assertFailure "IWasExpectingAnError"
---     ee <- takeMVar ee_mvar
---     if ee
---       then
---         return ()
---       else
---         assertFailure "IWasExpectingAnError--"
+testClosedInteraction3 :: Test
+testClosedInteraction3 = TestCase $ do
+    errors_mvar <- newMVar False
+    sessions_context <- makeSessionsContext (errorsSessionConfig errors_mvar)
+    let
+        attendant = http2Attendant sessions_context simpleWorker
+    decoy_session <- createDecoySession attendant
+    let
+        start_client =  decoy_session ^. startClientSessionCallback
+    client_state <- start_client
+    ee_mvar <- newMVar False
+    catch
+        (do
+            request client_state badRequestHeaders (return ())
+            return ()
+        )
+        ((\ _ -> modifyMVar_ ee_mvar ( \ _ -> return $ True)  ):: ClientSessionAbortedException -> IO ()  )
+    -- if got_error then do
+    --     return ()
+    -- else
+    --     assertFailure "IWasExpectingAnError"
+    ee <- takeMVar ee_mvar
+    if ee
+      then
+        return ()
+      else
+        assertFailure "IWasExpectingAnError--"
