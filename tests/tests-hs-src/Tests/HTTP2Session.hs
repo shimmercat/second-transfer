@@ -9,6 +9,7 @@ import qualified Control.Concurrent               as C (yield)
 import           Control.Concurrent.MVar
 import           Control.Exception
 import           Control.Lens
+import qualified Control.Lens                     as L
 import           Control.Monad.IO.Class           (liftIO)
 import qualified Network.HTTP2                    as NH2
 import           Test.HUnit

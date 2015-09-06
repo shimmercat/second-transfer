@@ -411,6 +411,7 @@ inputGatherer pull_action session_input = do
     source $$ consume True
   where
 
+
     sendToSession :: Bool -> InputFrame -> IO ()
     sendToSession starting frame =
       -- print(NH2.streamId $ NH2.frameHeader frame)
@@ -434,6 +435,9 @@ inputGatherer pull_action session_input = do
     consume :: Bool -> Sink (Maybe NH2.Frame) FramerSession ()
     consume starting = do
         maybe_maybe_frame <- await
+
+        output_is_forbidden_mvar <- view outputIsForbidden
+        output_is_forbidden <- liftIO $ readMVar output_is_forbidden_mvar
 
         -- Consumption ends automatically when the output is forbidden, this might help avoiding
         -- attacks where a peer refuses to close its socket.
@@ -505,6 +509,13 @@ inputGatherer pull_action session_input = do
 -- All the output frames come this way first
 outputGatherer :: SessionOutput -> FramerSession ()
 outputGatherer session_output = do
+
+    session_role <- view sessionRole_FSD
+
+    -- When acting as a client, the first step is to send the prefix...
+    when (session_role == Client_SR) $
+        pushPrefix
+
     frame_sent_report_callback <- view $
        sessionsContext            .
        sessionsConfig             .
@@ -512,7 +523,6 @@ outputGatherer session_output = do
        dataDeliveryCallback_SC
 
     session_id <- view sessionIdAtFramer
-
     let
 
        dataForFrame p1 p2 =

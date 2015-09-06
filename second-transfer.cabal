@@ -236,6 +236,7 @@ Test-Suite hunit-tests
                        , SecondTransfer.MainLoop.Logging
                        , SecondTransfer.MainLoop.Protocol
                        , SecondTransfer.Sessions.Internal
+                       , SecondTransfer.MainLoop.ClientPetitioner
                        , SecondTransfer.Utils
                        , SecondTransfer.Http2.Framer
                        , SecondTransfer.Http2.MakeAttendant

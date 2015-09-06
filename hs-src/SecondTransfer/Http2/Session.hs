@@ -1155,7 +1155,7 @@ closeConnectionForClient error_code = do
         -- that it stops accepting frames from connected sources
         -- (Streams?)
         session_output <- takeMVar session_output_mvar
-        writeChan session_output $ Left CancelSession_SOC
+        writeChan session_output . Left . CancelSession_SOC $ error_code
         putMVar session_output_mvar session_output
 
         -- And unwind the input thread in the session, so that the
@@ -1704,3 +1704,53 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
                       )
              )
              fragments
+
+
+
+sessionPollThread :: SessionData -> Chan HeaderOutputMessage -> IO ()
+sessionPollThread  session_data headers_output = do
+    let
+        pending_requests_chan  = session_data ^. (simpleClient . pendingRequests_ClS)
+        client_next_stream_mvar  = session_data ^. (simpleClient . nextStream_ClS)
+        response2waiter       = session_data ^. (simpleClient . response2Waiter_ClS)
+        for_worker_thread  = session_data ^. forWorkerThread
+        session_input  = session_data ^. sessionInput
+
+    ((headers, input_data_stream), response_mvar) <- readChan pending_requests_chan
+
+    new_stream_id <- modifyMVar client_next_stream_mvar (\ n -> return (n + 1, n) )
+    let
+        worker_environment = set streamId new_stream_id for_worker_thread
+        effects = defaultEffects
+
+    -- Store the response place
+    H.insert response2waiter new_stream_id response_mvar
+
+    -- Start by sending the headers of the request
+    headers_sent <- liftIO  newEmptyMVar
+    liftIO $ writeChan headers_output $ NormalResponse_HM (new_stream_id, headers_sent, headers, effects)
+
+    liftIO . forkIO $ E.catch
+        (runReaderT
+            (clientWorkerThread new_stream_id effects headers_sent input_data_stream )
+            worker_environment
+        )
+        (
+            (   \ _ ->  do
+                -- Actions to take when the thread breaks....
+                writeChan session_input InternalAbort_SIC
+            )
+            :: HTTP500PrecursorException -> IO ()
+        )
+
+    sessionPollThread session_data headers_output
+
+
+clientWorkerThread :: GlobalStreamId -> Effect -> MVar HeadersSent -> InputDataStream -> WorkerMonad ()
+clientWorkerThread stream_id effects headers_sent input_data_stream = do
+    -- And now work on sending the data, if any...
+    runConduit $
+        transPipe liftIO input_data_stream
+        `fuseBothMaybe`
+        sendDataOfStream stream_id headers_sent effects
+    return ()
