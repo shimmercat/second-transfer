@@ -45,7 +45,6 @@ makeSessionsContext sessions_config = do
         }
 
 
-
 sessionExceptionHandler ::
     E.Exception e => SessionComponent -> Int -> SessionsContext -> e -> IO ()
 sessionExceptionHandler session_component session_id sessions_context e =

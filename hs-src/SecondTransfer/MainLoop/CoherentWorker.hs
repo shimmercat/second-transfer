@@ -85,7 +85,7 @@ type Header = (HeaderName, HeaderValue)
 type Headers = [Header]
 
 -- |This is a Source conduit (see Haskell Data.Conduit library from Michael Snoyman)
--- that you can use to retrieve the data sent by the client piece-wise.
+-- that you can use to retrieve the data sent by the peer piece-wise.
 type InputDataStream = Source IO B.ByteString
 
 

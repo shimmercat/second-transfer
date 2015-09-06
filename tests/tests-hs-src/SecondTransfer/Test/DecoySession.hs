@@ -8,25 +8,30 @@ import           Control.Concurrent
 import           Control.Concurrent.STM.TMVar
 import           Control.Concurrent.STM.TChan
 import           Control.Exception
-import           Control.Lens            (view, (^.), over)
-import qualified Control.Lens            as L
-import           Control.Monad.STM       (atomically)
+import           Control.Lens                     (view, (^.), over)
+import qualified Control.Lens                     as L
+import           Control.Monad.STM                (atomically)
 
-import qualified Network.HTTP2           as NH2
-import qualified Network.HPACK           as HP
+import qualified Network.HTTP2                    as NH2
+import qualified Network.HPACK                    as HP
 
-import qualified Data.ByteString         as B
-import qualified Data.ByteString.Lazy    as LB
-import qualified Data.ByteString.Builder as Bu
-import qualified Data.Sequence           as Sq
-import           Data.Sequence           ( (<|), (|>), ViewL(..), Seq )
+import qualified Data.ByteString                  as B
+import qualified Data.ByteString.Lazy             as LB
+import qualified Data.ByteString.Builder          as Bu
+import qualified Data.Sequence                    as Sq
+import           Data.Sequence                    ( (<|), (|>), ViewL(..), Seq )
 
 import           SecondTransfer.Http2
 import           SecondTransfer.Types
+import           SecondTransfer.Http2.Session
+import           SecondTransfer.Sessions.Config
+import           SecondTransfer.Sessions.Internal
+import           SecondTransfer.Http2.Framer
 import           SecondTransfer.MainLoop.Internal
+import           Debug.Trace
 
 -- "Internal imports"
-import          SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
+import           SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
 
 
 data DataContinuityEngine = DataContinuityEngine {
@@ -75,21 +80,87 @@ dceGetAllData dce = (emptyDCE, all_together)
 
 
 data DecoySession = DecoySession {
-    _inputDataChannel   :: TChan B.ByteString
-    ,_outputDataChannel :: TChan LB.ByteString
-    ,_sessionThread     :: ThreadId
-    ,_remainingOutputBit:: TMVar B.ByteString
-    ,_nh2Settings       :: NH2.Settings
-    ,_sessionThrowed    :: TMVar Bool
-    ,_waiting           :: TMVar ThreadId
-    ,_encodeHeadersHere :: TMVar HP.DynamicTable
-    ,_decodeHeadersHere :: TMVar HP.DynamicTable
+    _inputDataChannel     :: TChan B.ByteString
+    ,_outputDataChannel   :: TChan B.ByteString
+    ,_sessionThread       :: ThreadId
+    ,_remainingOutputBit  :: TMVar B.ByteString
+    ,_nh2Settings         :: NH2.Settings
+    ,_sessionThrowed      :: TMVar Bool
+    ,_waiting             :: TMVar ThreadId
+    ,_encodeHeadersHere   :: TMVar HP.DynamicTable
+    ,_decodeHeadersHere   :: TMVar HP.DynamicTable
 
-    ,_incomingData      :: TMVar DataContinuityEngine
+    ,_incomingData        :: TMVar DataContinuityEngine
+    ,_clientState         :: ClientState
+    -- Execute this when you want to use a powerfull client session
+    ,_startClientSessionCallback :: IO ClientState
     }
 
 
 L.makeLenses ''DecoySession
+
+
+
+-- errorsSessionConfig :: MVar Bool -> SessionsConfig
+-- errorsSessionConfig mvar = set (sessionsCallbacks . reportErrorCallback_SC)
+--      (Just $ setError mvar) defaultSessionsConfig
+
+
+channelsToIOCallbacks :: TChan B.ByteString -> TChan B.ByteString -> TMVar DataContinuityEngine -> IOCallbacks
+channelsToIOCallbacks input_data_channel output_data_channel incoming_data_tmvar =
+  let
+    push_action  :: PushAction
+    push_action lazy_bs  =  atomically $
+        writeTChan output_data_channel $ LB.toStrict lazy_bs
+
+    pull_action  :: PullAction
+    pull_action byte_count = atomically $ do
+        incoming_data <- takeTMVar incoming_data_tmvar
+        let
+            go dce = let
+                maybe_stuff = tryGetThisManyData dce byte_count
+                in case maybe_stuff of
+                    Nothing -> do
+                        new_data <- readTChan input_data_channel
+                        let
+                            new_dce = dceAddData dce new_data
+                        go new_dce
+
+                    Just (new_bce, bs) -> do
+                        putTMVar incoming_data_tmvar new_bce
+                        return bs
+        go incoming_data
+
+    best_effort_pull_action :: BestEffortPullAction
+    best_effort_pull_action can_block = atomically $ do
+        incoming_data <- takeTMVar incoming_data_tmvar
+        if dceIsEmpty incoming_data
+          then
+            if can_block
+              then do
+                -- Wait for the next item
+                new_data <- readTChan input_data_channel
+                -- Leave the empty thing alone
+                putTMVar incoming_data_tmvar incoming_data
+                return new_data
+              else do
+                putTMVar incoming_data_tmvar incoming_data
+                return ""
+          else do
+              let
+                  (new_dce, all_together) = dceGetAllData incoming_data
+              putTMVar incoming_data_tmvar new_dce
+              return all_together
+
+    close_action :: CloseAction
+    close_action =  return ()
+  in
+    IOCallbacks {
+       _pushAction_IOC = push_action,
+       _pullAction_IOC = pull_action,
+       _closeAction_IOC = close_action,
+       _bestEffortPullAction_IOC = best_effort_pull_action
+       }
 
 
 -- Supposed to be an HTTP/2 attendant
@@ -98,59 +169,18 @@ createDecoySession attendant = do
     input_data_channel  <- newTChanIO
     output_data_channel <- newTChanIO
     incoming_data_tmvar  <- newTMVarIO emptyDCE
+    reverse_data_tmvar <- newTMVarIO emptyDCE
     session_throwed_tmvar <- newTMVarIO False
+    client_state <- makeClientState
+    client_sessions_context <- makeSessionsContext defaultSessionsConfig
     let
-        push_action  :: PushAction
-        push_action lazy_bs  =  atomically $
-            writeTChan output_data_channel lazy_bs
+        attendant_callbacks = channelsToIOCallbacks input_data_channel output_data_channel incoming_data_tmvar
+        client_callbacks = channelsToIOCallbacks output_data_channel input_data_channel reverse_data_tmvar
+        start_client_session_callback :: IO ClientState
+        start_client_session_callback = do
+            wrapSession (ClientState_SP client_state) client_sessions_context client_callbacks
+            return client_state
 
-        pull_action  :: PullAction
-        pull_action byte_count = atomically $ do
-            incoming_data <- takeTMVar incoming_data_tmvar
-            let
-                go dce = let
-                    maybe_stuff = tryGetThisManyData dce byte_count
-                    in case maybe_stuff of
-                        Nothing -> do
-                            new_data <- readTChan input_data_channel
-                            let
-                                new_dce = dceAddData dce new_data
-                            go new_dce
-
-                        Just (new_bce, bs) -> do
-                            putTMVar incoming_data_tmvar new_bce
-                            return bs
-            go incoming_data
-
-        best_effort_pull_action :: BestEffortPullAction
-        best_effort_pull_action can_block = atomically $ do
-            incoming_data <- takeTMVar incoming_data_tmvar
-            if dceIsEmpty incoming_data
-              then
-                if can_block
-                  then do
-                    -- Wait for the next item
-                    new_data <- readTChan input_data_channel
-                    -- Leave the empty thing alone
-                    putTMVar incoming_data_tmvar incoming_data
-                    return new_data
-                  else do
-                    putTMVar incoming_data_tmvar incoming_data
-                    return ""
-              else do
-                  let
-                      (new_dce, all_together) = dceGetAllData incoming_data
-                  putTMVar incoming_data_tmvar new_dce
-                  return all_together
-
-        close_action :: CloseAction
-        close_action =  return ()
-        attendant_callbacks = AttendantCallbacks {
-            _pushAction_AtC = push_action,
-            _pullAction_AtC = pull_action,
-            _closeAction_AtC = close_action,
-            _bestEffortPullAction_AtC = best_effort_pull_action
-            }
 
     dtable_for_encoding <- HP.newDynamicTableForEncoding 4096
     dtable_for_encoding_mvar <- newTMVarIO dtable_for_encoding
@@ -182,7 +212,9 @@ createDecoySession attendant = do
         _encodeHeadersHere = dtable_for_encoding_mvar,
         _decodeHeadersHere = dtable_for_decoding_mvar,
         _incomingData      = incoming_data_tmvar,
-        _sessionThrowed    = session_throwed_tmvar
+        _sessionThrowed    = session_throwed_tmvar,
+        _clientState       = client_state,
+        _startClientSessionCallback = start_client_session_callback
         }
     return session
 
@@ -212,16 +244,16 @@ recvFrameFromSession decoy_session = do
     let
         output_data_channel = decoy_session ^. outputDataChannel
         remaining_output_bit_mvar = decoy_session ^. remainingOutputBit
-        pull_action = fmap LB.toStrict $ readTChan output_data_channel
+        pull_action =  readTChan output_data_channel
         settings = decoy_session ^. nh2Settings
         waiting_for_read = decoy_session ^. waiting
     my_thread_id <- myThreadId
     packet <- atomically $ do
-        putTMVar waiting_for_read my_thread_id
-        remaining_output_bit <- takeTMVar remaining_output_bit_mvar
-        (packet, rest) <- readNextChunkAndContinue http2FrameLength remaining_output_bit pull_action
-        putTMVar remaining_output_bit_mvar rest
-        takeTMVar waiting_for_read
+        {-# SCC aT #-} putTMVar waiting_for_read my_thread_id
+        remaining_output_bit <- {-# SCC bT #-}  takeTMVar remaining_output_bit_mvar
+        (packet, rest) <-  {-# SCC cT #-}  readNextChunkAndContinue http2FrameLength remaining_output_bit pull_action
+        {-# SCC dT #-} putTMVar remaining_output_bit_mvar rest
+        {-# SCC eT #-} takeTMVar waiting_for_read
         return packet
     let
         error_or_frame = NH2.decodeFrame settings packet
