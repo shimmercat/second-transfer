@@ -10,7 +10,7 @@ import qualified Control.Exception       as E
 import           Control.Lens            ((^.), makeLenses)
 
 
-import            System.Log.Logger
+import           System.Log.Logger
 
 
 
@@ -60,7 +60,9 @@ sessionExceptionHandler session_component session_id sessions_context e =
             )
     in case maybe_error_callback of
         Nothing ->
-            errorM component_tag (show e)
+            -- errorM component_tag (show e)
+            -- When no callback, ignore the exception
+            return ()
 
         Just callback ->
             callback error_tuple

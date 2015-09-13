@@ -443,10 +443,13 @@ http2Session session_role aware_worker client_state session_id sessions_context 
 
     let
         io_exc_handler :: SessionComponent -> E.BlockedIndefinitelyOnMVar -> IO ()
-        io_exc_handler component e = do
+        io_exc_handler _component _e = do
            case session_role of
                Server_SR -> do
-                   sessionExceptionHandler component session_id sessions_context e
+                   -- sessionExceptionHandler component session_id sessions_context e
+                   -- Just ignore this kind of exceptions here, very explicitly, as they should naturally
+                   -- happen when the framer is closed
+                   return ()
 
                Client_SR -> do
                    clientSideTerminate client_state IOChannelClosed_CCR
