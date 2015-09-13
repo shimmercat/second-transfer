@@ -1219,7 +1219,10 @@ closePostDataSource stream_id = do
     case pim_maybe of
 
         Just (PostInputMechanism (chan, _))  ->
-            liftIO $ putMVar chan Nothing
+            liftIO $ do
+                putMVar chan Nothing
+                -- Not sure if this will work
+                H.delete  stream2postinputmechanism stream_id
 
         Nothing ->
             -- TODO: This is a protocol error, handle it properly
