@@ -362,6 +362,7 @@ data SessionData = SessionData {
 
     -- What role does this session has?
     ,_sessionRole                :: SessionRole
+
     }
 
 
@@ -1718,14 +1719,28 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
     writeContinuations fragments stream_id effect =
       mapM_ (\ fragment ->
                   withLockedSessionOutput
-                      (\ session_output -> writeChan session_output $ Right (
-                           NH2.EncodeInfo {
-                               NH2.encodeFlags     = NH2.defaultFlags
-                               ,NH2.encodeStreamId = stream_id
-                               ,NH2.encodePadding  = Nothing
-                               },
-                           NH2.DataFrame fragment,
-                           effect )
+                      (\ session_output -> do
+                             -- TODO:
+                             when (B.length fragment == use_chunk_length) $ do
+                                 -- Force tons and tons of ping frames to see if we get less delays due to
+                                 -- congestion...
+                                 writeChan session_output $ Right (
+                                     NH2.EncodeInfo {
+                                         NH2.encodeFlags     = NH2.defaultFlags
+                                         ,NH2.encodeStreamId = 0
+                                         ,NH2.encodePadding  = Nothing
+                                         },
+                                     NH2.PingFrame "talk  on",
+                                     effect )
+
+                             writeChan session_output $ Right (
+                                 NH2.EncodeInfo {
+                                     NH2.encodeFlags     = NH2.defaultFlags
+                                     ,NH2.encodeStreamId = stream_id
+                                     ,NH2.encodePadding  = Nothing
+                                     },
+                                 NH2.DataFrame fragment,
+                                 effect )
                       )
              )
              fragments
