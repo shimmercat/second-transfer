@@ -26,6 +26,50 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
+
+//
+
+
+// Some constants
+#define ALL_OK  0
+#define BAD_HAPPENED 1
+#define TIMEOUT_REACHED 3
+// This is also a failed IO with SSL, but this one may be quite
+// natural and we want to handle it differently
+#define TRANSPORT_CLOSED 2
+
+
+#if OPENSSL_VERSION_NUMBER < 0x1000200fL
+#define ALPN_DISABLED
+#warning Due to low OpenSSL version, this build is completely broken. Check second-transfer.cabal to see how
+#warning to indicate a recent OpenSSL version.
+
+int SSL_CTX_set_ecdh_auto(SSL *s, int onoff)
+{
+    fprintf(stderr, "Fake OPENSSL function called. Updated your SSL version!!\n");
+}
+
+void SSL_CTX_set_alpn_select_cb(SSL_CTX *ctx,
+                                  int (*cb) (SSL *ssl,
+                                             const unsigned char **out,
+                                             unsigned char *outlen,
+                                             const unsigned char *in,
+                                             unsigned int inlen,
+                                             void *arg),
+                                void *arg)
+{
+    fprintf(stderr, "Fake OPENSSL function called. Updated your SSL version!!\n");
+}
+
+
+void SSL_get0_alpn_selected(SSL*a , int*b,  int*c)
+{
+    fprintf(stderr, "Fake OPENSSL function called. Updated your SSL version!!\n");
+}
+
+#endif
+
+
 // Simple structure to keep track of the handle, and
 // of what needs to be freed later.
 typedef struct {
@@ -49,12 +93,7 @@ connection_t* make_connection();
 // Call when you are done
 void close_connection(connection_t* conn);
 // Wait for the next one...
-#define ALL_OK  0
-#define BAD_HAPPENED 1
-#define TIMEOUT_REACHED 3
-// This is also a failed IO with SSL, but this one may be quite
-// natural and we want to handle it differently
-#define TRANSPORT_CLOSED 2
+
 int wait_for_connection(connection_t* conn, int microseconds, wired_session_t** wired_session);
 int send_data(wired_session_t* ws, char* buffer, int buffer_size);
 int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_recvd);
