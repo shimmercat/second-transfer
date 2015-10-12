@@ -25,6 +25,6 @@ dropIncomingData Nothing = return ()
 dropIncomingData (Just data_source) = do
     forkIO $
         data_source $$ awaitForever (\ _ -> do
-                                         liftIO $ logit "stream discarded"
+                                         {-liftIO $ logit "stream discarded"-}
                                          return () )
     return ()

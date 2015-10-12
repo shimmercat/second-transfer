@@ -616,8 +616,9 @@ sessionInputThread  = do
                     Nothing ->
                         -- This is can actually happen in some implementations: we are asked to
                         -- cancel an stream we know nothing about. Log which stream it is
-                        logit $  "InterruptingUnexistentStream " `mappend` (pack . show $ stream_id)
+                        --logit $  "InterruptingUnexistentStream " `mappend` (pack . show $ stream_id)
                         -- and don't get too crazy about it.
+                        return ()
 
                     Just thread_id -> do
                         -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
