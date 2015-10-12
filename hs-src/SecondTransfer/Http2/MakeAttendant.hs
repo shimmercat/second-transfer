@@ -4,12 +4,12 @@ module SecondTransfer.Http2.MakeAttendant (
     ) where
 
 
-import           SecondTransfer.Http2.Framer            (wrapSession)
+import           SecondTransfer.Http2.Framer            (wrapSession, SessionPayload(..))
 import           SecondTransfer.Sessions.Internal       (SessionsContext)
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.PushPullType   (Attendant)
 
--- | The type of this function is equivalent to:
+-- |
 --
 -- @
 --      http2Attendant :: AwareWorker -> AttendantCallbacks ->  IO ()
@@ -22,5 +22,5 @@ import           SecondTransfer.MainLoop.PushPullType   (Attendant)
 http2Attendant :: SessionsContext -> AwareWorker -> Attendant
 http2Attendant sessions_context coherent_worker attendant_callbacks = do
     let
-        attendant = wrapSession coherent_worker sessions_context
+        attendant = wrapSession (AwareWorker_SP coherent_worker) sessions_context
     attendant attendant_callbacks

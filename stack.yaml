@@ -1,11 +1,7 @@
 flags:
   second-transfer:
     debug: false
-    develop: true
 packages:
 - '.'
 - examples/attempt_bust
-extra-deps:
-- cabal-helper-0.3.6.0
-- cabal-install-1.22.6.0
 resolver: nightly-2015-07-30

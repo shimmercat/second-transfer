@@ -3,14 +3,15 @@
 module SecondTransfer.MainLoop.PushPullType (
     PushAction
     ,PullAction
+    ,BestEffortPullAction
     ,Attendant
     ,CloseAction
-    ,AttendantCallbacks(..)
+    ,IOCallbacks(..)
 
-    ,pushAction_AtC
-    ,pullAction_AtC
-    ,closeAction_AtC
-    ,bestEffortPullAction_AtC
+    ,pushAction_IOC
+    ,pullAction_IOC
+    ,closeAction_IOC
+    ,bestEffortPullAction_IOC
     ) where
 
 
@@ -49,22 +50,22 @@ type CloseAction = IO ()
 
 -- | A set of functions describing how to do I/O in a session.
 --   As usual, we provide lenses accessors.
-data AttendantCallbacks = AttendantCallbacks {
+data IOCallbacks = IOCallbacks {
     -- | put some data in the channel
-    _pushAction_AtC               :: PushAction,
+    _pushAction_IOC               :: PushAction,
     -- | get exactly this much data from the channel. This function can
     --   be used by HTTP/2 since lengths are pretty well built inside the
     --   protocoll itself.
-    _pullAction_AtC               :: PullAction,
+    _pullAction_IOC               :: PullAction,
     -- | pull data from the channel, as much as the TCP stack wants to provide.
     --   we have no option but use this one when talking HTTP/1.1, where the best
     --   way to know the length is to scan until a Content-Length is found.
-    _bestEffortPullAction_AtC     :: BestEffortPullAction,
+    _bestEffortPullAction_IOC     :: BestEffortPullAction,
     -- | this is called when we wish to close the channel.
-    _closeAction_AtC              :: CloseAction
+    _closeAction_IOC              :: CloseAction
     }
 
-makeLenses ''AttendantCallbacks
+makeLenses ''IOCallbacks
 
 -- | This is an intermediate type. It represents what you obtain
 --   by combining something that speaks the protocol and an AwareWorker.
@@ -83,4 +84,4 @@ makeLenses ''AttendantCallbacks
 --   This library supplies two of such Attendant factories,
 --   'SecondTransfer.Http1.http11Attendant' for
 --   HTTP 1.1 sessions, and 'SecondTransfer.Http2.http2Attendant' for HTTP/2 sessions.
-type Attendant = AttendantCallbacks -> IO ()
+type Attendant = IOCallbacks -> IO ()

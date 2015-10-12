@@ -301,7 +301,7 @@ smallWaitTime :: CInt
 smallWaitTime = 50000
 
 -- provideActions :: Wired_Ptr -> IO (LB.ByteString -> IO (), Int -> IO B.ByteString, IO ())
-provideActions :: Wired_Ptr -> IO AttendantCallbacks
+provideActions :: Wired_Ptr -> IO IOCallbacks
 provideActions wired_ptr = do
     can_write_mvar <- newMVar True
     can_read_mvar  <- newMVar True
@@ -370,9 +370,9 @@ provideActions wired_ptr = do
                       else
                           return (False,False)
 
-    return  AttendantCallbacks {
-        _pushAction_AtC = pushAction,
-        _pullAction_AtC = pullAction,
-        _closeAction_AtC = closeAction,
-        _bestEffortPullAction_AtC = bestEffortPullAction
+    return  IOCallbacks {
+        _pushAction_IOC = pushAction,
+        _pullAction_IOC = pullAction,
+        _closeAction_IOC = closeAction,
+        _bestEffortPullAction_IOC = bestEffortPullAction
     }

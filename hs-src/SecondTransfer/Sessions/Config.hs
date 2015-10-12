@@ -59,6 +59,7 @@ data SessionComponent =
     SessionInputThread_HTTP2SessionComponent
     |SessionHeadersOutputThread_HTTP2SessionComponent
     |SessionDataOutputThread_HTTP2SessionComponent
+    |SessionClientPollThread_HTTP2SessionComponent
     |Framer_HTTP2SessionComponent
     |Session_HTTP11
     deriving Show

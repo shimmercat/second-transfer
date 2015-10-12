@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.6.1.0
+version     :              0.7.0.0
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -53,7 +53,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.6.1.0
+  tag:      0.7.0.0
 
 library
 
@@ -79,6 +79,8 @@ library
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
                 , SecondTransfer.MainLoop.Logging
+                , SecondTransfer.MainLoop.ClientPetitioner
+
                 , SecondTransfer.Sessions.Internal
 
                 , SecondTransfer.MainLoop.OpenSSL_TLS
@@ -87,6 +89,7 @@ library
                 , SecondTransfer.Http2.Framer
                 , SecondTransfer.Http2.MakeAttendant
                 , SecondTransfer.Http2.Session
+                , SecondTransfer.Http2.SimpleClient
 
                 , SecondTransfer.Http1.Session
 
@@ -177,6 +180,7 @@ Test-Suite compiling-ok
 
 
 
+
 Test-Suite hunit-tests
   type               : exitcode-stdio-1.0
   main-is            : hunit_tests.hs
@@ -230,9 +234,14 @@ Test-Suite hunit-tests
                        , SecondTransfer.MainLoop.Tokens
                        , SecondTransfer.MainLoop.Framer
                        , SecondTransfer.MainLoop.Logging
+                       , SecondTransfer.MainLoop.Protocol
                        , SecondTransfer.Sessions.Internal
+                       , SecondTransfer.MainLoop.ClientPetitioner
                        , SecondTransfer.Utils
                        , SecondTransfer.Http2.Framer
                        , SecondTransfer.Http2.MakeAttendant
                        , SecondTransfer.Http2.Session
                        , SecondTransfer.Http1.Session
+                       , Tests.HTTP1Parse
+                       , Tests.HTTP2Session
+                       , Tests.Utils

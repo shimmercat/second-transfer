@@ -6,6 +6,7 @@
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http2.Framer (
     BadPrefaceException,
+    SessionPayload(..),
 
     wrapSession,
     http2FrameLength,
@@ -121,19 +122,34 @@ data PrioritySendState = PrioritySendState {
 
 
 data FramerSessionData = FramerSessionData {
-      _stream2flow           :: MVar Stream2AvailSpace
+
+    -- A dictionary (protected by a lock) from stream id to flow control command.
+    _stream2flow           :: MVar Stream2AvailSpace
+
     -- Two members below: the place where you put data which is going to be flow-controlled,
     -- and the place with the ordinal
+    -- Flow control dictionary. It goes from stream id to the stream data-output gate (an-mvar)
+    -- and to a mutable register for the ordinal. The ordinal for packets inside a stream is used
+    -- for priority and reporting
     , _stream2outputBytes    :: MVar ( HashTable GlobalStreamId (MVar LB.ByteString, MVar Int) )
+
+    -- The default flow-control window advertised by the peer (e.g., the browser)
     , _defaultStreamWindow   :: MVar Int
 
-    -- Wait variable to output bytes to the channel
+    -- Wait variable to output bytes to the channel. This is needed to avoid output data races.
     , _canOutput             :: MVar CanOutput
+
     -- Flag that says if the session has been unwound... if such,
     -- threads are adviced to exit as early as possible
     , _outputIsForbidden     :: MVar Bool
+
+    -- Exclusive lock for headers, needed since the specs forbid interleaving header and data
     , _noHeadersInChannel    :: MVar NoHeadersInChannel
+
+    -- The push action
     , _pushAction            :: PushAction
+
+    -- The close action
     , _closeAction           :: CloseAction
 
     -- Global id of the session, used for e.g. error reporting.
@@ -143,10 +159,19 @@ data FramerSessionData = FramerSessionData {
     , _sessionsContext       :: SessionsContext
 
     -- For GoAway frames
-    , _lastStream            :: MVar Int
+    -- We keep the value below updated with the highest incoming stream
+    -- frame. For example, it is updated as soon as headers are received from
+    -- the client on that stream.
+    , _lastInputStream       :: MVar Int
+    -- We update this one as soon as an outgoing frame is seen with such a
+    -- high output number.
+    , _lastOutputStream      :: MVar Int
 
     -- For sending data orderly
     , _prioritySendState     :: PrioritySendState
+
+    -- Need to know this for the preface
+    , _sessionRole_FSD       :: SessionRole
     }
 
 L.makeLenses ''FramerSessionData
@@ -154,26 +179,40 @@ L.makeLenses ''FramerSessionData
 
 type FramerSession = ReaderT FramerSessionData IO
 
+data SessionPayload =
+    AwareWorker_SP AwareWorker   -- I'm a server
+    |ClientState_SP ClientState  -- I'm a client
 
-wrapSession :: AwareWorker -> SessionsContext -> Attendant
-wrapSession aware_worker sessions_context attendant_callbacks = do
+wrapSession :: SessionPayload -> SessionsContext -> Attendant
+wrapSession session_payload sessions_context io_callbacks = do
 
     let
         session_id_mvar = view nextSessionId sessions_context
-        push_action = attendant_callbacks ^. pushAction_AtC
-        pull_action = attendant_callbacks ^. pullAction_AtC
-        close_action = attendant_callbacks ^. closeAction_AtC
-        best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_AtC
+        push_action = io_callbacks ^. pushAction_IOC
+        pull_action = io_callbacks ^. pullAction_IOC
+        close_action = io_callbacks ^. closeAction_IOC
+        -- best_effort_pull_action = io_callbacks ^. bestEffortPullAction_IOC
 
 
     new_session_id <- modifyMVarMasked
         session_id_mvar $
         \ session_id -> return $ session_id `seq` (session_id + 1, session_id)
 
-    (session_input, session_output) <- http2Session
-                                        aware_worker
-                                        new_session_id
-                                        sessions_context
+    (session_input, session_output) <- case session_payload of
+        AwareWorker_SP aware_worker ->  http2ServerSession
+                                            aware_worker
+                                            new_session_id
+                                            sessions_context
+        ClientState_SP client_state -> http2ClientSession
+                                            client_state
+                                            new_session_id
+                                            sessions_context
+
+    let
+        session_role = case session_payload of
+            AwareWorker_SP _ ->  Server_SR
+            ClientState_SP _ ->  Client_SR
+
 
     -- TODO : Add type annotations....
     s2f                       <- H.new
@@ -184,6 +223,7 @@ wrapSession aware_worker sessions_context attendant_callbacks = do
     can_output                <- newMVar CanOutput
     no_headers_in_channel     <- newMVar NoHeadersInChannel
     last_stream_id            <- newMVar 0
+    last_output_stream_id     <- newMVar 0
     output_is_forbidden       <- newMVar False
 
     prio_mvar                 <- STM.atomically $ newTMVar PQ.empty
@@ -202,12 +242,14 @@ wrapSession aware_worker sessions_context attendant_callbacks = do
         ,_closeAction         = close_action
         ,_sessionIdAtFramer   = new_session_id
         ,_sessionsContext     = sessions_context
-        ,_lastStream          = last_stream_id
+        ,_lastInputStream     = last_stream_id
+        ,_lastOutputStream    = last_output_stream_id
         ,_outputIsForbidden   = output_is_forbidden
         ,_prioritySendState   = PrioritySendState {
                                     _semToSend = sem_to_send,
                                     _prioQ = prio_mvar
                                 }
+        ,_sessionRole_FSD     = session_role
         }
 
 
@@ -228,7 +270,7 @@ wrapSession aware_worker sessions_context attendant_callbacks = do
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True)
-            INSTRUMENTATION( errorM "HTTP2.Framer" "Exception went up" )
+            -- INSTRUMENTATION( errorM "HTTP2.Framer" "Exception went up" )
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
         io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
@@ -267,6 +309,10 @@ addCapacity ::
         GlobalStreamId ->
         Int           ->
         FramerSession Bool
+addCapacity _         0         =
+    -- By the specs, a WINDOW_UPDATE with 0 of credit should be considered a protocol
+    -- error
+    return False
 addCapacity 0         delta_cap =
     -- TODO: Implement session flow control
     return True
@@ -275,7 +321,7 @@ addCapacity stream_id delta_cap =
         table_mvar <- view stream2flow
         val <- liftIO $ withMVar table_mvar $ \ table ->
             H.lookup table stream_id
-        last_stream_mvar <- view lastStream
+        last_stream_mvar <- view lastInputStream
         last_stream <- liftIO . readMVar $ last_stream_mvar
         case val of
             Nothing | stream_id > last_stream ->
@@ -342,24 +388,29 @@ readNextFrame pull_action  = do
 --
 -- This function also does part of the flow control: it registers WindowUpdate frames and triggers
 -- quota updates on the streams.
+--
+-- Also, when this function exits its caller will issue a close_action
 inputGatherer :: PullAction -> SessionInput -> FramerSession ()
 inputGatherer pull_action session_input = do
-    -- We can start by reading off the prefix....
-    prefix <- liftIO $ pull_action http2PrefixLength
-    if prefix /= NH2.connectionPreface
-      then do
-        sendGoAwayFrame NH2.ProtocolError
-        liftIO $
-            -- We just use the GoAway frame, although this is awfully early
-            -- and probably wrong
-            throwIO BadPrefaceException
-      else
-        INSTRUMENTATION(  debugM "HTTP2.Framer" "Prologue validated" )
+
+    session_role <- view sessionRole_FSD
+
+    when (session_role == Server_SR) $ do
+        -- We can start by reading off the prefix....
+        prefix <- liftIO $ pull_action http2PrefixLength
+        when (prefix /= NH2.connectionPreface) $ do
+            sendGoAwayFrame NH2.ProtocolError
+            liftIO $
+                -- We just use the GoAway frame, although this is awfully early
+                -- and probably wrong
+                throwIO BadPrefaceException
+
     let
         source::Source FramerSession (Maybe NH2.Frame)
         source = transPipe liftIO $ readNextFrame pull_action
     source $$ consume True
   where
+
 
     sendToSession :: Bool -> InputFrame -> IO ()
     sendToSession starting frame =
@@ -385,9 +436,15 @@ inputGatherer pull_action session_input = do
     consume starting = do
         maybe_maybe_frame <- await
 
-        case maybe_maybe_frame of
+        output_is_forbidden_mvar <- view outputIsForbidden
+        output_is_forbidden <- liftIO $ readMVar output_is_forbidden_mvar
+
+        -- Consumption ends automatically when the output is forbidden, this might help avoiding
+        -- attacks where a peer refuses to close its socket.
+        unless output_is_forbidden $ case maybe_maybe_frame of
 
             Just Nothing      ->
+                -- Only way to get here is by a closed connection condition I guess.
                 abortSession
 
             Just (Just right_frame) -> do
@@ -397,7 +454,10 @@ inputGatherer pull_action session_input = do
                         -- Bookkeep the increase on bytes on that stream
                         -- liftIO $ putStrLn $ "Extra capacity for stream " ++ (show stream_id)
                         succeeded <- lift $ addCapacity stream_id (fromIntegral credit)
-                        unless succeeded abortSession
+                        if not succeeded then
+                            abortSession
+                        else
+                            consume_continue
 
 
                     frame@(NH2.Frame _ (NH2.SettingsFrame settings_list) ) -> do
@@ -428,18 +488,18 @@ inputGatherer pull_action session_input = do
                         -- And send the frame down to the session, so that session specific settings
                         -- can be applied.
                         liftIO $ sendToSession starting $! frame
-
+                        consume_continue
 
                     a_frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) _ )   -> do
                         -- Update the keep of last stream
                         -- lift . startStreamOutputQueueIfNotExists (NH2.fromStreamIdentifier stream_id) priority
-                        lift . updateLastStream $ stream_id
+                        lift . updateLastInputStream $ stream_id
 
                         -- Send frame to the session
                         liftIO $ sendToSession starting a_frame
 
-                -- tail recursion: go again...
-                consume_continue
+                        -- tail recursion: go again...
+                        consume_continue
 
             Nothing    ->
                 -- We may as well exit this thread
@@ -449,6 +509,13 @@ inputGatherer pull_action session_input = do
 -- All the output frames come this way first
 outputGatherer :: SessionOutput -> FramerSession ()
 outputGatherer session_output = do
+
+    session_role <- view sessionRole_FSD
+
+    -- When acting as a client, the first step is to send the prefix...
+    when (session_role == Client_SR) $
+        pushPrefix
+
     frame_sent_report_callback <- view $
        sessionsContext            .
        sessionsConfig             .
@@ -456,7 +523,6 @@ outputGatherer session_output = do
        dataDeliveryCallback_SC
 
     session_id <- view sessionIdAtFramer
-
     let
 
        dataForFrame p1 p2 =
@@ -469,15 +535,23 @@ outputGatherer session_output = do
            command_or_frame  <- liftIO $ getFrameFromSession session_output
            case command_or_frame of
 
-               Left CancelSession_SOC -> do
-                   -- The session wants to cancel things
-                   INSTRUMENTATION(  debugM "HTTP2.Framer" "CancelSession_SOC processed")
+               Left (CancelSession_SOC error_code) -> do
+                   -- The session wants to cancel things as harshly as possible, send a GoAway frame with
+                   -- the information I have here.
+                   sendGoAwayFrame error_code
+                   releaseFramer
+                   -- And this causes this thread to finish, so that no new frames
+                   -- are taken from the session. Correspondingly, an exception is raised in
+                   -- the session if it tries to write another frame
+
+               Left (SpecificTerminate_SOC last_stream_id) -> do
+                   -- This is used when the session wants to finish in a specific way.
+                   sendSpecificTerminateGoAway last_stream_id
                    releaseFramer
 
                Left (FinishStream_SOC stream_id ) -> do
                    -- Session knows that we are done with the given stream, and that we can release
                    -- the flow control structures
-                   -- NOTICE: Unfortunately, this doesn't work, so ignore the message for now
                    finishFlowControlForStream stream_id
                    cont
 
@@ -548,10 +622,17 @@ outputGatherer session_output = do
     loopPart session_id frame_sent_report_callback
 
 
-updateLastStream :: GlobalStreamId  -> FramerSession ()
-updateLastStream stream_id = do
-    last_stream_id_mvar <- view lastStream
+updateLastInputStream :: GlobalStreamId  -> FramerSession ()
+updateLastInputStream stream_id = do
+    last_stream_id_mvar <- view lastInputStream
     liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
+
+
+updateLastOutputStream :: GlobalStreamId  -> FramerSession ()
+updateLastOutputStream stream_id = do
+    last_stream_id_mvar <- view lastOutputStream
+    liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
+
 
 startStreamOutputQueueIfNotExists :: GlobalStreamId -> Int -> FramerSession ()
 startStreamOutputQueueIfNotExists stream_id priority = do
@@ -670,13 +751,29 @@ pushFrame p1 p2 = do
     sendBytes bs
 
 
+pushPrefix :: FramerSession ()
+pushPrefix = do
+    let bs = LB.fromStrict NH2.connectionPreface
+    sendBytes bs
+
+
+-- Default sendGoAwayFrame. This one assumes that actions are taken as soon as stream is
+-- received. This is a good default strategy for streams that cause things to happen, that
+-- is, the ones with POST and GET.
 sendGoAwayFrame :: NH2.ErrorCodeId -> FramerSession ()
 sendGoAwayFrame error_code = do
-    last_stream_id_mvar <- view lastStream
+    last_stream_id_mvar <- view lastInputStream
     last_stream_id <- liftIO $ readMVar last_stream_id_mvar
     pushFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
         (NH2.GoAwayFrame last_stream_id error_code "")
+
+
+sendSpecificTerminateGoAway :: GlobalStreamId -> FramerSession ()
+sendSpecificTerminateGoAway last_stream =
+    pushFrame
+        (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
+        (NH2.GoAwayFrame last_stream NH2.NoError "")
 
 
 -- From this point on data is really serialized,
@@ -735,7 +832,8 @@ flowControlOutput stream_id priority capacity ordinal leftovers commands_chan by
 releaseFramer :: FramerSession ()
 releaseFramer =
     -- Release any resources pending...
-
+    -- This is not needed as of right now, since garbage collection works well.
+    -- I'm leaving it here just in case we need to re-activate it in the future.
     return ()
 
 
