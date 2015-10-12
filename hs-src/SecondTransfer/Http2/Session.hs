@@ -362,6 +362,7 @@ data SessionData = SessionData {
 
     -- What role does this session has?
     ,_sessionRole                :: SessionRole
+
     }
 
 
@@ -443,10 +444,13 @@ http2Session session_role aware_worker client_state session_id sessions_context 
 
     let
         io_exc_handler :: SessionComponent -> E.BlockedIndefinitelyOnMVar -> IO ()
-        io_exc_handler component e = do
+        io_exc_handler _component _e = do
            case session_role of
                Server_SR -> do
-                   sessionExceptionHandler component session_id sessions_context e
+                   -- sessionExceptionHandler component session_id sessions_context e
+                   -- Just ignore this kind of exceptions here, very explicitly, as they should naturally
+                   -- happen when the framer is closed
+                   return ()
 
                Client_SR -> do
                    clientSideTerminate client_state IOChannelClosed_CCR
@@ -1220,7 +1224,10 @@ closePostDataSource stream_id = do
     case pim_maybe of
 
         Just (PostInputMechanism (chan, _))  ->
-            liftIO $ putMVar chan Nothing
+            liftIO $ do
+                putMVar chan Nothing
+                -- Not sure if this will work
+                H.delete  stream2postinputmechanism stream_id
 
         Nothing ->
             -- TODO: This is a protocol error, handle it properly
@@ -1713,14 +1720,28 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
     writeContinuations fragments stream_id effect =
       mapM_ (\ fragment ->
                   withLockedSessionOutput
-                      (\ session_output -> writeChan session_output $ Right (
-                           NH2.EncodeInfo {
-                               NH2.encodeFlags     = NH2.defaultFlags
-                               ,NH2.encodeStreamId = stream_id
-                               ,NH2.encodePadding  = Nothing
-                               },
-                           NH2.DataFrame fragment,
-                           effect )
+                      (\ session_output -> do
+                             -- TODO:
+                             when (B.length fragment == use_chunk_length) $ do
+                                 -- Force tons and tons of ping frames to see if we get less delays due to
+                                 -- congestion...
+                                 writeChan session_output $ Right (
+                                     NH2.EncodeInfo {
+                                         NH2.encodeFlags     = NH2.defaultFlags
+                                         ,NH2.encodeStreamId = 0
+                                         ,NH2.encodePadding  = Nothing
+                                         },
+                                     NH2.PingFrame "talk  on",
+                                     effect )
+
+                             writeChan session_output $ Right (
+                                 NH2.EncodeInfo {
+                                     NH2.encodeFlags     = NH2.defaultFlags
+                                     ,NH2.encodeStreamId = stream_id
+                                     ,NH2.encodePadding  = Nothing
+                                     },
+                                 NH2.DataFrame fragment,
+                                 effect )
                       )
              )
              fragments

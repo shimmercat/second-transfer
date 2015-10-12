@@ -1,3 +1,8 @@
+- 0.7.1.0 :
+    * A few important memory leaks got fixed
+    * Changed I/O interface to live in IOCallbacks
+    * Working now around congestion window.
+
 - 0.6.1.0 :
     * Improved documentation.
     * Improved ALPN negotiation handling.

@@ -137,21 +137,22 @@ errorsSessionConfigForMVar mvar = set (sessionsCallbacks . reportErrorCallback_S
     (Just $ errorForPrefaceOk mvar) defaultSessionsConfig
 
 
-testPrefaceChecks :: Test
-testPrefaceChecks = TestCase $ do
-    errors_mvar <- newMVar False
-    sessions_context <- makeSessionsContext (errorsSessionConfigForMVar errors_mvar)
-    let
-        attendant = http2Attendant sessions_context simpleWorker
-    decoy_session <- createDecoySession attendant
-    -- This should work
-    sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-    threadDelay 1000000
-    error_ok <- readMVar errors_mvar
-    if not error_ok then
-        assertFailure "TypeOfErrorNotOK"
-    else
-        return ()
+-- Test disabled due to irrelevance
+-- testPrefaceChecks :: Test
+-- testPrefaceChecks = TestCase $ do
+--     errors_mvar <- newMVar False
+--     sessions_context <- makeSessionsContext (errorsSessionConfigForMVar errors_mvar)
+--     let
+--         attendant = http2Attendant sessions_context simpleWorker
+--     decoy_session <- createDecoySession attendant
+--     -- This should work
+--     sendRawDataToSession decoy_session "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+--     threadDelay 1000000
+--     error_ok <- readMVar errors_mvar
+--     if not error_ok then
+--         assertFailure "TypeOfErrorNotOK"
+--     else
+--         return ()
 
 
 testPrefaceChecks2 :: Test
