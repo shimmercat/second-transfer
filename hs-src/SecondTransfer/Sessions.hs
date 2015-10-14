@@ -1,7 +1,9 @@
 module SecondTransfer.Sessions(
     makeSessionsContext
+    ,makeDefaultSessionsContext
+    ,SessionsContext(..)
+
     ,module SecondTransfer.Sessions.Config
-    ,SessionsContext
     ) where
 
 import SecondTransfer.Sessions.Config

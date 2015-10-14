@@ -6,3 +6,4 @@ module SecondTransfer.Http2(
     ) where
 
 import SecondTransfer.Http2.MakeAttendant(http2Attendant)
+import SecondTransfer.Sessions.Internal()
