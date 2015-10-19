@@ -8,4 +8,4 @@ module SecondTransfer.MainLoop.Protocol (
 data HttpProtocolVersion =
      Http11_HPV
     |Http2_HPV
-
+   deriving (Show, Eq, Enum, Ord)

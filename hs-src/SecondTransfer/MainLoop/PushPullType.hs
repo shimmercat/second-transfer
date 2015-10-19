@@ -82,8 +82,10 @@ makeLenses ''IOCallbacks
 -- Sometimes we need to classify the IO callbacks according to the operations
 -- that they support, so we also create the following classes.
 
+-- | An object a which is IOChannels
+--  This method should only be invoked once for the a instance.
 class IOChannels a where
-    getIOCallbacks :: a -> IOCallbacks
+    handshake :: a -> IO IOCallbacks
 
 -- | Data exchanged through this channel is plain text
 class IOChannels a => PlainTextIO a
@@ -99,12 +101,12 @@ class TLSEncryptedIO a => TLSClientIO a
 -- | PlainText wrapper
 newtype PlainText = PlainText IOCallbacks
 instance IOChannels PlainText where
-    getIOCallbacks (PlainText io) = io
+    handshake (PlainText io) = return io
 instance PlainTextIO PlainText
 
 newtype TLSServer = TLSServer IOCallbacks
 instance IOChannels TLSServer where
-    getIOCallbacks (TLSServer io) = io
+    handshake (TLSServer io) = return io
 instance TLSEncryptedIO TLSServer
 instance TLSServerIO TLSServer
 
