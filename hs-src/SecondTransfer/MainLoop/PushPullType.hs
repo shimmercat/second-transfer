@@ -2,6 +2,8 @@
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
    -- | Functions for passing data to external parties
+   --   The callbacks here should have a blocking behavior and not
+   --   return empty results unless at end of file.
 
     PushAction
     ,PullAction
