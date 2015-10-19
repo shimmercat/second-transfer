@@ -1,17 +1,18 @@
-{-# LANGUAGE ForeignFunctionInterface, OverloadedStrings,  DeriveDataTypeable #-}
+{-# LANGUAGE ForeignFunctionInterface, OverloadedStrings,  DeriveDataTypeable, TemplateHaskell #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.OpenSSL_TLS(
-    tlsServeWithALPN
-    ,tlsServeWithALPNAndFinishOnRequest
-    -- ,tlsServeWithALPNOnce
+                 tlsServeWithALPN
+              ,  tlsServeWithALPNAndFinishOnRequest
+              ,  acceptEncryptedDataChannel
 
-    ,TLSLayerGenericProblem(..)
-    ,FinishRequest(..)
-    ) where
+              ,  TLSLayerGenericProblem(..)
+              ,  FinishRequest(..)
+       ) where
 
 import           Control.Monad
 import           Control.Concurrent.MVar
 import           Control.Exception
+import           Control.Lens
 import qualified Control.Exception  as      E
 #ifndef IMPLICIT_APPLICATIVE_FOLDABLE
 import           Data.Foldable              (foldMap)
@@ -136,8 +137,8 @@ tlsServeWithALPN :: FilePath                -- ^ Path to a certificate the serve
                                             --   TLS socket, so please create the HTTP/2 certificate accordingly.
                                             --   Also, currently this function only accepts paths to certificates
                                             --   or certificate chains in .pem format.
-                 -> FilePath                -- ^ Path to the key of your certificate.
-                 -> String                  -- ^ Name of the network interface where you want to start your server
+                 -> FilePath                -- ^ Path to the key of your certificate. PEM format works fine.
+                 -> String                  -- ^ Name of the network interface where the server will listen
                  -> [(String, Attendant)]   -- ^ List of protocol names and the corresponding `Attendant` to use for
                                             --   each. This way you can serve both HTTP\/1.1 over TLS and HTTP\/2 in the
                                             --   same socket. When no ALPN negotiation is present during the negotiation,
@@ -376,3 +377,99 @@ provideActions wired_ptr = do
         _closeAction_IOC = closeAction,
         _bestEffortPullAction_IOC = bestEffortPullAction
     }
+
+
+-- Functionality for callback-represented connections
+data ServerCredentials = ServerCredentials {
+    _certPath_SC :: FilePath
+  , _privkeyPath_SC :: FilePath
+    }
+
+makeLenses ''ServerCredentials
+
+acceptEncrypedDataChannel :: FilePath                   -- ^ Path to a certificate the server is going to use to identify itself.
+                                                        --   Bear in mind that multiple domains can be served from the same HTTP/2
+                                                        --   TLS socket, so please create the HTTP/2 certificate accordingly.
+                                                        --   Also, currently this function only accepts paths to certificates
+                                                        --   or certificate chains in .pem format.
+                             -> FilePath                -- ^ Path to the key of your certificate. PEM format works fine.
+                             -> [(String, Attendant)]   -- ^ List of protocol names and the corresponding `Attendant` to use for
+                                                        --   each. This way you can serve both HTTP\/1.1 over TLS and HTTP\/2 in the
+                                                        --   same socket. When no ALPN negotiation is present during the negotiation,
+                                                        --   the first protocol in this list is used.
+                            -> IOCallbacks              -- ^ TLS data is expected to pop out of here when invoking pullAction and bestEffortPullAction,
+                                                        --    equally, TLS-encoded data is expected to go out when calling pushAction
+                            -> IOCallbacks              -- ^ The returned callback set will give and receive plain, not-encoded data.
+acceptEncryptedDataChannel  certificate_filename key_filename = do
+
+    let protocols_bs = protocolsToWire $ fmap (\ (s,_) -> pack s) attendants
+    withCString certificate_filename $ \ c_certfn -> withCString key_filename $ \ c_keyfn -> withCString interface_name $ \ c_iname -> do
+
+        -- Create an accepting endpoint
+        connection_ptr <- BU.unsafeUseAsCStringLen protocols_bs $ \ (pchar, len) ->
+            makeConnection
+                c_certfn
+                c_keyfn
+                c_iname
+                (fromIntegral interface_port)
+                pchar
+                (fromIntegral len)
+
+        -- Create a computation that accepts a connection, runs a session on it and recurses
+        let
+            recursion = do
+                -- Get a SSL session
+                either_wired_ptr <- alloca $ \ wired_ptr_ptr ->
+                    let
+                        tryOnce = do
+                            result_code <- waitForConnection connection_ptr smallWaitTime wired_ptr_ptr
+                            let
+                                r = case result_code of
+                                    re  | re == allOk        -> do
+                                            p <- peek wired_ptr_ptr
+                                            return $ Right_I  p
+                                        | re == timeoutReached -> do
+                                            got_finish_request <- tryTakeMVar finish_request
+                                            case got_finish_request of
+                                                Nothing ->
+                                                    tryOnce
+                                                Just _ ->
+                                                    return Interrupted
+
+                                        | re == badHappened  -> return $ Left_I ("A wait for connection failed" :: String)
+                            r
+                    in tryOnce
+
+                -- With the potentially obtained SSL session do...
+                case either_wired_ptr of
+
+                    Left_I _msg ->
+                        -- // .. //
+                        recursion
+
+                    Right_I wired_ptr -> do
+                        attendant_callbacks <- provideActions wired_ptr
+
+                        use_protocol <- getSelectedProtocol wired_ptr
+
+                        let
+                            maybe_session_attendant = case fromIntegral use_protocol of
+                                n | use_protocol >= 0  -> Just $ snd $ attendants !! n
+                                  | otherwise            -> Just . snd . head $ attendants
+
+                        case maybe_session_attendant of
+
+                            Just session_attendant ->
+                                session_attendant attendant_callbacks
+
+                            Nothing ->
+                                return ()
+
+                        -- // .. //
+                        recursion
+
+                    Interrupted ->
+                        closeConnection connection_ptr
+
+        -- Start the loop defined above...
+        recursion

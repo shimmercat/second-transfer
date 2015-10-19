@@ -73,7 +73,8 @@ void SSL_get0_alpn_selected(SSL*a , int*b,  int*c)
 // Simple structure to keep track of the handle, and
 // of what needs to be freed later.
 typedef struct {
-    int socket;
+    int socket; // Lisening socket,
+                // will be zero when using the managed_session
     SSL_CTX *sslContext;
     char* protocol_list;
     int protocol_list_length;
@@ -87,9 +88,13 @@ typedef struct {
     int protocol_index;
 } wired_session_t;
 
-// This is the public API of this server...
-// No arguments, all are wired here somewhere... for now
-connection_t* make_connection();
+// Structure similar to a wired_session, but this time holding data for a totally
+// managed callback.
+typedef struct {
+    SSL *sslHandle;
+    int protocol_index;
+} managed_session_t;
+
 // Call when you are done
 void close_connection(connection_t* conn);
 // Wait for the next one...
@@ -100,7 +105,10 @@ int recv_data(wired_session_t* ws, char* inbuffer, int buffer_size, int* data_re
 int recv_data_best_effort(wired_session_t* ws, char* inbuffer, int buffer_size, int can_wait, int* data_recvd);
 int get_selected_protocol(wired_session_t* ws){ return ws->protocol_index; }
 void dispose_wired_session(wired_session_t* ws);
+void dispose_managed_session(managed_session_t* ws);
 static int thread_setup(void);
+static void openssl_generally_init()
+
 
 // Preprocessor flag: when 1, we will trace ALPN info
 #define TRACE_ALPN_NEGOTIATION 0
@@ -485,12 +493,164 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg)
     return SSL_TLSEXT_ERR_OK;
 }
 
+static void configure_protocols
+    (
+     connection_t** c,
+     char* protocol_list,
+     int protocol_list_length
+     );
 
-// Establish a connection using an SSL layer
+static void openssl_generally_init()
+{
+    static int initialized = 0;
+
+    if (!initialized)
+    {
+        SSL_load_error_strings();
+        SSL_library_init();
+        initialized = 1;
+    }
+}
+
+static void openssl_create_context
+    (
+     connection_t* c,
+     char* certificate_filename,
+     char* privkey_filename
+    )
+{
+    c -> sslContext = SSL_CTX_new( TLSv1_2_server_method );
+            // New context saying we are a server, and using SSL 2 or 3
+    c->sslContext = SSL_CTX_new( TLSv1_2_server_method() );
+    if (c->sslContext == NULL)
+    {
+        ERR_print_errors_fp (stderr);
+        perror("Could not create context");
+        return 0;
+    }
+
+
+    // Now I set a few options....
+    /*SSL_CTX_set_verify(c->sslContext, NULL );*/
+    const long flags =
+      SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION | SSL_OP_NO_COMPRESSION;
+    SSL_CTX_set_options(c->sslContext, flags);
+    setup_dh_parms( c->sslContext );
+    SSL_CTX_set_ecdh_auto (c->sslContext, 1);
+
+    // Give the impression that we are using SNI
+    SSL_CTX_set_tlsext_servername_callback(c->sslContext, ssl_servername_cb);
+
+    // Disable the session cache
+    SSL_CTX_set_session_cache_mode(c->sslContext, SSL_SESS_CACHE_OFF);
+
+    // The only cipher supported by HTTP/2 ... sort of.
+    result = SSL_CTX_set_cipher_list(c->sslContext,
+        "ECDHE-RSA-AES128-GCM-SHA256" //  --  ibidem
+        ":ECDHE-RSA-AES256-GCM-SHA384"  // <-- Good for Chrome and firefox
+         // ---- These suites will fail HTTP/2
+        ":ECDHE-RSA-AES128-SHA256"     //  -- Not good for HTTP/2
+        ":ECDHE-RSA-AES-128-CBC-SHA256"
+        ":ECDHE-ECDSA-AES256-SHA384"
+     );
+
+     if ( result != 1 )
+     {
+         ERR_print_errors_fp (stderr);
+         perror("Could not set cipher");
+         return 0;
+     }
+
+     SSL_CTX_set_alpn_select_cb( c->sslContext, protocol_select, c);
+
+     // Load a certificate in .pem format.
+     SSL_CTX_use_certificate_chain_file(c->sslContext, certificate_filename);
+     SSL_CTX_use_PrivateKey_file(c->sslContext,  privkey_filename, SSL_FILETYPE_PEM);
+     // Check the private key
+     result = SSL_CTX_check_private_key(c->sslContext);
+     if ( result != 1)
+     {
+         char msg[600];
+         snprintf(msg, 600, "Check certificate file %s and privkey %s failed", certificate_filename,
+                  privkey_filename);
+         perror(msg);
+         return 0;
+     }
+
+     return 1;
+}
+
+// A listen engine template holds a SSL context. An actual listen engine
+// holds a SSL struct
+connection_t* new_listen_engine_template_for_io_callbacks
+    (
+        char* certificate_filename,
+        char* privkey_filename,
+        char* protocol_list,
+        int protocol_list_length
+    )
+{
+    int result;
+    connection_t *c;
+    c -> socket = 0;
+
+    if (! threads_are_up)
+    {
+        threads_are_up = 1;
+        thread_setup();
+    }
+
+    configure_protocols(&c, protocol_list, protocol_list_length);
+
+    openssl_generally_init();
+
+    result = openssl_create_context
+    (
+        c,
+        certificate_filename,
+        privkey_filename
+    );
+
+    if ( result == 0)
+        return 0;
+
+    return c;
+}
+
+// Returns 1 if everything went OK, 0 otherwise
+int create_managed_session
+    (
+     connection_t*       conn, // <- No socket here
+     // ... more parameters coming here ....
+     managed_session_t** out
+    )
+{
+    assert( conn->socket == 0);
+    managed_session_t* sess = (managed_session_t*)
+        malloc(sizeof(managed_session_t));
+    if (sess == 0)
+        return 0;
+
+    sess -> sslHandle =
+        SSL_new( conn->sslContext );
+    if ( sess -> sslHandle == 0)
+    {
+        perror("Couldn't create managed session");
+    }
+
+
+
+    SSL_set_bio(sess->sslHandle, rbio, wbio);
+
+    *out = sess;
+}
+
+// Establish a connection using an SSL layer. "hostname" is used to identify
+// the network interface where to listen.
 static connection_t *sslStart (
         char* certificate_filename, char* privkey_filename, char* hostname, int portno,
         char* protocol_list, int protocol_list_length
-        )
+    )
 {
     int result;
     connection_t *c;
@@ -603,11 +763,30 @@ static connection_t *sslStart (
 }
 
 
+static void configure_protocols
+    (
+     connection_t** c,
+     char* protocol_list,
+     int protocol_list_length
+    )
+{
+    // TODO: what happens when memory is critical?
+    connection_t* cc;
+    cc = malloc (sizeof (connection_t));
+    *c = cc;
+    cc->sslContext = NULL;
+    cc->protocol_list  = (char*) malloc(protocol_list_length);
+    strncpy( cc->protocol_list, protocol_list, protocol_list_length );
+    cc->protocol_list_length = protocol_list_length;
+}
+
+
 connection_t* make_connection(char* certificate_filename, char* privkey_filename, char* hostname, int portno,
         char* my_protocol_list, int protocol_list_length
         )
 {
     const int len = strlen(hostname);
+    // Be sure that the program crashes properly if the hostname is incorrect...
     if ( len > 0 && hostname[len-1] == '\n' )
     {
         printf("HELLO THERE. I found some weird characters\n");
@@ -903,7 +1082,41 @@ void dispose_wired_session(wired_session_t* ws)
 }
 
 
-int thread_setup(void)
+void dispose_managed_session(managed_session_t* ws)
+{
+    if (ws == 0)
+        return ;
+
+    if ( ws-> sslHandle )
+    {
+        int rr = SSL_shutdown( ws->sslHandle );
+        // printf("rr=%d\n", rr);
+        int err = SSL_get_error(ws->sslHandle, rr);
+        if ( err < 0)
+        {
+            if ( err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE )
+            {
+                printf("error when closing socket / wait-for-data\n");
+            } else if (err != 0 ){
+                printf("cause openssl error code %d \n",err);
+            }
+        }
+    }
+
+    SSL_free(ws->sslHandle);
+    ws -> sslHandle = 0;
+    /* if (ws->socket) */
+    /* { */
+    /*     close(ws->socket); */
+    /*     ws -> socket = 0; */
+    /* } */
+
+    free(ws);
+}
+
+
+
+static int thread_setup(void)
 {
     int i;
 
@@ -919,7 +1132,7 @@ int thread_setup(void)
     return 1;
 }
 
-int thread_cleanup(void)
+static int thread_cleanup(void)
 {
     int i;
 
