@@ -1,6 +1,6 @@
 /dist
 /.cabal-sandbox*
-/.stack-work/
+**/.stack-work
 .*.swp
 *.pyc
 *.sublime-workspace

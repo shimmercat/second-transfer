@@ -1,6 +1,8 @@
 {-# LANGUAGE ExistentialQuantification, TemplateHaskell #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
+   -- | Functions for passing data to external parties
+
     PushAction
     ,PullAction
     ,BestEffortPullAction
@@ -12,6 +14,13 @@ module SecondTransfer.MainLoop.PushPullType (
     ,pullAction_IOC
     ,closeAction_IOC
     ,bestEffortPullAction_IOC
+
+    -- $ classifiers
+    ,IOChannels         (..)
+    ,PlainTextIO
+    ,TLSEncryptedIO
+    ,TLSServerIO
+    ,TLSClientIO
     ) where
 
 
@@ -66,6 +75,36 @@ data IOCallbacks = IOCallbacks {
     }
 
 makeLenses ''IOCallbacks
+
+-- $classifiers
+-- Sometimes we need to classify the IO callbacks according to the operations
+-- that they support, so we also create the following classes.
+
+class IOChannels a where
+    getIOCallbacks :: a -> IOCallbacks
+
+-- | Data exchanged through this channel is plain text
+class IOChannels a => PlainTextIO a
+-- | Data exchanges through this channel is the data of a TLS session
+class IOChannels a => TLSEncryptedIO a
+-- | The agent putting and retrieving data in this side of the channel should
+--   behave as a TLS server
+class TLSEncryptedIO a => TLSServerIO a
+-- | The agent putting and retrieving data in this side of the channel should
+--   behave as a TLS client
+class TLSEncryptedIO a => TLSClientIO a
+
+-- | PlainText wrapper
+newtype PlainText = PlainText IOCallbacks
+instance IOChannels PlainText where
+    getIOCallbacks (PlainText io) = io
+instance PlainTextIO PlainText
+
+newtype TLSServer = TLSServer IOCallbacks
+instance IOChannels TLSServer where
+    getIOCallbacks (TLSServer io) = io
+instance TLSEncryptedIO TLSServer
+instance TLSServerIO TLSServer
 
 -- | This is an intermediate type. It represents what you obtain
 --   by combining something that speaks the protocol and an AwareWorker.

@@ -46,6 +46,10 @@ Flag debug
   Description: Enable debug support
   Default:     False
 
+Flag fastc
+  Description: Enable fast use of c libraries
+  Default: False
+
 source-repository head
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
@@ -82,6 +86,8 @@ library
                 , SecondTransfer.MainLoop.ClientPetitioner
 
                 , SecondTransfer.Sessions.Internal
+
+                , SecondTransfer.TLS.Botan
 
                 , SecondTransfer.MainLoop.OpenSSL_TLS
                 , SecondTransfer.Utils
@@ -144,19 +150,34 @@ library
 
   -- NOTE: Very specific directory with the version of openssl
   -- that I'm using. As of February 2015-- openssl 1.0.2 is not
-  -- commonly installed. Update this path in your build  
+  -- commonly installed. Update this path in your build 
   -- or otherwise your build will be broken.
   include-dirs: /opt/openssl-1.0.2/include
 
-  c-sources: cbits/tlsinc.c
 
   if flag(debug)
-      cc-options: -O0 -g3
+      cc-options: -O0 -g3 -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
       ld-options: -g3
+  else
+      cc-options: -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
 
-  ghc-options: -pgmPcpphs  -optP--cpp
+  ghc-options: -pgmPcpphs "-pgmc g++"  -optP--cpp
 
-  extra-libraries: ssl crypto
+  --               v------ remove this
+  if flag(fastc)
+        c-sources:      cbits/tlsinc.c, cbits/enable_tls.cpp
+  else
+        c-sources:       cbits/tlsinc.c
+                       , cbits/enable_tls.cpp
+                       , cbits/botan_all.cpp
+                       , cbits/botan_all_avx2.cpp
+                       , cbits/botan_all_aesni.cpp
+
+  -- TODO: Refactor
+  if flag(fastc)
+      extra-libraries: ssl crypto
+  else
+      extra-libraries: botan-1.11 ssl crypto
 
   -- NOTE: Please fill-in with an-up-to date library path here.
   -- It should point to openssl 1.0.2 or greater. See note for

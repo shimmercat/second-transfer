@@ -2,8 +2,10 @@ flags:
   second-transfer:
     debug: false
 docker:
-    enable: true
+    enable: false
 packages:
 - '.'
 - examples/attempt_bust
 resolver: lts-3.7
+ghc-options:
+    second-transfer: "-pgmc g++"
