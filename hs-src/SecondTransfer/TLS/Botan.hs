@@ -40,13 +40,14 @@ data BotanSessionState =
 
 
 data BotanPad = BotanPad {
-    _encryptedSide_BP    :: IOCallbacks
-  , _availableData_BP    :: Bu.Builder
-  , _sessionState_BP     :: BotanSessionState
-  , _tlsChannel_BP       :: BotanTLSChannelFPtr
-  , _dataCame_BP         :: MVar ()
-  , _selectedProtocol_BP :: HttpProtocolVersion
-  , _selfRef_BP          :: BotanPadRef
+    _encryptedSide_BP      :: IOCallbacks
+  , _availableData_BP      :: Bu.Builder
+  , _sessionState_BP       :: BotanSessionState
+  , _tlsChannel_BP         :: BotanTLSChannelFPtr
+  , _dataCame_BP           :: MVar ()
+  , _handshakeCompleted_BP :: MVar ()
+  , _selectedProtocol_BP   :: HttpProtocolVersion
+  , _selfRef_BP            :: BotanPadRef
     }
 
 type BotanPadRef = StablePtr (MVar BotanPad)
@@ -109,7 +110,7 @@ foreign export ccall iocba_handshake_cb :: BotanPadRef -> IO ()
 iocba_handshake_cb siocb = withBotanPad siocb $ \botan_pad -> do
     let
         session_state = botan_pad ^. sessionState_BP
-    tryPutMVar (botan_pad ^. dataCame_BP) ()
+    tryPutMVar (botan_pad ^. handshakeCompleted_BP) ()
     return $ set sessionState_BP Functioning_BSS botan_pad
 
 
@@ -122,6 +123,8 @@ foreign import ccall iocba_make_tls_context :: CString -> CString -> IO BotanTLS
 foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_channel :: FunPtr( BotanTLSChannelPtr -> IO () )
 
 foreign import ccall "wrapper" mkTlsServerDeleter :: (BotanTLSChannelPtr -> IO ()) -> IO (FunPtr ( BotanTLSChannelPtr -> IO () ) )
+
+foreign import ccall iocba_botan_receive_data :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
 
 
 botanPushData :: MVar BotanPad -> LB.ByteString -> IO ()
@@ -220,17 +223,31 @@ unencryptChannelData botan_ctx@(BotanTLSContext fctx) tls_data  = do
     tls_channel_fptr <- newForeignPtr iocba_delete_tls_server_channel tls_channel_ptr
     tls_io_callbacks <- handshake tls_data
     data_came_mvar <- newEmptyMVar
+    handshake_completed_mvar <- newEmptyMVar
 
     let
         new_botan_pad = BotanPad {
-            _encryptedSide_BP     = tls_io_callbacks
-          , _availableData_BP     = mempty
-          , _sessionState_BP      = WaitingHandshake_BSS
-          , _tlsChannel_BP        = tls_channel_fptr
-          , _dataCame_BP          = data_came_mvar
-          , _selectedProtocol_BP  = Http11_HPV -- Filler
-          , _selfRef_BP           = botan_pad_stable_ref
+            _encryptedSide_BP      = tls_io_callbacks
+          , _availableData_BP      = mempty
+          , _sessionState_BP       = WaitingHandshake_BSS
+          , _tlsChannel_BP         = tls_channel_fptr
+          , _dataCame_BP           = data_came_mvar
+          , _handshakeCompleted_BP = handshake_completed_mvar
+          , _selectedProtocol_BP   = Http11_HPV -- Filler
+          , _selfRef_BP            = botan_pad_stable_ref
           }
+
+        tls_pull_data_action = tls_io_callbacks ^. bestEffortPullAction_IOC
+
+        pump :: IO ()
+        pump = do
+            new_data <- tls_pull_data_action True
+            Un.unsafeUseAsCStringLen new_data $ \ (pch, len) ->
+                iocba_botan_receive_data tls_channel_ptr pch len
+            pump
+
+    -- Create the pump thread
+    forkIO pump
 
     modifyMVar_ botan_pad_mvar (\ _ -> return new_botan_pad )
     mkWeakMVar botan_pad_mvar $ do
@@ -254,6 +271,13 @@ instance IOChannels BotanSession where
             -- TODO: Implement me!!!!!!!
             close_action :: CloseAction
             close_action = return ()
+
+        handshake_completed_mvar <- withMVar botan_pad_mvar ( \ botan_pad -> return (botan_pad ^. handshakeCompleted_BP ))
+
+        -- We will be waiting for the handshake...
+        readMVar handshake_completed_mvar
+
+
         return $ IOCallbacks {
             _pushAction_IOC = push_action
           , _pullAction_IOC = pull_action

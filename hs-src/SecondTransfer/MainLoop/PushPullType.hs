@@ -83,8 +83,10 @@ makeLenses ''IOCallbacks
 -- that they support, so we also create the following classes.
 
 -- | An object a which is IOChannels
---  This method should only be invoked once for the a instance.
 class IOChannels a where
+    -- | This method should only be invoked once for the a instance.
+    --   It will block/wait for any handshakes to complete, and only then
+    --   return a usable set of callbacks.
     handshake :: a -> IO IOCallbacks
 
 -- | Data exchanged through this channel is plain text
