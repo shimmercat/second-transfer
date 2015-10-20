@@ -1,35 +1,45 @@
 {-# LANGUAGE ExistentialQuantification, TemplateHaskell #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
-   -- | Functions for passing data to external parties
-   --   The callbacks here should have a blocking behavior and not
-   --   return empty results unless at end of file.
+               -- | Functions for passing data to external parties
+               --   The callbacks here should have a blocking behavior and not
+               --   return empty results unless at end of file.
 
-    PushAction
-    ,PullAction
-    ,BestEffortPullAction
-    ,Attendant
-    ,CloseAction
-    ,IOCallbacks(..)
+               -- * Fundamental types and accessors
+                 PushAction
+               , PullAction
+               , BestEffortPullAction
+               , Attendant
+               , CloseAction
+               , IOCallbacks(..)
 
-    ,pushAction_IOC
-    ,pullAction_IOC
-    ,closeAction_IOC
-    ,bestEffortPullAction_IOC
+               , pushAction_IOC
+               , pullAction_IOC
+               , closeAction_IOC
+               , bestEffortPullAction_IOC
 
-    -- $ classifiers
-    ,IOChannels         (..)
-    ,PlainTextIO
-    ,TLSEncryptedIO
-    ,TLSServerIO
-    ,TLSClientIO
-    ) where
+                 -- * Classifying IO callbacks
+                 -- $ classifiers
+               , IOChannels         (..)
+               , PlainTextIO
+               , TLSEncryptedIO
+               , TLSServerIO
+               , TLSClientIO
+
+               -- * Utility functions
+               , PullActionWrapping
+               , newPullActionWrapping
+               , pullFromWrapping
+       ) where
 
 
-import Control.Lens
+import           Control.Lens
 
-import qualified Data.ByteString              as B
-import qualified Data.ByteString.Lazy         as LB
+import           Data.IORef
+
+import qualified Data.ByteString                              as B
+import qualified Data.ByteString.Lazy                         as LB
+import qualified Data.ByteString.Builder                      as Bu
 
 -- | Callback type to push data to a channel. Part of this
 --   interface is the abstract exception type IOProblem. Throw an
@@ -51,6 +61,43 @@ type BestEffortPullAction = Bool -> IO B.ByteString
 --   pull from the medium. Barring exceptions, we always
 --   know how many bytes we are expecting with HTTP/2.
 type PullAction  = Int -> IO B.ByteString
+
+-- | Generic implementation of PullAction from BestEffortPullAction
+newtype PullActionWrapping = PullActionWrapping (IORef (Bu.Builder,Int), BestEffortPullAction)
+
+-- The type above contains stuff already read, its length and the the action
+
+newPullActionWrapping :: BestEffortPullAction -> IO PullActionWrapping
+newPullActionWrapping best_effort_pull_action = do
+    bu_ref <- newIORef (mempty, 0)
+    return $ PullActionWrapping (bu_ref, best_effort_pull_action)
+
+-- | The type of this function is also PullActionWrapping -> PullAction
+pullFromWrapping :: PullActionWrapping -> Int -> IO B.ByteString
+pullFromWrapping (PullActionWrapping (x, bepa)) n = do
+    (hathz, len) <- readIORef x
+    let
+        nn = fromIntegral n
+        pullData hathz' len' =
+            if n <= len'
+              then do
+                  let
+                      hathz_lb = Bu.toLazyByteString hathz'
+                      to_return = LB.toStrict . LB.take nn $ hathz_lb
+                      new_hazth = Bu.lazyByteString . LB.drop nn $ hathz_lb
+                  return (to_return, new_hazth, len' - n)
+              else do
+                  -- Need to read more
+                  more <- bepa True
+                  -- Append
+                  let
+                      new_len = len + B.length more
+                      new_hazth = hathz' `mappend` Bu.byteString more
+                  pullData new_hazth new_len
+    (to_return, new_hazth, new_len) <- pullData hathz len
+    writeIORef x (new_hazth, new_len)
+    return to_return
+
 
 -- | Callback that the session calls to realease resources
 --   associated with the channels. Take into account that your
