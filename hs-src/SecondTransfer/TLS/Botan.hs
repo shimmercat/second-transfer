@@ -66,13 +66,14 @@ withBotanPad :: BotanPadRef -> (BotanPad -> IO BotanPad ) -> IO ()
 withBotanPad siocb cb = deRefStablePtr siocb >>= (\ bpmvar -> modifyMVar_ bpmvar cb )
 
 foreign export ccall iocba_push :: BotanPadRef -> Ptr CChar -> Int -> IO ()
-iocba_push siocb p len = withBotanPad siocb $ \ botan_pad ->  do
-    let
-        push_action = botan_pad ^.  (encryptedSide_BP . pushAction_IOC )
-    let cstr = (p, fromIntegral len)
-    b <- B.packCStringLen cstr
-    push_action (LB.fromStrict b)
-    return botan_pad
+iocba_push siocb p len = do
+    withBotanPad siocb $ \ botan_pad ->  do
+        let
+            push_action = botan_pad ^.  (encryptedSide_BP . pushAction_IOC )
+        let cstr = (p, fromIntegral len)
+        b <- B.packCStringLen cstr
+        push_action (LB.fromStrict b)
+        return botan_pad
 
 
 foreign export ccall iocba_set_protocol :: BotanPadRef -> Int -> IO ()
@@ -107,11 +108,10 @@ iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
 
 -- Botan relies a wealth of information here, not using at the moment :-(
 foreign export ccall iocba_handshake_cb :: BotanPadRef -> IO ()
-iocba_handshake_cb siocb = withBotanPad siocb $ \botan_pad -> do
-    let
-        session_state = botan_pad ^. sessionState_BP
-    tryPutMVar (botan_pad ^. handshakeCompleted_BP) ()
-    return $ set sessionState_BP Functioning_BSS botan_pad
+iocba_handshake_cb siocb = do
+  withBotanPad siocb $ \botan_pad -> do
+      tryPutMVar (botan_pad ^. handshakeCompleted_BP) ()
+      return $ set sessionState_BP Functioning_BSS botan_pad
 
 
 foreign import ccall iocba_cleartext_push :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
@@ -124,7 +124,7 @@ foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_
 
 foreign import ccall "wrapper" mkTlsServerDeleter :: (BotanTLSChannelPtr -> IO ()) -> IO (FunPtr ( BotanTLSChannelPtr -> IO () ) )
 
-foreign import ccall iocba_botan_receive_data :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
+foreign import ccall iocba_receive_data :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
 
 
 botanPushData :: MVar BotanPad -> LB.ByteString -> IO ()
@@ -242,14 +242,17 @@ unencryptChannelData botan_ctx@(BotanTLSContext fctx) tls_data  = do
         pump :: IO ()
         pump = do
             new_data <- tls_pull_data_action True
+            --putStrLn "InjectingData"
+            --putStrLn $ "Length "
             Un.unsafeUseAsCStringLen new_data $ \ (pch, len) ->
-                iocba_botan_receive_data tls_channel_ptr pch len
+                iocba_receive_data tls_channel_ptr pch len
+            --putStrLn "ReturnFromInject"
             pump
 
     -- Create the pump thread
     forkIO pump
 
-    modifyMVar_ botan_pad_mvar (\ _ -> return new_botan_pad )
+    putMVar botan_pad_mvar new_botan_pad
     mkWeakMVar botan_pad_mvar $ do
         freeStablePtr botan_pad_stable_ref
 

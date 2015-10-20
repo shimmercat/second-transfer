@@ -1,6 +1,19 @@
 
 #include <functional>
+
+#ifdef INCLUDE_BOTAN_ALL_H
 #include "botan_all.h"
+#else
+#include <botan/botan.h>
+#include <botan/tls_session.h>
+#include <botan/tls_alert.h>
+#include <botan/tls_policy.h>
+#include <botan/credentials_manager.h>
+#include <botan/tls_channel.h>
+#include <botan/pkcs8.h>
+#include <botan/tls_session_manager.h>
+#include <botan/tls_server.h>
+#endif
 
 #include "../SecondTransfer/TLS/Botan_stub.h"
 
@@ -25,7 +38,6 @@ void alert_cb (void* botan_pad_ref, Botan::TLS::Alert const& alert, const unsign
     if (alert.is_valid() && alert.is_fatal() )
     {
         // TODO: Propagate this softly.
-        printf("ALERT FATAL");
         iocba_alert_cb(botan_pad_ref, -1);
     } // Else: don't care
 }
@@ -37,17 +49,64 @@ bool handshake_cb(void* botan_pad_ref, const Botan::TLS::Session&)
     return false;
 }
 
+// TODO: We can use stronger ciphers here. For now let's go simple 
 class HereTLSPolicy: public Botan::TLS::Policy {
 public:
-    virtual bool acceptable_protocol_version(Botan::TLS::Protocol_Version const& v) 
+    virtual bool acceptable_protocol_version(const Botan::TLS::Protocol_Version& v)
     {
         return v == Botan::TLS::Protocol_Version::TLS_V12;
     }
+
+    virtual std::vector<std::string> allowed_macs() const
+    {
+        std::vector<std::string> result;
+        result.push_back("AEAD");
+        result.push_back("SHA-384");
+        result.push_back("SHA-256");
+        return result;
+    }
+
+    virtual std::vector<std::string> allowed_ciphers() const
+    {
+        std::vector<std::string> result;
+        result.push_back("ChaCha20Poly1305");
+        result.push_back("AES-256/GCM");
+        result.push_back("AES-128/GCM");
+        result.push_back("Camellia-256/GCM");
+        result.push_back("AES-256/OCB(12)");
+        result.push_back("AES-256/CCM");
+        return result;
+    }
+
+    virtual std::vector<std::string> allowed_key_exchange_methods() const
+    {
+        std::vector<std::string> result;
+        result.push_back("ECDH");
+        result.push_back("DH");
+        result.push_back("RSA");
+        return result;
+    }
+
+    virtual std::vector<std::string> allowed_signature_hashes() const
+    {
+        std::vector<std::string> result;
+        result.push_back("SHA-256");
+        return result;
+    }
+
+    virtual std::vector<std::string> allowed_signature_methods() const
+    {
+        std::vector<std::string> result;
+        result.push_back("RSA");
+        return result;
+    }
+
 };
 
 // TODO: We can use different certificates if needs come....
 class HereCredentialsManager: public Botan::Credentials_Manager {
     Botan::X509_Certificate cert;
+    std::vector<Botan::X509_Certificate> certs;
     Botan::Private_Key* privkey;
 public:
     HereCredentialsManager(
@@ -57,16 +116,24 @@ public:
         ):
             cert(cert_filename)
     {
+        certs.push_back(cert);
         privkey = Botan::PKCS8::load_key(
-            privkey_filename, rng);
+            privkey_filename, rng
+        );
     }
+
     virtual std::vector<
         Botan::X509_Certificate > cert_chain(
             const std::vector< std::string >&,
             const std::string&,
             const std::string& )
     {
-        
+        return certs;
+    }
+
+    virtual Botan::Private_Key*  private_key_for(const Botan::X509_Certificate &cert, const std::string & type, const std::string &context)
+    {
+        return privkey;
     }
 
     ~HereCredentialsManager()
@@ -84,14 +151,14 @@ std::string defaultProtocolSelector(std::vector<std::string> const& prots)
         {
             return prots[i];
         }
-    } 
+    }
     printf("Defaulting to protocol: %s \n", prots[0].c_str() );
     return prots[0];
 }
 
 } // namespace
 
-extern "C" void botan_receive_data(
+extern "C" void iocba_receive_data(
     void* tls_channel,
     char* data,
     int length )
@@ -101,7 +168,7 @@ extern "C" void botan_receive_data(
 }
 
 extern "C" void iocba_cleartext_push(
-    void* tls_channel, 
+    void* tls_channel,
     char* data,
     int length )
 {
@@ -117,6 +184,7 @@ struct botan_tls_context_t {
     Botan::TLS::Session_Manager_In_Memory* session_manager;
     Botan::AutoSeeded_RNG* rng;
     std::vector<std::string> protocols;
+    second_transfer::HereTLSPolicy here_tls_policty;
 };
 
 extern "C" botan_tls_context_t* iocba_make_tls_context(
@@ -128,12 +196,13 @@ extern "C" botan_tls_context_t* iocba_make_tls_context(
     std::vector< std::string > protocols;
     protocols.push_back("h2");
     protocols.push_back("http/1.1");
-    
+
     return new botan_tls_context_t{
         second_transfer::HereCredentialsManager(cert_filename, privkey_filename, rng), 
         new Botan::TLS::Session_Manager_In_Memory(rng),
         new Botan::AutoSeeded_RNG(),
-        protocols
+        protocols,
+        second_transfer::HereTLSPolicy()
     };
 }
 
@@ -150,7 +219,7 @@ extern "C" void* iocba_new_tls_server_channel (
        botan_tls_context_t* ctx,
        int protocol_select)
 {
-    auto* server = 
+    auto* server =
         new Botan::TLS::Server(
             std::bind(second_transfer::output_dn_cb, botan_pad_ref, std::placeholders::_1, std::placeholders::_2),
             std::bind(second_transfer::data_cb, botan_pad_ref, std::placeholders::_1, std::placeholders::_2),
@@ -158,7 +227,7 @@ extern "C" void* iocba_new_tls_server_channel (
             std::bind(second_transfer::handshake_cb, botan_pad_ref, std::placeholders::_1),
             *(ctx->session_manager),
             ctx->credentials_manager,
-            second_transfer::HereTLSPolicy(),
+            ctx->here_tls_policty,
             *(ctx->rng),
             &second_transfer::defaultProtocolSelector
         );

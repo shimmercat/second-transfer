@@ -77,11 +77,13 @@ library
                   -- here for the sake of the test suite. They are hidden
                   -- from the documentation.
                   , SecondTransfer.MainLoop.Internal
-                  , SecondTransfer.MainLoop.PushPullType
                   , SecondTransfer.Sessions
                   , SecondTransfer.Sessions.Config
                   , SecondTransfer.Http1.Parse
+                  -- TODO: Most of these should be moved back to "other-modules"
+                  , SecondTransfer.MainLoop.PushPullType
                   , SecondTransfer.MainLoop.SocketServer
+                  , SecondTransfer.TLS.Botan
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.Protocol
@@ -91,7 +93,6 @@ library
                 , SecondTransfer.MainLoop.ClientPetitioner
                 , SecondTransfer.Sessions.Internal
 
-                , SecondTransfer.TLS.Botan
 
                 , SecondTransfer.MainLoop.OpenSSL_TLS
                 , SecondTransfer.Utils
@@ -108,15 +109,11 @@ library
 
   default-extensions: CPP
 
-  if flag(debug)
-    CPP-Options: -DENABLE_DEBUG
-    if !os(windows)
-      CC-Options: "-DDEBUG"
-    else
-      CC-Options: "-DNDEBUG"
+  if flag(fastc)
+     CPP-Options: -DINCLUDE_BOTAN_H -I/usr/local/include/botan-1.11/
+  else
+     CPP-Options: -DINCLUDE_BOTAN_ALL_H
 
-  if impl(ghc >= 7.10)
-    CPP-Options: -DIMPLICIT_MONOID -DIMPLICIT_APPLICATIVE_FOLDABLE
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -157,6 +154,7 @@ library
   -- commonly installed. Update this path in your build
   -- or otherwise your build will be broken.
   include-dirs: /opt/openssl-1.0.2/include
+              , /usr/local/include/botan-1.11
 
 
   if flag(debug)
@@ -187,7 +185,7 @@ library
   -- It should point to openssl 1.0.2 or greater. See note for
   -- include-dirs above.
   extra-lib-dirs: /opt/openssl-1.0.2/lib
-                , /usr/local/lib 
+                , /usr/local/lib
 
   include-dirs: macros/
 

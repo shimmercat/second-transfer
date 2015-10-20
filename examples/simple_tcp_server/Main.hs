@@ -2,7 +2,7 @@
 module Main where
 
 import Control.Exception
-import Control.Concurrent                                  
+import Control.Concurrent 
 import Control.Lens               ( (^.) )
 
 import qualified                  Data.ByteString  as B
@@ -19,7 +19,7 @@ simpleEcho pre_callbacks =  do
   where
     work :: IOCallbacks -> IO ()
     work cb = do
-        let 
+        let
             bepa = cb ^. bestEffortPullAction_IOC
             on_finish :: NoMoreDataException -> IO (Maybe B.ByteString)
             on_finish _ = return Nothing
@@ -31,6 +31,7 @@ simpleEcho pre_callbacks =  do
             Nothing -> do
                 putStrLn "Connection closed"
                 return ()
-main = do 
+
+main = do
     listen_socket <- createAndBindListeningSocket "127.0.0.1" 8090
     tlsServe listen_socket simpleEcho
