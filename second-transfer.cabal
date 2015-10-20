@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.7.1.0
+version     :              0.8.0.1
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -50,6 +50,10 @@ Flag fastc
   Description: Enable fast use of c libraries
   Default: False
 
+Flag misc-executables
+  Description: Compile helpers for development
+  Default: False
+
 source-repository head
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
@@ -57,7 +61,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.7.1.0
+  tag:      0.8.0.1
 
 library
 
@@ -73,18 +77,18 @@ library
                   -- here for the sake of the test suite. They are hidden
                   -- from the documentation.
                   , SecondTransfer.MainLoop.Internal
+                  , SecondTransfer.MainLoop.PushPullType
                   , SecondTransfer.Sessions
                   , SecondTransfer.Sessions.Config
                   , SecondTransfer.Http1.Parse
+                  , SecondTransfer.MainLoop.SocketServer
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
-                , SecondTransfer.MainLoop.PushPullType
                 , SecondTransfer.MainLoop.Protocol
                 , SecondTransfer.MainLoop.Tokens
                 , SecondTransfer.MainLoop.Framer
                 , SecondTransfer.MainLoop.Logging
                 , SecondTransfer.MainLoop.ClientPetitioner
-
                 , SecondTransfer.Sessions.Internal
 
                 , SecondTransfer.TLS.Botan
@@ -150,7 +154,7 @@ library
 
   -- NOTE: Very specific directory with the version of openssl
   -- that I'm using. As of February 2015-- openssl 1.0.2 is not
-  -- commonly installed. Update this path in your build 
+  -- commonly installed. Update this path in your build
   -- or otherwise your build will be broken.
   include-dirs: /opt/openssl-1.0.2/include
 
@@ -183,6 +187,7 @@ library
   -- It should point to openssl 1.0.2 or greater. See note for
   -- include-dirs above.
   extra-lib-dirs: /opt/openssl-1.0.2/lib
+                , /usr/local/lib 
 
   include-dirs: macros/
 

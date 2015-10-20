@@ -5,7 +5,7 @@ module SecondTransfer.MainLoop.ClientPetitioner(
 
 --import           Control.Lens
 --import           Data.Conduit
-import qualified Data.ByteString                                    as B
+-- import qualified Data.ByteString                                    as B
 
 
 import SecondTransfer.MainLoop.CoherentWorker                       (Headers,InputDataStream)

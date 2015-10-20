@@ -8,3 +8,7 @@ cabal.sandbox.config
 /env-scripts/specific
 \#*\#
 \.\#*
+examples/**/*.hi
+examples/**/*.o
+examples/**/Main
+examples/simple_tcp_server/simple_tcp_server

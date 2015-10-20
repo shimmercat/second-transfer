@@ -1,4 +1,4 @@
-{-# LANGUAGE ExistentialQuantification, TemplateHaskell #-}
+{-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.MainLoop.PushPullType (
                -- | Functions for passing data to external parties
@@ -12,6 +12,7 @@ module SecondTransfer.MainLoop.PushPullType (
                , Attendant
                , CloseAction
                , IOCallbacks(..)
+               , NoMoreDataException(..)
 
                , pushAction_IOC
                , pullAction_IOC
@@ -34,8 +35,12 @@ module SecondTransfer.MainLoop.PushPullType (
 
 
 import           Control.Lens
+import           Control.Exception
+
+import           SecondTransfer.Exception                    (IOProblem(..))
 
 import           Data.IORef
+import           Data.Typeable
 
 import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
@@ -113,17 +118,33 @@ data IOCallbacks = IOCallbacks {
     _pushAction_IOC               :: PushAction,
     -- | get exactly this much data from the channel. This function can
     --   be used by HTTP/2 since lengths are pretty well built inside the
-    --   protocoll itself.
+    --   protocoll itself. An exception of type NoMoreDataException can be
+    --   raised from here inside if the channel is closed. This is done to
+    --   notify the caller that there is no more data. The alternative
+    --   would be to return an empty string, but that looks more hazardous
+    --   for the caller.
     _pullAction_IOC               :: PullAction,
     -- | pull data from the channel, as much as the TCP stack wants to provide.
     --   we have no option but use this one when talking HTTP/1.1, where the best
     --   way to know the length is to scan until a Content-Length is found.
+    --   This will also raise NoMoreDataException when there is no more data.
+    --   Notice that with argument False, this may return an empty string.
     _bestEffortPullAction_IOC     :: BestEffortPullAction,
     -- | this is called when we wish to close the channel.
     _closeAction_IOC              :: CloseAction
     }
 
 makeLenses ''IOCallbacks
+
+
+data NoMoreDataException = NoMoreDataException
+    deriving (Show, Typeable)
+
+instance Exception NoMoreDataException where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem  a <- fromException x
+        cast a
 
 -- $classifiers
 -- Sometimes we need to classify the IO callbacks according to the operations
@@ -138,7 +159,7 @@ class IOChannels a where
 
 -- | Data exchanged through this channel is plain text
 class IOChannels a => PlainTextIO a
--- | Data exchanges through this channel is the data of a TLS session
+-- | Data exchanged through this channel is the data of a TLS session
 class IOChannels a => TLSEncryptedIO a
 -- | The agent putting and retrieving data in this side of the channel should
 --   behave as a TLS server

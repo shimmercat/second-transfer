@@ -190,7 +190,6 @@ instance Exception IOProblem
 data GenericIOProblem = GenericIOProblem
     deriving (Show, Typeable)
 
-
 instance Exception GenericIOProblem where
     toException = toException . IOProblem
     fromException x = do
