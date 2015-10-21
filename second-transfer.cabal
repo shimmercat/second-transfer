@@ -93,7 +93,6 @@ library
                 , SecondTransfer.MainLoop.ClientPetitioner
                 , SecondTransfer.Sessions.Internal
 
-
                 , SecondTransfer.MainLoop.OpenSSL_TLS
                 , SecondTransfer.Utils
 
