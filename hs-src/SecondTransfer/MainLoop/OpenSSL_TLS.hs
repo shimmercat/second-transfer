@@ -13,9 +13,7 @@ import           Control.Monad
 import           Control.Concurrent.MVar
 import           Control.Exception
 import qualified Control.Exception  as      E
-#ifndef IMPLICIT_APPLICATIVE_FOLDABLE
-import           Data.Foldable              (foldMap)
-#endif
+
 import           Data.Typeable
 import           Data.Monoid                ()
 import           Foreign
@@ -27,11 +25,10 @@ import           Data.ByteString.Char8      (pack)
 import qualified Data.ByteString.Lazy       as LB
 import qualified Data.ByteString.Unsafe     as BU
 
--- import           System.Log.Logger
-
 import           SecondTransfer.MainLoop.PushPullType
 import           SecondTransfer.MainLoop.Logging (logit)
 import           SecondTransfer.Exception
+import           SecondTransfer.TLS.Types        (FinishRequest)
 
 #include "Logging.cpphs"
 
@@ -53,12 +50,6 @@ data InterruptibleEither a b =
     Left_I a
     |Right_I b
     |Interrupted
-
-
--- | Singleton type. Used in conjunction with an `MVar`. If the MVar is full,
---   the fuction `tlsServeWithALPNAndFinishOnRequest` knows that it should finish
---   at its earliest convenience and call the `CloseAction` for any open sessions.
-data FinishRequest = FinishRequest
 
 
 -- These names are absolutely improper....

@@ -89,6 +89,7 @@ tcpServe  listen_socket action =
             (do
                 action new_socket
             )
+            -- TODO: Have to see this fail sometime
             ( (\ e -> putStrLn $ show e) :: E.SomeException -> IO ())
         accept_loop bind_socket
 
@@ -109,13 +110,18 @@ tlsServe listen_socket tls_action =
 socketIOCallbacks :: NS.Socket -> IO SocketIOCallbacks
 socketIOCallbacks socket = do
     let
-        push_action lazy_bs = NSB.sendMany socket . LB.toChunks $ lazy_bs
+        uhandler = ((\ _ -> E.throwIO NoMoreDataException ) :: E.SomeException -> IO a )
+
+        push_action lazy_bs =
+            E.catch
+                (NSB.sendMany socket . LB.toChunks $ lazy_bs)
+                uhandler
         -- Unfortunately we are forced to totally rely on sockets blocking or not nature
         -- TODO:  Check if ignoring the flag here becomes a problem.
         best_effort_pull_action _ = do
-            datum <- NSB.recv socket 4096
+            datum <- E.catch (NSB.recv socket 4096) uhandler
             if B.length datum == 0
-                then
+                then do
                    E.throwIO NoMoreDataException
                 else
                    return datum
