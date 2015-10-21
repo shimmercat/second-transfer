@@ -28,6 +28,7 @@ import qualified Network.Socket.ByteString                          as NSB
 
 
 import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.Exception                           (NoMoreDataException(..))
 
 
 -- | IOCallbacks around an active socket

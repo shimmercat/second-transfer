@@ -12,7 +12,6 @@ module SecondTransfer.MainLoop.PushPullType (
                , Attendant
                , CloseAction
                , IOCallbacks(..)
-               , NoMoreDataException(..)
 
                , pushAction_IOC
                , pullAction_IOC
@@ -35,12 +34,10 @@ module SecondTransfer.MainLoop.PushPullType (
 
 
 import           Control.Lens
-import           Control.Exception
 
-import           SecondTransfer.Exception                    (IOProblem(..))
 
 import           Data.IORef
-import           Data.Typeable
+--import           Data.Typeable
 
 import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
@@ -136,15 +133,6 @@ data IOCallbacks = IOCallbacks {
 
 makeLenses ''IOCallbacks
 
-
-data NoMoreDataException = NoMoreDataException
-    deriving (Show, Typeable)
-
-instance Exception NoMoreDataException where
-    toException = toException . IOProblem
-    fromException x = do
-        IOProblem  a <- fromException x
-        cast a
 
 -- $classifiers
 -- Sometimes we need to classify the IO callbacks according to the operations

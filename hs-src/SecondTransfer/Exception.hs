@@ -4,26 +4,27 @@ Module      : SecondTransfer.Exception
 -}
 module SecondTransfer.Exception (
     -- * Exceptions thrown by the HTTP/2 sessions
-    HTTP2SessionException (..)
-    ,FramerException (..)
-    ,BadPrefaceException (..)
-    ,HTTP11Exception (..)
-    ,HTTP11SyntaxException (..)
-    ,ClientSessionAbortedException(..)
-    ,HTTP500PrecursorException (..)
-    ,ConnectionCloseReason(..)
+    HTTP2SessionException                        (..)
+    ,FramerException                             (..)
+    ,BadPrefaceException                         (..)
+    ,HTTP11Exception                             (..)
+    ,HTTP11SyntaxException                       (..)
+    ,ClientSessionAbortedException               (..)
+    ,HTTP500PrecursorException                   (..)
+    ,ConnectionCloseReason                       (..)
     ,convertHTTP500PrecursorExceptionToException
     ,getHTTP500PrecursorExceptionFromException
-    ,ContentLengthMissingException (..)
+    ,ContentLengthMissingException               (..)
 
     -- * Exceptions related to the IO layer
-    ,IOProblem(..)
-    ,GenericIOProblem(..)
-    ,StreamCancelledException(..)
+    ,IOProblem                                   (..)
+    ,GenericIOProblem                            (..)
+    ,StreamCancelledException                    (..)
+    ,NoMoreDataException                         (..)
 
 
     -- * Internal exceptions
-    ,HTTP2ProtocolException(..)
+    ,HTTP2ProtocolException                      (..)
     ) where
 
 import           Control.Exception
@@ -183,6 +184,17 @@ instance  Show IOProblem where
     show (IOProblem e) = show e
 
 instance Exception IOProblem
+
+-- | This is raised by the IOCallbacks when the endpoint
+--   is not willing to return or to accept more data
+data NoMoreDataException = NoMoreDataException
+    deriving (Show, Typeable)
+
+instance Exception NoMoreDataException where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem  a <- fromException x
+        cast a
 
 -- | A concrete case of the above exception. Throw one of this
 --   if you don't want to implement your own type. Use

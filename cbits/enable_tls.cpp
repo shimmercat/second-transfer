@@ -101,6 +101,12 @@ public:
         return result;
     }
 
+    // This is experimental, may need to change.
+    virtual bool server_uses_own_ciphersuite_preferences() const
+    {
+        return true;
+    }
+
 };
 
 // TODO: We can use different certificates if needs come....
@@ -142,18 +148,23 @@ public:
     }
 };
 
-std::string defaultProtocolSelector(std::vector<std::string> const& prots) 
+std::string defaultProtocolSelector(void* botan_pad_ref, std::vector<std::string> const& prots)
 {
+    std::string pass_to_haskell;
+    bool is_first = true;
     for (int i=0; i < prots.size(); i++ )
     {
-        printf( "Prot offered: %s \n", prots[i].c_str() );
-        if ( prots[i] == "h2" )
+        if ( is_first )
         {
-            return prots[i];
+            is_first=false;
+        } else
+        {
+            pass_to_haskell += '\0';
         }
+        pass_to_haskell += prots[i];
     }
-    printf("Defaulting to protocol: %s \n", prots[0].c_str() );
-    return prots[0];
+    int idx = iocba_select_protocol_cb( botan_pad_ref, (void*)pass_to_haskell.c_str(), pass_to_haskell.size());
+    return prots[idx];
 }
 
 } // namespace
@@ -194,6 +205,8 @@ extern "C" botan_tls_context_t* iocba_make_tls_context(
 {
     Botan::AutoSeeded_RNG rng;
     std::vector< std::string > protocols;
+
+    // Not sure what is this good for....
     protocols.push_back("h2");
     protocols.push_back("http/1.1");
 
@@ -229,7 +242,7 @@ extern "C" void* iocba_new_tls_server_channel (
             ctx->credentials_manager,
             ctx->here_tls_policty,
             *(ctx->rng),
-            &second_transfer::defaultProtocolSelector
+            std::bind(second_transfer::defaultProtocolSelector, botan_pad_ref, std::placeholders::_1)
         );
     return server;
 }

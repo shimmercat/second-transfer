@@ -5,15 +5,18 @@ module SecondTransfer.TLS.Botan (
                 , newBotanTLSContext
        ) where
 
-import           Control.Monad                                             (when)
+--import           Control.Monad                                             (when)
 import           Control.Concurrent
-import           Control.Concurrent.MVar
+--import           Control.Concurrent.MVar
+import qualified Control.Exception                                         as E
 
 import           Foreign
 import           Foreign.C.Types                                           (CChar)
 import           Foreign.C.String                                          (CString)
 
-import           Data.IORef
+import           Data.List                                                 (elemIndex)
+import           Data.Maybe                                                (fromMaybe)
+--import           Data.IORef
 import qualified Data.ByteString                                           as B
 import qualified Data.ByteString.Builder                                   as Bu
 import qualified Data.ByteString.Lazy                                      as LB
@@ -23,7 +26,8 @@ import           Control.Lens                                              ( (^.
 
 -- Import all of it!
 import           SecondTransfer.MainLoop.PushPullType
-import           SecondTransfer.MainLoop.Protocol                          ( HttpProtocolVersion(..) )
+--import           SecondTransfer.MainLoop.Protocol                          ( HttpProtocolVersion(..) )
+import           SecondTransfer.Exception                                  ( IOProblem )
 
 data BotanTLSChannel
 
@@ -46,8 +50,9 @@ data BotanPad = BotanPad {
   , _tlsChannel_BP         :: BotanTLSChannelFPtr
   , _dataCame_BP           :: MVar ()
   , _handshakeCompleted_BP :: MVar ()
-  , _selectedProtocol_BP   :: HttpProtocolVersion
-  , _selfRef_BP            :: BotanPadRef
+  , _protocolSelector_BP   :: B.ByteString -> IO (Int, B.ByteString)
+  , _selectedProtocol_BP   :: (Int, B.ByteString)
+  , _problem_BP            :: MVar IOProblem
     }
 
 type BotanPadRef = StablePtr (MVar BotanPad)
@@ -58,30 +63,35 @@ newtype BotanSession = BotanSession (MVar BotanPad)
 
 data BotanTLSContextAbstract
 
-type BotanTLSContextPtr = Ptr BotanTLSContextAbstract
+type BotanTLSContextCSidePtr = Ptr BotanTLSContextAbstract
 
-newtype BotanTLSContext = BotanTLSContext (ForeignPtr BotanTLSContextAbstract)
+type BotanTLSContextCSideFPtr = ForeignPtr BotanTLSContextAbstract
+
+type ProtocolSelector = [B.ByteString] -> IO B.ByteString
+
+data BotanTLSContext = BotanTLSContext {
+    _cppSide_BTC          :: BotanTLSContextCSideFPtr
+  , _protocolSelector_BTC :: ProtocolSelector
+    }
+
+makeLenses ''BotanTLSContext
+
 
 withBotanPad :: BotanPadRef -> (BotanPad -> IO BotanPad ) -> IO ()
 withBotanPad siocb cb = deRefStablePtr siocb >>= (\ bpmvar -> modifyMVar_ bpmvar cb )
 
+withBotanPadR :: BotanPadRef -> (BotanPad -> IO (BotanPad,a) ) -> IO a
+withBotanPadR siocb cb = deRefStablePtr siocb >>= (\ bpmvar -> modifyMVar bpmvar cb )
+
 foreign export ccall iocba_push :: BotanPadRef -> Ptr CChar -> Int -> IO ()
 iocba_push siocb p len = do
-    withBotanPad siocb $ \ botan_pad ->  do
+    push_action <- withBotanPadR siocb $ \ botan_pad ->  do
         let
             push_action = botan_pad ^.  (encryptedSide_BP . pushAction_IOC )
-        let cstr = (p, fromIntegral len)
-        b <- B.packCStringLen cstr
-        push_action (LB.fromStrict b)
-        return botan_pad
-
-
-foreign export ccall iocba_set_protocol :: BotanPadRef -> Int -> IO ()
-iocba_set_protocol siocb prt = withBotanPad siocb $ \ botan_pad -> do
-    let
-        used_protocol = toEnum prt
-        new_botan_pad = set selectedProtocol_BP used_protocol botan_pad
-    return new_botan_pad
+        return (botan_pad, push_action)
+    let cstr = (p, fromIntegral len)
+    b <- B.packCStringLen cstr
+    push_action (LB.fromStrict b)
 
 
 foreign export ccall iocba_data_cb :: BotanPadRef -> Ptr CChar -> Int -> IO ()
@@ -114,27 +124,50 @@ iocba_handshake_cb siocb = do
       return $ set sessionState_BP Functioning_BSS botan_pad
 
 
+foreign export ccall iocba_select_protocol_cb :: BotanPadRef -> Ptr CChar -> Int -> IO Int
+iocba_select_protocol_cb siocb p len = withBotanPadR siocb $ \ botan_pad -> do
+    let
+        cstr = (p, fromIntegral len)
+        selector = botan_pad ^. protocolSelector_BP
+    b <- B.packCStringLen cstr
+    cp@(chosen_protocol_int, _chosen_protocol_str) <- selector b
+    let
+
+        new_botan_pad = set selectedProtocol_BP cp botan_pad
+    return (new_botan_pad, chosen_protocol_int)
+
+
 foreign import ccall iocba_cleartext_push :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
 
-foreign import ccall "&iocba_delete_tls_context" iocba_delete_tls_context :: FunPtr( BotanTLSContextPtr -> IO () )
+foreign import ccall "&iocba_delete_tls_context" iocba_delete_tls_context :: FunPtr( BotanTLSContextCSidePtr -> IO () )
 
-foreign import ccall iocba_make_tls_context :: CString -> CString -> IO BotanTLSContextPtr
+foreign import ccall iocba_make_tls_context :: CString -> CString -> IO BotanTLSContextCSidePtr
 
 foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_channel :: FunPtr( BotanTLSChannelPtr -> IO () )
 
-foreign import ccall "wrapper" mkTlsServerDeleter :: (BotanTLSChannelPtr -> IO ()) -> IO (FunPtr ( BotanTLSChannelPtr -> IO () ) )
+--foreign import ccall "wrapper" mkTlsServerDeleter :: (BotanTLSChannelPtr -> IO ()) -> IO (FunPtr ( BotanTLSChannelPtr -> IO () ) )
 
 foreign import ccall iocba_receive_data :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
 
 
 botanPushData :: MVar BotanPad -> LB.ByteString -> IO ()
-botanPushData botan_pad_mvar datum = withMVar botan_pad_mvar $ \botan_pad -> do
+botanPushData botan_pad_mvar datum = do
     let
         strict_datum = LB.toStrict datum
-        channel = botan_pad ^. tlsChannel_BP
-    Un.unsafeUseAsCStringLen strict_datum $ \ (pch, len) -> do
-      withForeignPtr channel $ \ c ->
-         iocba_cleartext_push c pch len
+    (maybe_problem, channel) <- withMVar botan_pad_mvar $ \botan_pad -> do
+        let
+            channel = botan_pad ^. tlsChannel_BP
+            problem_mvar = botan_pad ^. problem_BP
+        mp <- tryReadMVar problem_mvar
+        return (mp, channel)
+    case maybe_problem of
+        Nothing ->
+            Un.unsafeUseAsCStringLen strict_datum $ \ (pch, len) -> do
+              withForeignPtr channel $ \ c ->
+                 iocba_cleartext_push c pch len
+
+        Just problem ->
+            E.throwIO problem
 
 
 -- Bad things will happen if serveral threads are calling this concurrently!!
@@ -152,7 +185,13 @@ pullAvailableData botan_pad_mvar can_wait = do
                 let
                     new_botan_pad = set availableData_BP mempty botan_pad
                     datum = LB.toStrict . Bu.toLazyByteString . (^. availableData_BP) $ botan_pad
-                return (new_botan_pad, datum)
+                    had_problem_mvar = botan_pad ^. problem_BP
+                maybe_had_problem <- tryReadMVar had_problem_mvar
+                case maybe_had_problem of
+                    Nothing ->
+                        return (new_botan_pad, datum)
+                    Just problem ->
+                        E.throwIO problem
     if can_wait
       then do
         readMVar data_came_mvar
@@ -182,6 +221,7 @@ pullCountOfData botan_pad_mvar cnt = do
             let
                available_bu = (botan_pad ^. availableData_BP)
                datum = Bu.toLazyByteString available_bu
+               had_problem_mvar = botan_pad ^. problem_BP
                len_datum :: Int64
                len_datum = fromIntegral . LB.length $ datum
                (set_back_bu, use, new_n)   |   len_datum <= n       =  (mempty, available_bu, n - len_datum)
@@ -190,7 +230,12 @@ pullCountOfData botan_pad_mvar cnt = do
                                                                        , 0 )
                new_botan_pad = set availableData_BP set_back_bu botan_pad
                new_gotten = gotten `mappend` use
-            return (new_botan_pad, (new_gotten, new_n))
+            maybe_had_problem <- tryReadMVar had_problem_mvar
+            case maybe_had_problem of
+                Nothing ->
+                    return (new_botan_pad, (new_gotten, new_n))
+                Just problem ->
+                    E.throwIO problem
         if nn == 0
             then return ng
         else
@@ -199,22 +244,36 @@ pullCountOfData botan_pad_mvar cnt = do
 
 foreign import ccall iocba_new_tls_server_channel ::
      BotanPadRef
-     -> BotanTLSContextPtr
+     -> BotanTLSContextCSidePtr
      -> Int          -- protocol selection policty
      -> IO BotanTLSChannelPtr
 
 
-newBotanTLSContext :: RawFilePath -> RawFilePath ->  IO BotanTLSContext
-newBotanTLSContext cert_filename privkey_filename = do
+protocolSelectorToC :: ProtocolSelector -> B.ByteString -> IO (Int, B.ByteString)
+protocolSelectorToC prot_sel flat_protocols = do
+    let
+        protocol_list =  B.split 0 flat_protocols
+    selected <- prot_sel protocol_list
+    let
+        maybe_idx = elemIndex selected protocol_list
+    return (fromMaybe 0 maybe_idx, selected)
+
+newBotanTLSContext :: RawFilePath -> RawFilePath -> ProtocolSelector ->  IO BotanTLSContext
+newBotanTLSContext cert_filename privkey_filename prot_sel = do
+    let
+
     B.useAsCString cert_filename $ \ s1 ->
         B.useAsCString privkey_filename $ \ s2 -> do
             ctx_ptr <-  iocba_make_tls_context s1 s2
             x <- newForeignPtr iocba_delete_tls_context ctx_ptr
-            return $ BotanTLSContext x
+            return $ BotanTLSContext x prot_sel
 
 
 unencryptChannelData :: TLSServerIO a =>  BotanTLSContext -> a -> IO BotanSession
-unencryptChannelData botan_ctx@(BotanTLSContext fctx) tls_data  = do
+unencryptChannelData botan_ctx tls_data  = do
+    let
+        fctx = botan_ctx ^. cppSide_BTC
+        protocol_selector = botan_ctx ^. protocolSelector_BTC
     botan_pad_mvar <- newEmptyMVar
     botan_pad_stable_ref <- newStablePtr botan_pad_mvar
 
@@ -224,6 +283,8 @@ unencryptChannelData botan_ctx@(BotanTLSContext fctx) tls_data  = do
     tls_io_callbacks <- handshake tls_data
     data_came_mvar <- newEmptyMVar
     handshake_completed_mvar <- newEmptyMVar
+    problem_mvar <- newEmptyMVar
+
 
     let
         new_botan_pad = BotanPad {
@@ -233,21 +294,29 @@ unencryptChannelData botan_ctx@(BotanTLSContext fctx) tls_data  = do
           , _tlsChannel_BP         = tls_channel_fptr
           , _dataCame_BP           = data_came_mvar
           , _handshakeCompleted_BP = handshake_completed_mvar
-          , _selectedProtocol_BP   = Http11_HPV -- Filler
-          , _selfRef_BP            = botan_pad_stable_ref
+          , _protocolSelector_BP   = protocolSelectorToC protocol_selector
+          , _selectedProtocol_BP   = (0, mempty) -- Filler
+          , _problem_BP            = problem_mvar
           }
 
         tls_pull_data_action = tls_io_callbacks ^. bestEffortPullAction_IOC
 
+        pump_exc_handler :: IOProblem -> IO (Maybe B.ByteString)
+        pump_exc_handler p = putMVar problem_mvar p >> return Nothing
+
         pump :: IO ()
         pump = do
-            new_data <- tls_pull_data_action True
-            --putStrLn "InjectingData"
-            --putStrLn $ "Length "
-            Un.unsafeUseAsCStringLen new_data $ \ (pch, len) ->
-                iocba_receive_data tls_channel_ptr pch len
-            --putStrLn "ReturnFromInject"
-            pump
+            maybe_new_data <- E.catch
+                (Just <$> tls_pull_data_action True)
+                pump_exc_handler
+            case maybe_new_data of
+                Just new_data -> do
+                    Un.unsafeUseAsCStringLen new_data $ \ (pch, len) ->
+                        iocba_receive_data tls_channel_ptr pch len
+                    pump
+                Nothing ->
+                    -- On exceptions, finish this thread
+                    return ()
 
     -- Create the pump thread
     forkIO pump
@@ -260,7 +329,7 @@ unencryptChannelData botan_ctx@(BotanTLSContext fctx) tls_data  = do
 
 
 instance IOChannels BotanSession where
-    handshake botan_session@(BotanSession botan_pad_mvar) = do
+    handshake _botan_session@(BotanSession botan_pad_mvar) = do
         let
             push_action :: PushAction
             push_action bs = botanPushData botan_pad_mvar bs
