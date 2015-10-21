@@ -9,7 +9,7 @@ import           Data.Typeable                                             (Prox
 import           Data.List                                                 (elemIndex)
 import           Data.Maybe                                                (fromMaybe)
 import qualified Data.ByteString                                           as B
-import           Data.ByteString.Char8                                     (pack)
+import           Data.ByteString.Char8                                     (pack, unpack)
 --import qualified Data.ByteString.Lazy                                      as LB
 --import qualified Data.ByteString.Builder                                   as Bu
 import           SecondTransfer.MainLoop.PushPullType
@@ -35,18 +35,21 @@ tlsServeWithALPN _ certificate_filename key_filename interface_name attendants i
     do
         let
             i_want_protocols = map (pack . fst) attendants
-            attendants_only = map snd attendants
             sel_protocol :: [B.ByteString] -> IO B.ByteString
-            sel_protocol proposed_protocols = return . fromMaybe "http/1.1" $
-                foldl
-                    ( \ selected want_protocol ->
-                           case (selected, elemIndex want_protocol proposed_protocols) of
-                               ( Just a, _) -> Just a
-                               (_,   Just _) -> Just want_protocol
-                               (_,   _ ) -> Nothing
-                    )
-                    Nothing
-                    i_want_protocols
+            sel_protocol proposed_protocols = do
+                let
+                    chosen = fromMaybe "http/1.1" $
+                        foldl
+                              ( \ selected want_protocol ->
+                                     case (selected, elemIndex want_protocol proposed_protocols) of
+                                         ( Just a, _) -> Just a
+                                         (_,   Just _) -> Just want_protocol
+                                         (_,   _ ) -> Nothing
+                              )
+                              Nothing
+                              i_want_protocols
+                return chosen
+
         ctx <- newTLSContext (pack certificate_filename) (pack key_filename) sel_protocol :: IO ctx
         let
             worker encrypted_io = do
@@ -54,9 +57,11 @@ tlsServeWithALPN _ certificate_filename key_filename interface_name attendants i
                   do
                     session <- unencryptTLSServerIO ctx encrypted_io
                     plaintext_io_callbacks <- handshake session :: IO IOCallbacks
-                    (prot_no, _) <- getSelectedProtocol session
+                    (_, prot_name) <- getSelectedProtocol session
                     --let
-                    let use_attendant = attendants_only !! prot_no
+                    let
+                        Just  use_attendant = lookup (unpack prot_name) attendants
+                    --putStrLn . show $ (prot_no, prot)
                     use_attendant plaintext_io_callbacks
                 return ()
         listen_socket <- createAndBindListeningSocket interface_name interface_port

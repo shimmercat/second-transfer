@@ -164,6 +164,7 @@ std::string defaultProtocolSelector(void* botan_pad_ref, std::vector<std::string
         pass_to_haskell += prots[i];
     }
     int idx = iocba_select_protocol_cb( botan_pad_ref, (void*)pass_to_haskell.c_str(), pass_to_haskell.size());
+    printf("Chosen protocol %d -> %s \n", idx, prots[idx].c_str());
     return prots[idx];
 }
 
