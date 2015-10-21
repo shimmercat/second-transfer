@@ -11,4 +11,6 @@ cabal.sandbox.config
 examples/**/*.hi
 examples/**/*.o
 examples/**/Main
+examples/**/_priv
 examples/simple_tcp_server/simple_tcp_server
+examples/simple_tls_server/simple_tls_server
