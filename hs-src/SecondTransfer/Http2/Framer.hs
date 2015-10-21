@@ -881,7 +881,7 @@ sendReordering = do
 
     -- Sleep for a little bit, we dont' want too many frames
     -- here too fast. BIG TODO: We need a better way to handle this
-    liftIO $ replicateM_ 10 CC.yield
+    --liftIO $ replicateM_ 10 CC.yield
     --liftIO $ threadDelay 100
 
     -- And tail-recurse
