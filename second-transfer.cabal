@@ -177,9 +177,9 @@ library
 
   -- TODO: Refactor
   if flag(fastc)
-      extra-libraries: ssl crypto
+      extra-libraries: ssl crypto stdc++ botan-1.11
   else
-      extra-libraries: botan-1.11 ssl crypto
+      extra-libraries: ssl crypto stdc++
 
   -- NOTE: Please fill-in with an-up-to date library path here.
   -- It should point to openssl 1.0.2 or greater. See note for
