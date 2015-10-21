@@ -73,6 +73,8 @@ library
                   , SecondTransfer.Types
                   , SecondTransfer.Utils.HTTPHeaders
                   , SecondTransfer.Utils.DevNull
+                  , SecondTransfer.TLS.CoreServer
+                  , SecondTransfer.TLS.Types
                   -- These are really internal modules, but  are exposed
                   -- here for the sake of the test suite. They are hidden
                   -- from the documentation.
@@ -84,6 +86,7 @@ library
                   , SecondTransfer.MainLoop.PushPullType
                   , SecondTransfer.MainLoop.SocketServer
                   , SecondTransfer.TLS.Botan
+
 
   other-modules:  SecondTransfer.MainLoop.CoherentWorker
                 , SecondTransfer.MainLoop.Protocol
