@@ -229,7 +229,7 @@ extern "C" void iocba_delete_tls_context(botan_tls_context_t* ctx)
 
 extern "C" void* iocba_new_tls_server_channel (
        void* botan_pad_ref,
-       botan_tls_context_t* ctxt)
+       botan_tls_context_t* ctx)
 {
     auto* server =
         new Botan::TLS::Server(
