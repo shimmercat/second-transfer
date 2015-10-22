@@ -8,8 +8,8 @@ import           Control.Lens                                                   
 import qualified Data.ByteString                                                    as B
 import qualified Data.ByteString.Lazy                                               as LB
 
-import           SecondTransfer.MainLoop.SocketServer
-import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.IOCallbacks.SocketServer
+import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.TLS.Botan
 import           SecondTransfer.Exception( NoMoreDataException(..), IOProblem)
 

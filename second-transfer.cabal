@@ -73,8 +73,14 @@ library
                   , SecondTransfer.Types
                   , SecondTransfer.Utils.HTTPHeaders
                   , SecondTransfer.Utils.DevNull
+
                   , SecondTransfer.TLS.CoreServer
                   , SecondTransfer.TLS.Types
+
+                  -- These ones should probably go in their own package
+                  , SecondTransfer.IOCallbacks.Types
+                  , SecondTransfer.IOCallbacks.SocketServer
+
                   -- These are really internal modules, but  are exposed
                   -- here for the sake of the test suite. They are hidden
                   -- from the documentation.
@@ -83,8 +89,6 @@ library
                   , SecondTransfer.Sessions.Config
                   , SecondTransfer.Http1.Parse
                   -- TODO: Most of these should be moved back to "other-modules"
-                  , SecondTransfer.MainLoop.PushPullType
-                  , SecondTransfer.MainLoop.SocketServer
                   , SecondTransfer.TLS.Botan
 
 

@@ -6,9 +6,7 @@ module SecondTransfer.TLS.Botan (
                 , newBotanTLSContext
        ) where
 
---import           Control.Monad                                             (when)
 import           Control.Concurrent
---import           Control.Concurrent.MVar
 import qualified Control.Exception                                         as E
 
 import           Foreign
@@ -26,7 +24,7 @@ import qualified Data.ByteString.Unsafe                                    as Un
 import           Control.Lens                                              ( (^.), makeLenses, set, Lens' )
 
 -- Import all of it!
-import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception                                  ( IOProblem, NoMoreDataException(..) )
 import           SecondTransfer.TLS.Types                                  ( FinishRequest
                                                                            , ProtocolSelector

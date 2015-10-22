@@ -1,6 +1,6 @@
 {-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable #-}
 {-# OPTIONS_HADDOCK hide #-}
-module SecondTransfer.MainLoop.PushPullType (
+module SecondTransfer.IOCallbacks.Types (
                -- | Functions for passing data to external parties
                --   The callbacks here should have a blocking behavior and not
                --   return empty results unless at end of file.
@@ -168,21 +168,6 @@ instance IOChannels TLSServer where
 instance TLSEncryptedIO TLSServer
 instance TLSServerIO TLSServer
 
--- | This is an intermediate type. It represents what you obtain
---   by combining something that speaks the protocol and an AwareWorker.
---   In turn, you need to feed a bundle of callbacks implementing I/O
---   to finally start a server.
---
---   You can implement one of these to let somebody else  supply the
---   push, pull and close callbacks. For example, 'tlsServeWithALPN' will
---   supply these arguments to an 'Attendant'.
---
---   Attendants encapsulate all the session book-keeping functionality,
---   which for HTTP/2 is quite complicated. You use the functions
---   http**Attendant
---   to create one of these from a 'SecondTransfer.Types.CoherentWorker'.
---
---   This library supplies two of such Attendant factories,
---   'SecondTransfer.Http1.http11Attendant' for
---   HTTP 1.1 sessions, and 'SecondTransfer.Http2.http2Attendant' for HTTP/2 sessions.
+-- | An Attendant is an entity that can speak a protocol, given 
+--   the present I/O callbacks.
 type Attendant = IOCallbacks -> IO ()

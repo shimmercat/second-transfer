@@ -59,7 +59,7 @@ import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Http2.Session
 import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker, fragmentDeliveryCallback_Ef, priorityEffect_Ef)
 import qualified SecondTransfer.MainLoop.Framer         as F
-import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.Logging        (logWithExclusivity, logit)

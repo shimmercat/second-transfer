@@ -7,7 +7,8 @@ module SecondTransfer.Http2.MakeAttendant (
 import           SecondTransfer.Http2.Framer            (wrapSession, SessionPayload(..))
 import           SecondTransfer.Sessions.Internal       (SessionsContext)
 import           SecondTransfer.MainLoop.CoherentWorker
-import           SecondTransfer.MainLoop.PushPullType   (Attendant)
+
+import           SecondTransfer.IOCallbacks.Types       (Attendant)
 
 -- |
 --

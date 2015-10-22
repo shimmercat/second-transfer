@@ -9,7 +9,7 @@ module SecondTransfer.TLS.Types (
 
 import qualified Data.ByteString                                           as B
 
-import           SecondTransfer.MainLoop.PushPullType                      (TLSServerIO, IOChannels)
+import           SecondTransfer.IOCallbacks.Types                          (TLSServerIO, IOChannels)
 
 -- | Singleton type. Used in conjunction with an `MVar`. If the MVar is full,
 --   the fuction `tlsServeWithALPNAndFinishOnRequest` knows that it should finish

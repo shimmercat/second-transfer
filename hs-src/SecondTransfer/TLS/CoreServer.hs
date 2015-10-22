@@ -12,9 +12,9 @@ import qualified Data.ByteString                                           as B
 import           Data.ByteString.Char8                                     (pack, unpack)
 --import qualified Data.ByteString.Lazy                                      as LB
 --import qualified Data.ByteString.Builder                                   as Bu
-import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.TLS.Types
-import           SecondTransfer.MainLoop.SocketServer
+import           SecondTransfer.IOCallbacks.SocketServer
 --import           SecondTransfer.Exception                                  ( NoMoreDataException(..), IOProblem)
 
 

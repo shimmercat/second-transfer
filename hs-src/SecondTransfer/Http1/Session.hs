@@ -20,9 +20,10 @@ import           Data.IORef
 -- import           Data.Monoid                            (mconcat, mappend)
 
 import           SecondTransfer.MainLoop.CoherentWorker
-import           SecondTransfer.MainLoop.PushPullType
 import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag, sessionsConfig)
+
+import           SecondTransfer.IOCallbacks.Types        
 
 -- Logging utilities
 import           System.Log.Logger

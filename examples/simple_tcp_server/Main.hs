@@ -7,8 +7,8 @@ import Control.Lens               ( (^.) )
 
 import qualified                  Data.ByteString  as B
 
-import SecondTransfer.MainLoop.SocketServer
-import SecondTransfer.MainLoop.PushPullType
+import SecondTransfer.IOCallbacks.SocketServer
+import SecondTransfer.IOCallbacks.Types
 
 simpleEcho :: TLSServerIO a => a -> IO ()
 simpleEcho pre_callbacks =  do

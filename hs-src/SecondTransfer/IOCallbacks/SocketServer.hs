@@ -1,5 +1,5 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
-module SecondTransfer.MainLoop.SocketServer(
+module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
               , TLSServerSocketIOCallbacks         (..)
               , socket_SS
@@ -27,7 +27,7 @@ import qualified Network.Socket                                     as NS
 import qualified Network.Socket.ByteString                          as NSB
 
 
-import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception                           (NoMoreDataException(..))
 
 

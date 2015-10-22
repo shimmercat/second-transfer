@@ -25,7 +25,7 @@ import           Data.ByteString.Char8      (pack)
 import qualified Data.ByteString.Lazy       as LB
 import qualified Data.ByteString.Unsafe     as BU
 
-import           SecondTransfer.MainLoop.PushPullType
+import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.MainLoop.Logging (logit)
 import           SecondTransfer.Exception
 import           SecondTransfer.TLS.Types        (FinishRequest)
