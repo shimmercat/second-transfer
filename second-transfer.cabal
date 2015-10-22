@@ -81,6 +81,8 @@ library
                   , SecondTransfer.IOCallbacks.Types
                   , SecondTransfer.IOCallbacks.SocketServer
                   , SecondTransfer.IOCallbacks.WrapSocket
+                  , SecondTransfer.IOCallbacks.Coupling
+                  , SecondTransfer.IOCallbacks.SaveFragment
 
                   -- These are really internal modules, but  are exposed
                   -- here for the sake of the test suite. They are hidden
@@ -110,6 +112,10 @@ library
                   , SecondTransfer.Http2.SimpleClient
 
                   , SecondTransfer.Http1.Session
+
+                  , SecondTransfer.Socks5.Types
+                  , SecondTransfer.Socks5.Serializers
+                  , SecondTransfer.Socks5.Parsers
 
 
   build-tools: cpphs

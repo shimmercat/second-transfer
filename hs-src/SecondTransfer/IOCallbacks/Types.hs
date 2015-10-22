@@ -1,5 +1,4 @@
 {-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable #-}
-{-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.IOCallbacks.Types (
                -- | Functions for passing data to external parties
                --   The callbacks here should have a blocking behavior and not
@@ -10,8 +9,12 @@ module SecondTransfer.IOCallbacks.Types (
                , PullAction
                , BestEffortPullAction
                , Attendant
+               , DisruptibleAttendant
                , CloseAction
-               , IOCallbacks(..)
+               , IOCallbacks        (..)
+               , Disruptible        (..)
+               , MonoDisruptible    (..)
+               , makeAttendantDisruptible
 
                , pushAction_IOC
                , pullAction_IOC
@@ -34,7 +37,6 @@ module SecondTransfer.IOCallbacks.Types (
 
 
 import           Control.Lens
-
 
 import           Data.IORef
 --import           Data.Typeable
@@ -168,6 +170,38 @@ instance IOChannels TLSServer where
 instance TLSEncryptedIO TLSServer
 instance TLSServerIO TLSServer
 
--- | An Attendant is an entity that can speak a protocol, given 
---   the present I/O callbacks.
+
+-- | This is an entity that can be disrupted and closed. Good to
+--   force shutdown in some places.
+class Disruptible d where
+    disrupt :: d -> IO ()
+
+
+-- | Monomorphic encapsulation of a Disruptible
+-- TODO: Are perhaps Data and Typeable classes that I want
+-- for enforce here?
+data MonoDisruptible = forall d . MonoDisruptible d
+
+-- | An Attendant is an entity that can speak a protocol, given
+--   the presented I/O callbacks. It's work is to spawn a set
+--   of threads to handle a client's session, and then return to
+--   the caller. It shouldn'r remain working for the client.
 type Attendant = IOCallbacks -> IO ()
+
+-- | Some more advanced attendants can be interrupted. They of
+--   course also return inmediately, but they return a handle that
+--   can be used at a later time to interrupt everything.
+type DisruptibleAttendant = IOCallbacks -> IO MonoDisruptible
+
+newtype Damocles = Damocles IOCallbacks
+
+instance Disruptible Damocles where
+    disrupt (Damocles io_callbacks) = ( io_callbacks ^. closeAction_IOC )
+
+makeAttendantDisruptible :: Attendant -> DisruptibleAttendant
+makeAttendantDisruptible normal =
+    \ io_callbacks -> do
+        let
+            disruptor = Damocles io_callbacks
+        normal io_callbacks
+        return $ MonoDisruptible disruptor
