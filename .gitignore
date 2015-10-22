@@ -14,3 +14,4 @@ examples/**/Main
 examples/**/_priv
 examples/simple_tcp_server/simple_tcp_server
 examples/simple_tls_server/simple_tls_server
+examples/simple_http_server/simple_http_server
