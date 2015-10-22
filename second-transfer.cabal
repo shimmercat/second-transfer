@@ -77,6 +77,9 @@ library
                   , SecondTransfer.TLS.CoreServer
                   , SecondTransfer.TLS.Types
 
+                  , SecondTransfer.Socks5.Types
+                  , SecondTransfer.Socks5.Session
+
                   -- These ones should probably go in their own package
                   , SecondTransfer.IOCallbacks.Types
                   , SecondTransfer.IOCallbacks.SocketServer
@@ -106,16 +109,15 @@ library
                   , SecondTransfer.MainLoop.OpenSSL_TLS
                   , SecondTransfer.Utils
 
+                  , SecondTransfer.Socks5.Serializers
+                  , SecondTransfer.Socks5.Parsers
+
                   , SecondTransfer.Http2.Framer
                   , SecondTransfer.Http2.MakeAttendant
                   , SecondTransfer.Http2.Session
                   , SecondTransfer.Http2.SimpleClient
 
                   , SecondTransfer.Http1.Session
-
-                  , SecondTransfer.Socks5.Types
-                  , SecondTransfer.Socks5.Serializers
-                  , SecondTransfer.Socks5.Parsers
 
 
   build-tools: cpphs

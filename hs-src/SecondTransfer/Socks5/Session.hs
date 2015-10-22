@@ -1,17 +1,17 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
 module SecondTransfer.Socks5.Session (
-                    sfa
-
+                 serveSocks
      ) where
 
 ---import           Control.Concurrent
 -- import qualified Control.Exception                                  as E
-import           Control.Lens                                       (makeLenses, (^.))
+import           Control.Lens                                       ( {-makeLenses,-} (^.))
 import           Control.Monad.Trans.Maybe
 import           Control.Monad.Trans.Class                          (lift)
 import           Control.Monad.IO.Class                             (liftIO)
 
 import qualified Data.ByteString                                    as B
+import           Data.ByteString.Char8                              ( {-unpack, -} pack)
 import qualified Data.Attoparsec.ByteString                         as P
 import qualified Data.Binary                                        as U
 import qualified Data.Binary.Put                                    as U
@@ -22,12 +22,12 @@ import           SecondTransfer.Socks5.Parsers
 import           SecondTransfer.Socks5.Serializers
 
 import           SecondTransfer.IOCallbacks.Types
-import           SecondTransfer.IOCallbacks.Coupling
+--import           SecondTransfer.IOCallbacks.Coupling
 
 
-data S5SessionState = SessionState {
+-- data S5SessionState = SessionState {
 
-    }
+--     }
 
 tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO  (a,B.ByteString)
 tryRead iocallbacks leftovers p = do
@@ -59,12 +59,8 @@ pushDatum iocallbacks putthing x = do
 
 
 -- | Serves a sock proxy in the given IOCallbacks channel. This function does its work
---   in the calling thread, but it returns as soon as the two ends (the one in the argument
---   callback and a probable one in fetches from the resolver) are coupled together.
---   Notice that the coupling spawns a pair of threads. If the resolver can't resolve
---   the asked-for service, it returns Nothing.
---
---  TODO: This wires-in a few fields in the reply...
+--   in the calling thread, but it returns as soon as work is delegated to the attendant
+--   returned by the resolver.
 serveSocks :: (Socks5Resolver a) =>  a -> IOCallbacks -> IO (Maybe MonoDisruptible)
 serveSocks resolver socks_here = runMaybeT $ do
     let
@@ -94,7 +90,7 @@ serveSocks resolver socks_here = runMaybeT $ do
                             _version_SP4    = ProtocolVersion
                           , _replyField_SP4 = Succeeded_S5RF
                           , _reservedField_SP4 = 0
-                          , _address_SP4 = DomainName_IA "localhost"
+                          , _address_SP4 = IPv4_IA 0x7f000001
                           , _port_SP4 = 10001
                             }
                     liftIO $ ps putServerReply_Packet server_reply

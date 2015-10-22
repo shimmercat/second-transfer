@@ -59,12 +59,13 @@ class Socks5Resolver a where
 
 -- | A nonce which is always equal to five... or we are in troubles
 data ProtocolVersion = ProtocolVersion
-
+    deriving Show
 
 data AddressType =
     IPv4_S5AT
   | DomainName_S5AT
   | IPv6_S5AT
+    deriving (Show, Eq, Enum)
 
 
 -- | The command sent by the client
@@ -72,6 +73,7 @@ data ProtocolCommand =
     Connect_S5PC
   | Bind_S5PC
   | UdpAssociate_S5PC
+    deriving (Show, Eq, Enum)
 
 
 data ServerSocks5Stage =
@@ -79,31 +81,33 @@ data ServerSocks5Stage =
   | WaitingRequest_SS5S    -- ^ Server is waiting for the Socks5 request
   | Functioning_SS5S
   | Failed_SS5S
-
+    deriving (Show, Eq, Enum)
 
 -- TODO: We need to implement the other types of responses
 data  ReplyField =
     Succeeded_S5RF
   | GeneralFailure_S5RF
-
+    deriving (Show, Eq, Enum)
 
 -- Datatypes present at different negotiation stages
 data ClientAuthMethods_Packet = ClientAuthMethods_Packet {
     _version_SP1                 :: ProtocolVersion
   , _methods_SP1                 :: B.ByteString
     }
+    deriving Show
 
 
 data ServerSelectsMethod_Packet = ServerSelectsMethod_Packet {
     _version_SP2                 :: ProtocolVersion
   , _method_SP2                  :: Word8
     }
+    deriving Show
 
 data IndicatedAddress =
     IPv4_IA  Word32
   | DomainName_IA B.ByteString
   | IPv6_IA  B.ByteString
-
+    deriving Show
 
 iaToAddressType :: IndicatedAddress -> AddressType
 iaToAddressType (IPv4_IA _)  = IPv4_S5AT
@@ -118,6 +122,7 @@ data ClientRequest_Packet = ClientRequest_Packet {
   , _address_SP3                 :: IndicatedAddress
   , _port_SP3                    :: Word16
     }
+    deriving Show
 
 makeLenses ''ClientRequest_Packet
 
@@ -129,5 +134,6 @@ data ServerReply_Packet = ServerReply_Packet {
   , _address_SP4                 :: IndicatedAddress
   , _port_SP4                    :: Word16
     }
+    deriving Show
 
 makeLenses ''ServerReply_Packet

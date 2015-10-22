@@ -57,7 +57,12 @@ createAndBindListeningSocket hostname portnumber = do
     NS.setSocketOption the_socket NS.ReusePort 1
     NS.setSocketOption the_socket NS.RecvBuffer 32000
     NS.setSocketOption the_socket NS.SendBuffer 32000
-    NS.setSocketOption the_socket NS.RecvLowWater 8
+    -- Linux honors the Low Water thingy below, and this setting is OK for HTTP/2 connections, but
+    -- not very needed since the TLS wrapping will inflate the packet well beyond that size.
+    -- See about this option here: http://stackoverflow.com/questions/8245937/whats-the-purpose-of-the-socket-option-so-sndlowat
+    --
+    -- NS.setSocketOption the_socket NS.RecvLowWater 8
+    --
     NS.setSocketOption the_socket NS.NoDelay 1
     NS.bind the_socket host_address
     return the_socket
