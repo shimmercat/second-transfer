@@ -80,6 +80,7 @@ library
                   -- These ones should probably go in their own package
                   , SecondTransfer.IOCallbacks.Types
                   , SecondTransfer.IOCallbacks.SocketServer
+                  , SecondTransfer.IOCallbacks.WrapSocket
 
                   -- These are really internal modules, but  are exposed
                   -- here for the sake of the test suite. They are hidden
@@ -259,7 +260,6 @@ Test-Suite hunit-tests
                        , SecondTransfer.Sessions.Config
                        , SecondTransfer.Http1.Parse
                        , SecondTransfer.MainLoop.CoherentWorker
-                       , SecondTransfer.MainLoop.PushPullType
                        , SecondTransfer.MainLoop.Tokens
                        , SecondTransfer.MainLoop.Framer
                        , SecondTransfer.MainLoop.Logging
