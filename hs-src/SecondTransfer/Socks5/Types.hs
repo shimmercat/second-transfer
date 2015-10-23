@@ -51,6 +51,7 @@ class Socks5Resolver a where
     --  The third argument is the port!
     s5Resolve :: a ->  IndicatedAddress -> Int -> IO (Maybe DisruptibleAttendant)
 
+
 -------------------------------------------------------------------------------------------------------
 --
 --  Serialization types

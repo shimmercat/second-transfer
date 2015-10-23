@@ -28,6 +28,7 @@ module SecondTransfer.IOCallbacks.Types (
                , TLSEncryptedIO
                , TLSServerIO
                , TLSClientIO
+               , SOCKS5Preface
 
                -- * Utility functions
                , PullActionWrapping
@@ -151,6 +152,8 @@ class IOChannels a where
 class IOChannels a => PlainTextIO a
 -- | Data exchanged through this channel is the data of a TLS session
 class IOChannels a => TLSEncryptedIO a
+-- | Data exchanged through this channel begins with a SOCKS5 negotiation
+class IOChannels a => SOCKS5Preface a
 -- | The agent putting and retrieving data in this side of the channel should
 --   behave as a TLS server
 class TLSEncryptedIO a => TLSServerIO a

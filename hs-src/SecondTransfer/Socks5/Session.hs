@@ -1,14 +1,11 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
 module SecondTransfer.Socks5.Session (
-                 serveSocks
+                 tlsSOCKS5Serve
      ) where
 
 ---import           Control.Concurrent
 -- import qualified Control.Exception                                  as E
 import           Control.Lens                                       ( {-makeLenses,-} (^.))
-import           Control.Monad.Trans.Maybe
-import           Control.Monad.Trans.Class                          (lift)
-import           Control.Monad.IO.Class                             (liftIO)
 
 import qualified Data.ByteString                                    as B
 import           Data.ByteString.Char8                              ( {-unpack, -} pack)
@@ -16,13 +13,14 @@ import qualified Data.Attoparsec.ByteString                         as P
 import qualified Data.Binary                                        as U
 import qualified Data.Binary.Put                                    as U
 
+import qualified Network.Socket                                     as NS
 
 import           SecondTransfer.Socks5.Types
 import           SecondTransfer.Socks5.Parsers
 import           SecondTransfer.Socks5.Serializers
 
 import           SecondTransfer.IOCallbacks.Types
---import           SecondTransfer.IOCallbacks.Coupling
+import           SecondTransfer.IOCallbacks.SocketServer
 
 
 -- data S5SessionState = SessionState {
@@ -58,32 +56,33 @@ pushDatum iocallbacks putthing x = do
     (iocallbacks ^. pushAction_IOC) datum
 
 
--- | Serves a sock proxy in the given IOCallbacks channel. This function does its work
---   in the calling thread, but it returns as soon as work is delegated to the attendant
---   returned by the resolver.
-serveSocks :: (Socks5Resolver a) =>  a -> IOCallbacks -> IO (Maybe MonoDisruptible)
-serveSocks resolver socks_here = runMaybeT $ do
+-- | Forwards a set of IOCallbacks (actually, it is exactly the same passed in) after the
+--   SOCKS5 negotiation, if the negotiation succeeds and the indicated "host" is approved
+--   by the first parameter
+negotiateSocksAndForward ::  (B.ByteString -> Bool) -> IOCallbacks -> IO (Maybe IOCallbacks)
+negotiateSocksAndForward approver socks_here =  do
     let
         tr = tryRead socks_here
         ps = pushDatum socks_here
     -- Start by reading the standard socks5 header
-    (_auth, next1) <- lift $ tr ""  parseClientAuthMethods_Packet
+    (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
     -- I will ignore the auth methods for now
     let
         server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
-    liftIO $ ps putServerSelectsMethod_Packet server_selects
-    (req_packet, next2) <- lift $ tr next1 parseClientRequest_Packet
+    ps putServerSelectsMethod_Packet server_selects
+    (req_packet, next2) <- tr next1 parseClientRequest_Packet
     case req_packet ^. cmd_SP3 of
 
         Connect_S5PC  -> do
             -- Can accept a connect, to what?
             let
                 address = req_packet ^. address_SP3
+                named_host = case address of
+                    DomainName_IA name -> name
+                    _  -> ""
                 port_no = fromIntegral $ req_packet ^. port_SP3
-            maybe_attendant <- lift . s5Resolve resolver address $ port_no
-            case maybe_attendant of
-
-                Just attendant -> do
+            if  approver named_host then
+                do
                     -- First I need to answer to the client that we are happy and ready
                     let
                         server_reply = ServerReply_Packet {
@@ -93,17 +92,47 @@ serveSocks resolver socks_here = runMaybeT $ do
                           , _address_SP4 = IPv4_IA 0x7f000001
                           , _port_SP4 = 10001
                             }
-                    liftIO $ ps putServerReply_Packet server_reply
-                    -- Should I create an IOCallbacks that can take into account any unprocessed information from the browser?
-                    -- Like next2?
-                    liftIO . B.putStr $ "Excedent:::: " `mappend` next2 `mappend` " (length " `mappend` (pack . show . B.length $ next2) `mappend`  ")\n"
+                    ps putServerReply_Packet server_reply
                     -- Now that I have the attendant, let's just activate it ...
-                    interruptible <- lift . attendant $ socks_here
-                    return interruptible
+                    return . Just $ socks_here
+                else
+                    return Nothing
 
 
         -- Other commands not handled for now
         _             -> do
             -- Remove this trace!!
-            liftIO $ putStrLn "Invalid command"
-            fail "Invalid command"
+            putStrLn "Invalid command"
+            return Nothing
+
+
+-- | Simple alias to SocketIOCallbacks where we expect
+--   encrypted contents over a SOCKS5 Socket
+newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks IOCallbacks
+
+instance IOChannels TLSServerSOCKS5Callbacks where
+    handshake (TLSServerSOCKS5Callbacks cb) = return cb
+
+instance TLSEncryptedIO TLSServerSOCKS5Callbacks
+instance TLSServerIO TLSServerSOCKS5Callbacks
+
+
+-- | tlsSOCKS5Serve approver listening_socket onsocks5_action
+-- The approver should return True for host names that are served by this software (otherwise the connection will be closed, just for now,
+-- in the close future we will implement a way to forward requests to external Internet hosts.)
+-- Pass a bound and listening TCP socket where you expect a SOCKS5 exchange to have to tke place.
+-- And pass an action that can do something with the callbacks. The passed-in action is expected to fork a thread and return
+-- inmediately.
+tlsSOCKS5Serve :: (B.ByteString -> Bool)  -> NS.Socket -> ( TLSServerSOCKS5Callbacks -> IO () ) -> IO ()
+tlsSOCKS5Serve approver listen_socket onsocks5_action = error ""
+     tcpServe listen_socket socks_action
+  where
+     socks_action active_socket = do
+         socket_io_callbacks <- socketIOCallbacks active_socket
+         io_callbacks <- handshake socket_io_callbacks
+         maybe_negotiated_io <- negotiateSocksAndForward approver io_callbacks
+         case maybe_negotiated_io of
+             Just negotiated_io ->
+                 let
+                     tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks negotiated_io
+                 in  onsocks5_action tls_server_socks5_callbacks
