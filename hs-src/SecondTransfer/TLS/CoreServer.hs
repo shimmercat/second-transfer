@@ -105,7 +105,6 @@ tlsSessionHandler attendants ctx encrypted_io = do
           --let
           let
               Just  use_attendant = lookup (unpack prot_name) attendants
-          --putStrLn . show $ (prot_no, prot)
           use_attendant plaintext_io_callbacks
     return ()
 

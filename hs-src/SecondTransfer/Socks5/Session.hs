@@ -4,7 +4,7 @@ module SecondTransfer.Socks5.Session (
      ) where
 
 ---import           Control.Concurrent
--- import qualified Control.Exception                                  as E
+import qualified Control.Exception                                  as E
 import           Control.Lens                                       ( {-makeLenses,-} (^.))
 
 import qualified Data.ByteString                                    as B
@@ -14,6 +14,8 @@ import qualified Data.Binary                                        as U
 import qualified Data.Binary.Put                                    as U
 
 import qualified Network.Socket                                     as NS
+
+import           SecondTransfer.Exception                           (SOCKS5ProtocolException (..) )
 
 import           SecondTransfer.Socks5.Types
 import           SecondTransfer.Socks5.Parsers
@@ -27,7 +29,7 @@ import           SecondTransfer.IOCallbacks.SocketServer
 
 --     }
 
-tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO  (a,B.ByteString)
+tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
 tryRead iocallbacks leftovers p = do
     let
         onResult result =
@@ -40,12 +42,12 @@ tryRead iocallbacks leftovers p = do
             fragment <- (iocallbacks ^. bestEffortPullAction_IOC) True
             case onResult $ f fragment of
                Right (Just x) -> return x
-               Right Nothing -> fail "NoAlt"
+               Right Nothing -> E.throwIO SOCKS5ProtocolException
                Left ff -> go ff
 
     case onResult $ P.parse p leftovers  of
         Right (Just x) -> return x
-        Right Nothing  -> fail "NoAlt"
+        Right Nothing  -> E.throwIO SOCKS5ProtocolException
         Left f0 -> go f0
 
 
@@ -60,50 +62,54 @@ pushDatum iocallbacks putthing x = do
 --   SOCKS5 negotiation, if the negotiation succeeds and the indicated "host" is approved
 --   by the first parameter
 negotiateSocksAndForward ::  (B.ByteString -> Bool) -> IOCallbacks -> IO (Maybe IOCallbacks)
-negotiateSocksAndForward approver socks_here =  do
+negotiateSocksAndForward approver socks_here =
+  do
     let
         tr = tryRead socks_here
         ps = pushDatum socks_here
     -- Start by reading the standard socks5 header
-    (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
-    -- I will ignore the auth methods for now
-    let
-        server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
-    ps putServerSelectsMethod_Packet server_selects
-    (req_packet, next2) <- tr next1 parseClientRequest_Packet
-    case req_packet ^. cmd_SP3 of
+    ei <- E.try $ do
+        (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
+        -- I will ignore the auth methods for now
+        let
+            server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
+        ps putServerSelectsMethod_Packet server_selects
+        (req_packet, _next2) <- tr next1 parseClientRequest_Packet
+        case req_packet ^. cmd_SP3 of
 
-        Connect_S5PC  -> do
-            -- Can accept a connect, to what?
-            let
-                address = req_packet ^. address_SP3
-                named_host = case address of
-                    DomainName_IA name -> name
-                    _  -> ""
-                port_no = fromIntegral $ req_packet ^. port_SP3
-            if  approver named_host then
-                do
-                    -- First I need to answer to the client that we are happy and ready
-                    let
-                        server_reply = ServerReply_Packet {
-                            _version_SP4    = ProtocolVersion
-                          , _replyField_SP4 = Succeeded_S5RF
-                          , _reservedField_SP4 = 0
-                          , _address_SP4 = IPv4_IA 0x7f000001
-                          , _port_SP4 = 10001
-                            }
-                    ps putServerReply_Packet server_reply
-                    -- Now that I have the attendant, let's just activate it ...
-                    return . Just $ socks_here
-                else
-                    return Nothing
+            Connect_S5PC  -> do
+                -- Can accept a connect, to what?
+                let
+                    address = req_packet ^. address_SP3
+                    named_host = case address of
+                        DomainName_IA name -> name
+                        _  -> ""
+                if  approver named_host then
+                    do
+                        -- First I need to answer to the client that we are happy and ready
+                        let
+                            server_reply = ServerReply_Packet {
+                                _version_SP4    = ProtocolVersion
+                              , _replyField_SP4 = Succeeded_S5RF
+                              , _reservedField_SP4 = 0
+                              , _address_SP4 = IPv4_IA 0x7f000001
+                              , _port_SP4 = 10001
+                                }
+                        ps putServerReply_Packet server_reply
+                        -- Now that I have the attendant, let's just activate it ...
+                        return . Just $ socks_here
+                    else do
+                        -- Logging? We need to get that real right.
+                        return Nothing
 
 
-        -- Other commands not handled for now
-        _             -> do
-            -- Remove this trace!!
-            putStrLn "Invalid command"
-            return Nothing
+            -- Other commands not handled for now
+            _             -> do
+                return Nothing
+
+    case ei of
+        Left SOCKS5ProtocolException -> return Nothing
+        Right result -> return result
 
 
 -- | Simple alias to SocketIOCallbacks where we expect
@@ -124,7 +130,7 @@ instance TLSServerIO TLSServerSOCKS5Callbacks
 -- And pass an action that can do something with the callbacks. The passed-in action is expected to fork a thread and return
 -- inmediately.
 tlsSOCKS5Serve :: (B.ByteString -> Bool)  -> NS.Socket -> ( TLSServerSOCKS5Callbacks -> IO () ) -> IO ()
-tlsSOCKS5Serve approver listen_socket onsocks5_action = error ""
+tlsSOCKS5Serve approver listen_socket onsocks5_action =
      tcpServe listen_socket socks_action
   where
      socks_action active_socket = do
@@ -136,3 +142,7 @@ tlsSOCKS5Serve approver listen_socket onsocks5_action = error ""
                  let
                      tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks negotiated_io
                  in  onsocks5_action tls_server_socks5_callbacks
+
+             Nothing -> do
+                 (io_callbacks ^. closeAction_IOC)
+                 return ()

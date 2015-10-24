@@ -4,27 +4,29 @@ Module      : SecondTransfer.Exception
 -}
 module SecondTransfer.Exception (
     -- * Exceptions thrown by the HTTP/2 sessions
-    HTTP2SessionException                        (..)
-    ,FramerException                             (..)
-    ,BadPrefaceException                         (..)
-    ,HTTP11Exception                             (..)
-    ,HTTP11SyntaxException                       (..)
-    ,ClientSessionAbortedException               (..)
-    ,HTTP500PrecursorException                   (..)
-    ,ConnectionCloseReason                       (..)
-    ,convertHTTP500PrecursorExceptionToException
-    ,getHTTP500PrecursorExceptionFromException
-    ,ContentLengthMissingException               (..)
+      HTTP2SessionException                       (..)
+    , FramerException                             (..)
+    , BadPrefaceException                         (..)
+    , HTTP11Exception                             (..)
+    , HTTP11SyntaxException                       (..)
+    , ClientSessionAbortedException               (..)
+    , HTTP500PrecursorException                   (..)
+    , ConnectionCloseReason                       (..)
+    , convertHTTP500PrecursorExceptionToException
+    , getHTTP500PrecursorExceptionFromException
+    , ContentLengthMissingException               (..)
 
-    -- * Exceptions related to the IO layer
-    ,IOProblem                                   (..)
-    ,GenericIOProblem                            (..)
-    ,StreamCancelledException                    (..)
-    ,NoMoreDataException                         (..)
+      -- * Exceptions related to the IO layer
+    , IOProblem                                   (..)
+    , GenericIOProblem                            (..)
+    , StreamCancelledException                    (..)
+    , NoMoreDataException                         (..)
 
+      -- * Exceptions related to SOCKS5
+    , SOCKS5ProtocolException                      (..)
 
-    -- * Internal exceptions
-    ,HTTP2ProtocolException                      (..)
+      -- * Internal exceptions
+    , HTTP2ProtocolException                      (..)
     ) where
 
 import           Control.Exception
@@ -219,3 +221,10 @@ data StreamCancelledException = StreamCancelledException
     deriving (Show, Typeable)
 
 instance Exception StreamCancelledException
+
+
+-- | Exception to denote that something failed with the SOCKS5 protocol
+data SOCKS5ProtocolException = SOCKS5ProtocolException
+    deriving (Show, Typeable)
+
+instance Exception SOCKS5ProtocolException

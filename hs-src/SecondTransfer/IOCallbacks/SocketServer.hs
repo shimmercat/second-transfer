@@ -65,6 +65,7 @@ createAndBindListeningSocket hostname portnumber = do
     --
     NS.setSocketOption the_socket NS.NoDelay 1
     NS.bind the_socket host_address
+    -- bound <- NS.isBound the_socket
     return the_socket
 
 
@@ -75,6 +76,7 @@ tcpServe :: NS.Socket -> ( NS.Socket -> IO () ) -> IO ()
 tcpServe  listen_socket action =
     do
         NS.listen listen_socket 20
+        --is_listening <- NS.isListening  listen_socket
         accept_loop listen_socket
   where
     accept_loop bind_socket = do
