@@ -11,3 +11,19 @@
 #define LOGIT_SWITCH_TIMINGS 0
 
 #endif
+
+
+#ifdef SECONDTRANSFER_MONITORING
+
+import qualified SecondTransfer.MainLoop.DebugMonitor as DeMit
+
+#define REPORT_EVENT(evname)  (DeMit.incCounter evname)
+#define LIO_REPORT_EVENT(evname) (liftIO . DeMit.incCounter $ evname )
+
+#else
+
+#define IMPORT_MONITORING
+#define REPORT_EVENT(evname)
+#define LIO_REPORT_EVENT(evname)
+
+#endif

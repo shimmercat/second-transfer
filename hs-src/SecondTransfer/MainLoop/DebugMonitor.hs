@@ -15,6 +15,7 @@ import           Control.Concurrent.Chan
 import           Control.Monad             (unless)
 
 import           Data.IORef
+import           Data.String
 import           System.IO                 (stderr,openFile)
 import qualified System.IO                 as SIO
 import qualified Data.ByteString           as B
@@ -34,6 +35,7 @@ outputHandle = unsafePerformIO $ do
             R.connectDatabase = 3 -- Let's take this cone
             }
     conn <- R.connect conn_info
+    R.runRedis conn $ R.flushdb
     newIORef conn
 
 incCounter :: B.ByteString -> IO ()

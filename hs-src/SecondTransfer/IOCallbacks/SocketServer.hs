@@ -15,7 +15,7 @@ module SecondTransfer.IOCallbacks.SocketServer(
        ) where
 
 
----import           Control.Concurrent
+import           Control.Concurrent                                 (threadDelay)
 import qualified Control.Exception                                  as E
 --import           Control.Lens                                       (makeLenses, (^.))
 import           Control.Monad.IO.Class                             (liftIO)
@@ -30,6 +30,7 @@ import qualified Data.Conduit.List                                  as CL
 
 -- import           System.Exit
 --import           System.Posix.Signals
+import           System.IO.Error                                    (ioeGetErrorString)
 
 import qualified Network.Socket                                     as NS
 --import qualified Network.Socket.ByteString                          as NSB
@@ -38,6 +39,7 @@ import qualified Network.Socket                                     as NS
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.WrapSocket              (socketIOCallbacks, SocketIOCallbacks)
 --import           SecondTransfer.Exception                           (NoMoreDataException(..))
+#include "instruments.cpphs"
 
 
 -- | Simple alias to SocketIOCallbacks where we expect
@@ -105,11 +107,27 @@ tcpItcli :: NS.Socket -> Source IO (NS.Socket, NS.SockAddr)
 tcpItcli listen_socket =
     do
         liftIO $ NS.listen listen_socket 20
+        LIO_REPORT_EVENT("listening")
         let
+          -- TODO: System interrupts propagates freely!
           iterate' = do
-              (new_socket, sock_addr) <- liftIO $ NS.accept listen_socket
-              yield (new_socket, sock_addr)
-              iterate'
+              either_x <- liftIO . E.try $ NS.accept listen_socket
+              case either_x of
+                  Left e  | ioeGetErrorString e  == "resource exhausted" -> do
+                              LIO_REPORT_EVENT("resource-exhausted")
+                              liftIO $ threadDelay  (1000 * 1000)
+                              iterate'
+                          | ioeGetErrorString e == "signal" -> do
+                              -- TODO: Some signals here should be processed differently, most likely!!
+                              LIO_REPORT_EVENT("tcp-exit-on-signal")
+                              return ()
+                          | otherwise                                                                  -> liftIO $ do
+                              -- TODO: Handle other interesting types of IOErrors in the loop above...
+                              putStrLn $ "XXERR: " ++ ioeGetErrorString e
+                              E.throwIO $ e
+                  Right  (new_socket, sock_addr) -> do
+                      yield (new_socket, sock_addr)
+                      iterate'
         iterate'
 
 
