@@ -19,50 +19,15 @@ import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.TLS.Types
 import           SecondTransfer.IOCallbacks.SocketServer
 
-import           SecondTransfer.Socks5.Types                               (Socks5Resolver)
 import           SecondTransfer.Socks5.Session                             (tlsSOCKS5Serve)
 --import           SecondTransfer.Exception                                  ( NoMoreDataException(..), IOProblem)
 
 
 -- | Convenience function to open a port and listen there for connections and
 --   select protocols and so on.
-tlsServeWithALPN ::
-                 forall ctx session . (TLSContext ctx session)
-                 => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
-                                          --   of TLS backend to use during the invocation
-                 -> FilePath              -- ^ Path to certificate chain
-                 -> FilePath              -- ^ Path to PKCS #8 key
-                 -> String                -- ^ Name of the network interface
-                 -> [(String, Attendant)] -- ^ List of attendants and their handlers
-                 -> Int                   -- ^ Port to listen for connections
---                 -> MVar FinishRequest    -- ^ Finish request event, write a value here to finish serving
-                 -> IO ()
-tlsServeWithALPN _ certificate_filename key_filename interface_name attendants interface_port  =
-    do
-        let
-            i_want_protocols = map (pack . fst) attendants
-            sel_protocol :: [B.ByteString] -> IO B.ByteString
-            sel_protocol proposed_protocols = do
-                let
-                    chosen = fromMaybe "http/1.1" $
-                        foldl
-                              ( \ selected want_protocol ->
-                                     case (selected, elemIndex want_protocol proposed_protocols) of
-                                         ( Just a, _) -> Just a
-                                         (_,   Just _) -> Just want_protocol
-                                         (_,   _ ) -> Nothing
-                              )
-                              Nothing
-                              i_want_protocols
-                return chosen
-
-        ctx <- newTLSContext (pack certificate_filename) (pack key_filename) sel_protocol :: IO ctx
-        listen_socket <- createAndBindListeningSocket interface_name interface_port
-        tlsServe listen_socket (tlsSessionHandler attendants ctx)
-
 
 -- Experiment on polymorphism
-tlsServeWithALPN2 ::   forall ctx session . (TLSContext ctx session)
+tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
                                           --   of TLS backend to use during the invocation
                  -> FilePath              -- ^ Path to certificate chain
@@ -72,7 +37,7 @@ tlsServeWithALPN2 ::   forall ctx session . (TLSContext ctx session)
                  -> Int                   -- ^ Port to listen for connections
 --                 -> MVar FinishRequest    -- ^ Finish request event, write a value here to finish serving
                  -> IO ()
-tlsServeWithALPN2 proxy  cert_filename key_filename interface_name attendants interface_port = do
+tlsServeWithALPN proxy  cert_filename key_filename interface_name attendants interface_port = do
     listen_socket <- createAndBindListeningSocket interface_name interface_port
     coreListen proxy cert_filename key_filename listen_socket tlsServe attendants
 
