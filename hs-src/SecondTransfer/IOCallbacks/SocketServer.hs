@@ -2,20 +2,29 @@
 module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
               , TLSServerSocketIOCallbacks         (..)
-
               , createAndBindListeningSocket
+              , socketIOCallbacks
+
+              -- ** Socket server with callbacks
               , tcpServe
               , tlsServe
-              , socketIOCallbacks
+
+              -- ** Socket server with iterators
+              , tcpItcli
+              , tlsItcli
        ) where
 
 
 ---import           Control.Concurrent
 import qualified Control.Exception                                  as E
-import           Control.Lens                                       (makeLenses, (^.))
+--import           Control.Lens                                       (makeLenses, (^.))
+import           Control.Monad.IO.Class                             (liftIO)
 
-import qualified Data.ByteString                                    as B
-import qualified Data.ByteString.Lazy                               as LB
+import           Data.Conduit
+import qualified Data.Conduit.List                                  as CL
+
+--import qualified Data.ByteString                                    as B
+--import qualified Data.ByteString.Lazy                               as LB
 --import           Data.ByteString.Char8                              (pack, unpack)
 --import           Data.List                                          (find)
 
@@ -23,12 +32,12 @@ import qualified Data.ByteString.Lazy                               as LB
 --import           System.Posix.Signals
 
 import qualified Network.Socket                                     as NS
-import qualified Network.Socket.ByteString                          as NSB
+--import qualified Network.Socket.ByteString                          as NSB
 
 
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.WrapSocket              (socketIOCallbacks, SocketIOCallbacks)
-import           SecondTransfer.Exception                           (NoMoreDataException(..))
+--import           SecondTransfer.Exception                           (NoMoreDataException(..))
 
 
 -- | Simple alias to SocketIOCallbacks where we expect
@@ -90,6 +99,20 @@ tcpServe  listen_socket action =
         accept_loop bind_socket
 
 
+-- | Itcli is a word made from "ITerate-on-CLIents". This function makes an iterated
+--   listen...
+tcpItcli :: NS.Socket -> Source IO (NS.Socket, NS.SockAddr)
+tcpItcli listen_socket =
+    do
+        liftIO $ NS.listen listen_socket 20
+        let
+          iterate' = do
+              (new_socket, sock_addr) <- liftIO $ NS.accept listen_socket
+              yield (new_socket, sock_addr)
+              iterate'
+        iterate'
+
+
 -- | Convenience function to create a TLS server. You are in charge of actually setting
 --   up the TLS session, this only receives a type tagged with the IO thing...
 tlsServe :: NS.Socket ->  ( TLSServerSocketIOCallbacks -> IO () ) -> IO ()
@@ -99,3 +122,14 @@ tlsServe listen_socket tls_action =
     tcp_action active_socket = do
         socket_io_callbacks <- socketIOCallbacks active_socket
         tls_action (TLSServerSocketIOCallbacks socket_io_callbacks)
+
+
+tlsItcli :: NS.Socket -> Source IO (TLSServerSocketIOCallbacks, NS.SockAddr)
+tlsItcli listen_socket =
+    fuse
+        (tcpItcli listen_socket)
+        ( CL.mapM
+            $ \ (active_socket, address) -> do
+                socket_io_callbacks <- socketIOCallbacks active_socket
+                return (TLSServerSocketIOCallbacks socket_io_callbacks ,address)
+        )

@@ -9,6 +9,7 @@ module SecondTransfer.IOCallbacks.Types (
                , PullAction
                , BestEffortPullAction
                , Attendant
+               , ControllableAttendant
                , CloseAction
                , IOCallbacks        (..)
                , MonoDisruptible    (..)

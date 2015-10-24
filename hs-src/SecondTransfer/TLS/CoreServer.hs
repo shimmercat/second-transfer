@@ -1,13 +1,27 @@
 {-# LANGUAGE RankNTypes, FunctionalDependencies, PartialTypeSignatures, OverloadedStrings, ScopedTypeVariables #-}
 module SecondTransfer.TLS.CoreServer (
+               -- * Simpler interfaces
+               -- These functions are simple enough but don't work with controllable
+               -- processes.
                  tlsServeWithALPN
                , tlsSessionHandler
                , tlsServeWithALPNUnderSOCKS5
                , coreListen
+
+               -- * Utility
+               , chooseProtocol
+
+               -- * Conduit-based session management
+               , coreItcli
+
        ) where
 
-import           Control.Concurrent
+--import           Control.Concurrent
+import           Control.Monad.IO.Class                                    (liftIO)
 
+import           Data.Conduit
+-- import qualified Data.Conduit                                              as Con(yield)
+import qualified Data.Conduit.List                                         as CL
 import           Data.Typeable                                             (Proxy(..))
 import           Data.List                                                 (elemIndex)
 import           Data.Maybe                                                (fromMaybe, isJust)
@@ -62,16 +76,42 @@ tlsServeWithALPNUnderSOCKS5 proxy  cert_filename key_filename interface_name att
 
 tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, Attendant)]  ->  ctx ->  encrypted_io -> IO ()
 tlsSessionHandler attendants ctx encrypted_io = do
-    forkIO $
-        do
-          session <- unencryptTLSServerIO ctx encrypted_io
-          plaintext_io_callbacks <- handshake session :: IO IOCallbacks
-          (_, prot_name) <- getSelectedProtocol session
-          --let
-          let
-              Just  use_attendant = lookup (unpack prot_name) attendants
-          use_attendant plaintext_io_callbacks
+    session <- unencryptTLSServerIO ctx encrypted_io
+    plaintext_io_callbacks <- handshake session :: IO IOCallbacks
+    (_, prot_name) <- getSelectedProtocol session
+    --let
+    let
+        Just  use_attendant = lookup (unpack prot_name) attendants
+    use_attendant plaintext_io_callbacks
     return ()
+
+
+tlsSessionHandlerControllable ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, ControllableAttendant controller)]  ->  ctx ->  encrypted_io -> IO controller
+tlsSessionHandlerControllable attendants ctx encrypted_io = do
+    session <- unencryptTLSServerIO ctx encrypted_io
+    plaintext_io_callbacks <- handshake session :: IO IOCallbacks
+    (_, prot_name) <- getSelectedProtocol session
+    --let
+    let
+        Just  use_attendant = lookup (unpack prot_name) attendants
+    use_attendant plaintext_io_callbacks
+
+
+chooseProtocol :: [(String, a)] ->  [B.ByteString] -> IO B.ByteString
+chooseProtocol attendants proposed_protocols =
+    let
+        i_want_protocols = map (pack . fst) attendants
+        chosen = fromMaybe "http/1.1" $
+            foldl
+                  ( \ selected want_protocol ->
+                         case (selected, elemIndex want_protocol proposed_protocols) of
+                             ( Just a, _) -> Just a
+                             (_,   Just _) -> Just want_protocol
+                             (_,   _ ) -> Nothing
+                  )
+                  Nothing
+                  i_want_protocols
+    in return chosen
 
 
 coreListen ::
@@ -84,24 +124,22 @@ coreListen ::
      -> ( a -> (b -> IO()) -> IO () )    -- ^ The fork-handling functionality
      -> [(String, Attendant)]             -- ^ List of attendants and their handlers
      -> IO ()
-coreListen _ certificate_filename key_filename listen_abstraction session_forker attendants =
-    do
-        let
-            i_want_protocols = map (pack . fst) attendants
-            sel_protocol :: [B.ByteString] -> IO B.ByteString
-            sel_protocol proposed_protocols = do
-                let
-                    chosen = fromMaybe "http/1.1" $
-                        foldl
-                              ( \ selected want_protocol ->
-                                     case (selected, elemIndex want_protocol proposed_protocols) of
-                                         ( Just a, _) -> Just a
-                                         (_,   Just _) -> Just want_protocol
-                                         (_,   _ ) -> Nothing
-                              )
-                              Nothing
-                              i_want_protocols
-                return chosen
+coreListen _ certificate_filename key_filename listen_abstraction session_forker attendants =   do
+     ctx <- newTLSContext (pack certificate_filename) (pack key_filename) (chooseProtocol attendants) :: IO ctx
+     session_forker listen_abstraction (tlsSessionHandler attendants ctx)
 
-        ctx <- newTLSContext (pack certificate_filename) (pack key_filename) sel_protocol :: IO ctx
-        session_forker listen_abstraction (tlsSessionHandler attendants ctx)
+
+-- | A conduit that takes TLS-encrypted callbacks, creates a TLS server session on top of it, passes the resulting
+--   plain-text io-callbacks to a chosen Attendant in the argument list, and passes up the controller of the attendant
+--   so that it can be undone if needs come.
+coreItcli ::
+         forall controller ctx session b . (TLSContext ctx session, TLSServerIO b)
+     => ctx                                                      -- ^ Passing in a tls context already-built value allows for sharing a single
+                                                                 --   context across multiple listening abstractions...
+     -> [(String, ControllableAttendant controller)]             -- ^ List of attendants and their handlers
+     -> Conduit b IO controller
+coreItcli  ctx  controllable_attendants = do
+    let
+        monomorphicHandler :: [(String, ControllableAttendant controller)]  ->  ctx ->  b -> IO controller
+        monomorphicHandler =  tlsSessionHandlerControllable
+    CL.mapM  $  liftIO <$> monomorphicHandler controllable_attendants ctx
