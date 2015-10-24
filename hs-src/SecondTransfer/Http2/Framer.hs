@@ -60,11 +60,11 @@ import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
+#ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging        (logit)
+#endif
 
-import           Debug.Trace                            (trace)
-
-#include "Logging.cpphs"
+--import           Debug.Trace                            (trace)
 
 
 http2PrefixLength :: Int

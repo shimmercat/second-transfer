@@ -5,12 +5,10 @@ module SecondTransfer.Utils.DevNull(
 
 
 import Control.Concurrent (forkIO)
-import Control.Monad.IO.Class (liftIO)
-
 import Data.Conduit
 
 import SecondTransfer.MainLoop.CoherentWorker
-import SecondTransfer.MainLoop.Logging(logit)
+
 
 
 -- TODO: Handling unnecessary data should be done in some other, less
@@ -25,6 +23,5 @@ dropIncomingData Nothing = return ()
 dropIncomingData (Just data_source) = do
     forkIO $
         data_source $$ awaitForever (\ _ -> do
-                                         {-liftIO $ logit "stream discarded"-}
                                          return () )
     return ()

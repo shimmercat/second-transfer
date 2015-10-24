@@ -31,7 +31,6 @@ module SecondTransfer.Http2.Session(
     ,InputFrame
     ) where
 
-#include "Logging.cpphs"
 
 -- System grade utilities
 import           Control.Concurrent                     (ThreadId, forkIO)
@@ -54,9 +53,6 @@ import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
 import           Data.Maybe                             (isJust)
 import           Data.Typeable
-#ifndef IMPLICIT_MONOID
-import           Data.Monoid                            (mappend)
-#endif
 
 import           Control.Lens
 
@@ -65,7 +61,8 @@ import qualified Network.HPACK                          as HP
 import qualified Network.HTTP2                          as NH2
 
 
-import           System.Clock                            (getTime, TimeSpec, Clock(..))
+import           System.Clock                            ( getTime
+                                                         , Clock(..))
 
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
@@ -80,7 +77,9 @@ import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler
 import           SecondTransfer.Utils                   (unfoldChannelAndSource)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
+#ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging        (logit)
+#endif
 
 --import           Debug.Trace
 
@@ -617,9 +616,7 @@ sessionInputThread  = do
                 case maybe_thread_id  of
                     Nothing ->
                         -- This is can actually happen in some implementations: we are asked to
-                        -- cancel an stream we know nothing about. Log which stream it is
-                        --logit $  "InterruptingUnexistentStream " `mappend` (pack . show $ stream_id)
-                        -- and don't get too crazy about it.
+                        -- cancel an stream we know nothing about.
                         return ()
 
                     Just thread_id -> do
@@ -719,7 +716,6 @@ sessionInputThread  = do
 
         MiddleFrame_SIC somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
-            -- liftIO . logit $ "Strange frame:" `mappend` (pack . show $ somethingelse)
             continue
 
   where
@@ -739,7 +735,6 @@ sessionInputThread  = do
             Just _    ->  closeConnectionBecauseIsInvalid NH2.ProtocolError
 
             Nothing   ->  return ()
-        -- liftIO $ logit $ "Settings " `mappend` (pack . show $  _settings_list)
         sendOutFrame
             (NH2.EncodeInfo
                 (NH2.setAck NH2.defaultFlags)
@@ -787,8 +782,6 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                 -- We are not golden
                 -- INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
                 {-# SCC ccB2 #-} closeConnectionBecauseIsInvalid NH2.ProtocolError
-        -- So, now we know, we are ignoring priority frames at the moment
-        -- liftIO . logit $ "Priority: " `mappend` (pack . show $ getHeadersPriority frame)
       else do
         maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         case maybe_rcv_headers_of of
@@ -811,11 +804,6 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
         headers_bytes             <- getHeaderBytes stream_id
         dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
         (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
-#if LOGIT_SWITCH_TIMINGS
-        let
-            (Just path) = He.fetchHeader header_list ":path"
-        liftIO $ logit $ (pack . show $ stream_id ) `mappend` " -> " `mappend` path
-#endif
         -- /DEBUG
         -- Good moment to remove the headers from the table.... we don't want a space
         -- leak here
@@ -932,8 +920,6 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                 -- We are not golden
                 -- TODO: Control for pushed streams here.
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
-        -- So, now we know, we are ignoring priority frames at the moment
-        -- liftIO . logit $ "Priority: " `mappend` (pack . show $ getHeadersPriority frame)
       else do
         maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         case maybe_rcv_headers_of of
@@ -1299,9 +1285,6 @@ workerThread req aware_worker =
     --       throws an exception signaling that the request is ill-formed
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
-#if LOGIT_SWITCH_TIMINGS
-    liftIO . logit $ "worker-thread " `mappend` (pack . show $ stream_id)
-#endif
     -- (headers, _, data_and_conclussion)
     principal_stream <-
         liftIO $ E.catch

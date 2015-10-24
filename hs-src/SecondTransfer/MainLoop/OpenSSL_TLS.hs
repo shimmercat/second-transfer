@@ -26,11 +26,12 @@ import qualified Data.ByteString.Lazy       as LB
 import qualified Data.ByteString.Unsafe     as BU
 
 import           SecondTransfer.IOCallbacks.Types
+#ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging (logit)
+#endif
 import           SecondTransfer.Exception
 import           SecondTransfer.TLS.Types        (FinishRequest)
 
-#include "Logging.cpphs"
 
 -- | Exceptions inheriting from `IOProblem`. This is thrown by the
 -- OpenSSL subsystem to signal that the connection was broken or that

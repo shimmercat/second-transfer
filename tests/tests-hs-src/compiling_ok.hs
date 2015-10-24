@@ -3,7 +3,6 @@ import SecondTransfer(
     AwareWorker
     , Footers
     , DataAndConclusion
-    , tlsServeWithALPNAndFinishOnRequest
     , http2Attendant
     , http11Attendant
     , dropIncomingData
@@ -14,10 +13,20 @@ import SecondTransfer.Sessions(
       makeSessionsContext
     , defaultSessionsConfig
     )
+import SecondTransfer.TLS.CoreServer(
+      tlsServeWithALPN
+    )
+import SecondTransfer.TLS.Botan (
+      BotanTLSContext
+    )
+
+
+import Data.Typeable              (Proxy)
 
 import Data.Conduit
 import Control.Concurrent         (threadDelay, forkIO)
 import Control.Concurrent.MVar
+
 
 saysHello :: DataAndConclusion
 saysHello = do
@@ -42,7 +51,6 @@ helloWorldWorker  = coherentToAwareWorker $ \ (_request_headers, _maybe_post_dat
 -- the developement directory.
 main = do
     sessions_context <- makeSessionsContext defaultSessionsConfig
-    finish <- newEmptyMVar
     -- Make the server work only for small amount of time, so that
     -- continue running other tests
     forkIO $ do
@@ -51,7 +59,11 @@ main = do
     let
         http2_attendant = http2Attendant sessions_context helloWorldWorker
         http11_attendant = http11Attendant sessions_context helloWorldWorker
-    tlsServeWithALPNAndFinishOnRequest
+        tls_context_proxy :: Proxy BotanTLSContext
+        tls_context_proxy = undefined
+
+    tlsServeWithALPN
+        tls_context_proxy
         "tests/support/servercert.pem"   -- Server certificate
         "tests/support/privkey.pem"      -- Certificate private key
         "127.0.0.1"                      -- On which interface to bind
