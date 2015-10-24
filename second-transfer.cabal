@@ -105,6 +105,7 @@ library
                   , SecondTransfer.MainLoop.Logging
                   , SecondTransfer.MainLoop.ClientPetitioner
                   , SecondTransfer.Sessions.Internal
+                  , SecondTransfer.MainLoop.Disruptible
 
                   , SecondTransfer.MainLoop.OpenSSL_TLS
                   , SecondTransfer.Utils

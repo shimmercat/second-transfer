@@ -12,7 +12,6 @@ module SecondTransfer.IOCallbacks.Types (
                , DisruptibleAttendant
                , CloseAction
                , IOCallbacks        (..)
-               , Disruptible        (..)
                , MonoDisruptible    (..)
                , makeAttendantDisruptible
 
@@ -40,11 +39,12 @@ module SecondTransfer.IOCallbacks.Types (
 import           Control.Lens
 
 import           Data.IORef
---import           Data.Typeable
 
 import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
 import qualified Data.ByteString.Builder                      as Bu
+
+import           SecondTransfer.MainLoop.Disruptible          (  Disruptible(..), MonoDisruptible(..) )
 
 -- | Callback type to push data to a channel. Part of this
 --   interface is the abstract exception type IOProblem. Throw an
@@ -173,17 +173,6 @@ instance IOChannels TLSServer where
 instance TLSEncryptedIO TLSServer
 instance TLSServerIO TLSServer
 
-
--- | This is an entity that can be disrupted and closed. Good to
---   force shutdown in some places.
-class Disruptible d where
-    disrupt :: d -> IO ()
-
-
--- | Monomorphic encapsulation of a Disruptible
--- TODO: Are perhaps Data and Typeable classes that I want
--- for enforce here?
-data MonoDisruptible = forall d . MonoDisruptible d
 
 -- | An Attendant is an entity that can speak a protocol, given
 --   the presented I/O callbacks. It's work is to spawn a set

@@ -4,7 +4,7 @@ module SecondTransfer.MainLoop.Internal(
     ,http2FrameLength
     ,OutputFrame
     ,InputFrame
-    ) where 
+    ) where
 
 
 import SecondTransfer.MainLoop.Framer(readNextChunkAndContinue)
