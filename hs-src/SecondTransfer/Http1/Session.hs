@@ -23,10 +23,8 @@ import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag, sessionsConfig)
 
-import           SecondTransfer.IOCallbacks.Types        
+import           SecondTransfer.IOCallbacks.Types
 
--- Logging utilities
-import           System.Log.Logger
 -- And we need the time
 import           System.Clock
 

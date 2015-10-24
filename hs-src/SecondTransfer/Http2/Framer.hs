@@ -43,8 +43,6 @@ import qualified Data.PQueue.Min                        as PQ
 import           Data.Maybe                             (fromMaybe)
 
 import qualified Network.HTTP2                          as NH2
--- Logging utilities
-import           System.Log.Logger
 
 import qualified Data.HashTable.IO                      as H
 import           System.Clock                           (Clock(..),getTime)
@@ -62,7 +60,7 @@ import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
-import           SecondTransfer.MainLoop.Logging        (logWithExclusivity, logit)
+import           SecondTransfer.MainLoop.Logging        (logit)
 
 import           Debug.Trace                            (trace)
 

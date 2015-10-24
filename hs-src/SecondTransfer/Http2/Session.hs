@@ -64,8 +64,6 @@ import           Control.Lens
 import qualified Network.HPACK                          as HP
 import qualified Network.HTTP2                          as NH2
 
--- Logging utilities
-import           System.Log.Logger
 
 import           System.Clock                            (getTime, TimeSpec, Clock(..))
 

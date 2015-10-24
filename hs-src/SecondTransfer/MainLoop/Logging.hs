@@ -1,10 +1,10 @@
 {-# OPTIONS_HADDOCK hide #-}
 {-# LANGUAGE BangPatterns, OverloadedStrings #-}
 module SecondTransfer.MainLoop.Logging (
-    -- | Simple, no fuss enable logging
-    enableConsoleLogging
-    ,logWithExclusivity
+     nonce
+#ifdef SECONDTRANSFER_MONITORING
     ,logit
+#endif
     ) where
 
 import           System.IO                 (stderr,openFile)
@@ -13,42 +13,21 @@ import qualified Data.ByteString           as B
 import qualified Data.ByteString.Char8     as Bch
 
 -- Logging utilities
-import           System.Log.Formatter      (simpleLogFormatter)
-import           System.Log.Handler        (setFormatter, LogHandler)
-import           System.Log.Handler.Simple
+--import           System.Log.Formatter      (simpleLogFormatter)
+--import           System.Log.Handler        (setFormatter, LogHandler)
+--import           System.Log.Handler.Simple
 -- import           System.Log.Handler.Syslog (Facility (..), Option (..), openlog)
-import           System.Log.Logger
+--import           System.Log.Logger
 import           System.IO.Unsafe          (unsafePerformIO)
 import           System.Clock              as Cl
 
-import           Control.Concurrent.MVar
+--import           Control.Concurrent.MVar
 import           Control.Concurrent.Chan
 import           Control.Concurrent
 
-
--- | Activates logging to terminal
-enableConsoleLogging :: IO ()
-enableConsoleLogging = configureLoggingToConsole
-
-
--- | Protect logging with a mutex... that is to say,
---   this is a horrible hack and you should try to log
---   as little as possible or nothing at all. This just
---   works for instrumentation locks...
-globallyLogWell :: MVar ()
-{-# NOINLINE globallyLogWell #-}
-globallyLogWell = unsafePerformIO (newMVar () )
-
--- | Used internally to avoid garbled logs
-logWithExclusivity :: IO () -> IO ()
-logWithExclusivity a = withMVar globallyLogWell (const a )
-
-
-configureLoggingToConsole :: IO ()
-configureLoggingToConsole = do
-    s <- streamHandler stderr DEBUG  >>=
-        \lh -> return $ setFormatter lh (simpleLogFormatter "[$time : $loggername : $prio] $msg")
-    setLoggerLevels s
+-- Simple thing to have a more generic logging utility
+nonce :: ()
+nonce = undefined
 
 
 -- configureLoggingToSyslog :: IO ()
@@ -58,28 +37,7 @@ configureLoggingToConsole = do
 --     setLoggerLevels s
 
 
-setLoggerLevels :: (LogHandler s) => s -> IO ()
-setLoggerLevels s = do
-    updateGlobalLogger rootLoggerName removeHandler
-    updateGlobalLogger "Session" (
-        setHandlers [s] .
-        setLevel INFO
-        )
-    updateGlobalLogger "OpenSSL" (
-        setHandlers [s] .
-        setLevel DEBUG
-        )
-    updateGlobalLogger "HTTP1" (
-        setHandlers [s] .
-        setLevel DEBUG
-        )
-    updateGlobalLogger "HTTP2" (
-        setHandlers [s] .
-        setLevel DEBUG
-        )
-
-
-
+#ifdef SECONDTRANSFER_MONITORING
 data Logit = Logit Cl.TimeSpec B.ByteString
 
 
@@ -114,3 +72,5 @@ logit !msg = do
     let
         lg = Logit time msg
     writeChan loggerChan lg
+
+#endif

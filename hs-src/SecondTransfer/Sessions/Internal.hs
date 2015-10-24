@@ -10,7 +10,7 @@ import qualified Control.Exception       as E
 import           Control.Lens            ((^.), makeLenses, Lens' )
 
 
-import           System.Log.Logger
+--import           System.Log.Logger
 
 
 
@@ -66,7 +66,7 @@ sessionExceptionHandler session_component session_id sessions_context e =
 
         getit = ( sessionsConfig . sessionsCallbacks . reportErrorCallback_SC )
         maybe_error_callback = sessions_context ^. getit
-        component_tag = "Session." ++ show session_component
+        --component_tag = "Session." ++ show session_component
         error_tuple = (
             session_component,
             SessionCoordinates session_id,

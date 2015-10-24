@@ -159,32 +159,24 @@ module SecondTransfer(
     , FinalizationHeaders
 
     -- ** How to couple bidirectional data channels to sessions
-    ,Attendant
-    ,http11Attendant
-    ,http2Attendant
-    ,coherentToAwareWorker
+    , Attendant
+    , http11Attendant
+    , http2Attendant
+    , coherentToAwareWorker
 
 #ifndef DISABLE_OPENSSL_TLS
     -- * High level OpenSSL functions.
     --
     -- | Use these functions to create your TLS-compliant
     --   HTTP/2 server in a snap.
-    ,tlsServeWithALPN
-    ,tlsServeWithALPNAndFinishOnRequest
+    , tlsServeWithALPN
+    , tlsServeWithALPNAndFinishOnRequest
 
-    ,TLSLayerGenericProblem(..)
-    ,FinishRequest(..)
+    , TLSLayerGenericProblem(..)
+    , FinishRequest(..)
 #endif -- DISABLE_OPENSSL_TLS
 
-    ,dropIncomingData
-    -- * Logging
-    --
-    -- | The library uses hslogger for its logging. Since logging is
-    -- expensive, most of the instrumentation needs to be activated
-    -- at compile time by activating the "debug" flag. And then you
-    -- need to configure the loggers. The function `enableConsoleLogging`
-    -- configures them to output a lot of information to standard output.
-    ,enableConsoleLogging
+    , dropIncomingData
     ) where
 
 import           SecondTransfer.Http1                   (http11Attendant)
