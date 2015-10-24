@@ -1,11 +1,7 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
 module SecondTransfer.Socks5.Types (
-
-                 ServerSocks5Stage                                  (..)
-               , Socks5Resolver                                     (..)
-
                -- ** Types to be serialized and de-serialized
-               , ClientAuthMethods_Packet                           (..)
+                 ClientAuthMethods_Packet                           (..)
                , ServerSelectsMethod_Packet                         (..)
                , ClientRequest_Packet                               (..)
                , cmd_SP3
@@ -35,22 +31,6 @@ import qualified Data.ByteString                                    as B
 
 import           Data.Word
 
-import           SecondTransfer.IOCallbacks.Types                   (DisruptibleAttendant)
-
--------------------------------------------------------------------------------------------------------
---
---  Behavioral types
---
--------------------------------------------------------------------------------------------------------
-
--- | Resolver for Socks5. It's different than DNS, because it accepts a port number.
-class Socks5Resolver a where
-    -- If resolve is successfull, this returns a function that can be
-    -- passed a IOCallbacks and do something with them....
-    --
-    --  The third argument is the port!
-    s5Resolve :: a ->  IndicatedAddress -> Int -> IO (Maybe DisruptibleAttendant)
-
 
 -------------------------------------------------------------------------------------------------------
 --
@@ -74,14 +54,6 @@ data ProtocolCommand =
     Connect_S5PC
   | Bind_S5PC
   | UdpAssociate_S5PC
-    deriving (Show, Eq, Enum)
-
-
-data ServerSocks5Stage =
-    Ready_SS5S             -- ^ Waiting for client greeting with auth methods
-  | WaitingRequest_SS5S    -- ^ Server is waiting for the Socks5 request
-  | Functioning_SS5S
-  | Failed_SS5S
     deriving (Show, Eq, Enum)
 
 -- TODO: We need to implement the other types of responses

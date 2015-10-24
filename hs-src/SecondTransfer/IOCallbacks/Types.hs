@@ -9,7 +9,6 @@ module SecondTransfer.IOCallbacks.Types (
                , PullAction
                , BestEffortPullAction
                , Attendant
-               , DisruptibleAttendant
                , CloseAction
                , IOCallbacks        (..)
                , MonoDisruptible    (..)
@@ -177,23 +176,27 @@ instance TLSServerIO TLSServer
 -- | An Attendant is an entity that can speak a protocol, given
 --   the presented I/O callbacks. It's work is to spawn a set
 --   of threads to handle a client's session, and then return to
---   the caller. It shouldn'r remain working for the client.
+--   the caller. It shouldn'r busy the calling thread.
 type Attendant = IOCallbacks -> IO ()
 
--- | Some more advanced attendants can be interrupted. They of
---   course also return inmediately, but they return a handle that
---   can be used at a later time to interrupt everything.
-type DisruptibleAttendant = IOCallbacks -> IO MonoDisruptible
+-- | After forking an attendant, it is sometimes useful to return
+--   a controller type that can be used for e.g. shutdown the client's
+--   session from outside.
+type ControllableAttendant controller = IOCallbacks -> IO controller
 
+-- | The Damocles Attendant is disruptible in a very bad way...
 newtype Damocles = Damocles IOCallbacks
 
 instance Disruptible Damocles where
     disrupt (Damocles io_callbacks) = ( io_callbacks ^. closeAction_IOC )
 
-makeAttendantDisruptible :: Attendant -> DisruptibleAttendant
+
+-- | This makes a normal boring attendant disruptible by invoking the "close"
+--   action in the underlying IOCallbacks.
+makeAttendantDisruptible :: Attendant -> ControllableAttendant Damocles
 makeAttendantDisruptible normal =
     \ io_callbacks -> do
         let
             disruptor = Damocles io_callbacks
         normal io_callbacks
-        return $ MonoDisruptible disruptor
+        return  disruptor

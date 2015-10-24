@@ -13,3 +13,6 @@ class Disruptible d where
 
 -- | Monomorphic encapsulation of a Disruptible
 data MonoDisruptible = forall d . Disruptible d => MonoDisruptible d
+
+instance Disruptible MonoDisruptible where
+    disrupt (MonoDisruptible d) = disrupt d
