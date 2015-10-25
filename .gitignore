@@ -16,3 +16,8 @@ examples/simple_tcp_server/simple_tcp_server
 examples/simple_tls_server/simple_tls_server
 examples/simple_http_server/simple_http_server
 examples/socks5_tcp_server/socks5_tcp_server
+tests/suite1/*.o
+tests/suite1/*.hi
+tests/suite1/suite1.wpu
+tests/suite1/t1_accept_exceptions
+tests/suite1/t2_tls_leaks

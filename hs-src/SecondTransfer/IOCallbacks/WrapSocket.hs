@@ -23,6 +23,7 @@ import qualified Network.Socket.ByteString                          as NSB
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception
 
+#include "instruments.cpphs"
 
 -- | IOCallbacks around an active socket
 data SocketIOCallbacks = SocketIOCallbacks {
@@ -40,7 +41,12 @@ instance IOChannels SocketIOCallbacks where
 socketIOCallbacks :: NS.Socket -> IO SocketIOCallbacks
 socketIOCallbacks socket = do
     let
-        uhandler = ((\ _ -> E.throwIO NoMoreDataException ) :: E.SomeException -> IO a )
+        uhandler = ((\ e -> do
+                               -- TODO: You may need to comment the putStrLn below
+                               -- Preserve sockets!!
+                               close_action
+                               E.throwIO NoMoreDataException
+                    ) :: E.SomeException -> IO a )
 
         push_action lazy_bs =
             E.catch
@@ -52,12 +58,21 @@ socketIOCallbacks socket = do
             datum <- E.catch (NSB.recv socket 4096) uhandler
             if B.length datum == 0
                 then do
+                   -- Pre-emptively close the socket, don't wait for anything else
+                   close_action
                    E.throwIO NoMoreDataException
                 else
                    return datum
-        close_action = do
+
+        -- Exceptions are close are possible
+        close_action = E.catch ( do
+            REPORT_EVENT("socket-close-called")
             NS.shutdown socket NS.ShutdownBoth
+            REPORT_EVENT("socket-shutdown-executed")
             NS.close socket
+            REPORT_EVENT("socket-close-executed")
+            return ()
+            ) (( \ _ -> return () ) :: E.SomeException -> IO () )
     pull_action_wrapping <- newPullActionWrapping  best_effort_pull_action
     let
         pull_action = pullFromWrapping pull_action_wrapping

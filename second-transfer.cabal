@@ -206,6 +206,8 @@ library
                        , cbits/botan_all.cpp
                        , cbits/botan_all_avx2.cpp
                        , cbits/botan_all_aesni.cpp
+                       , cbits/botan_all_ssse3.cpp
+                       , cbits/botan_all_rdrand.cpp
 
   -- TODO: Refactor
   if flag(fastc)

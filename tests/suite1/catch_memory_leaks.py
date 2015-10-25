@@ -39,7 +39,8 @@ class LeakDetector(object):
         u1 = prelatest_sample[:, column_index].mean()
         s1 = prelatest_sample[:, column_index].std()
 
-        if denominator == 0:
+        denominator = s1*s1 / sample_size + s2*s2 / sample_size
+        if denominator <= 0:
             return False
         t = (u1 - u2) / math.sqrt( denominator )
         dist = studentt(sample_size - 1)

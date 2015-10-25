@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, TemplateHaskell, Rank2Types, FunctionalDependencies #-}
+{-# LANGUAGE ForeignFunctionInterface, TemplateHaskell, Rank2Types, FunctionalDependencies, OverloadedStrings #-}
 module SecondTransfer.TLS.Botan (
                   BotanTLSContext
                 , BotanSession
@@ -29,6 +29,8 @@ import           SecondTransfer.Exception                                  ( IOP
 import           SecondTransfer.TLS.Types                                  ( FinishRequest
                                                                            , ProtocolSelector
                                                                            , TLSContext (..) )
+
+#include "instruments.cpphs"
 
 data BotanTLSChannel
 
@@ -202,6 +204,7 @@ pullAvailableData botan_pad can_wait = do
     let
         data_came_mvar = botan_pad ^. dataCame_BP
         avail_data_iorref = botan_pad ^. availableData_BP
+        io_problem_mvar = botan_pad ^. problem_BP
         -- And here inside cleanup. The block below doesn't compose with other instances of
         -- reads happening simultaneously
     avail_data <- atomicModifyIORef' avail_data_iorref $ \ bu -> (mempty, bu)
@@ -210,7 +213,13 @@ pullAvailableData botan_pad can_wait = do
     case ( LB.length avail_data_lb == 0 , can_wait ) of
         (True, True) -> do
             takeMVar data_came_mvar
-            pullAvailableData botan_pad True
+            maybe_problem <- tryReadMVar io_problem_mvar
+            case maybe_problem of
+                Nothing ->
+                    pullAvailableData botan_pad True
+
+                Just () ->
+                    E.throwIO NoMoreDataException
 
         (_, _) ->
             return . LB.toStrict $ avail_data_lb
@@ -285,7 +294,9 @@ unencryptChannelData botan_ctx tls_data  = do
 
         pump_exc_handler :: IOProblem -> IO (Maybe B.ByteString)
         pump_exc_handler _ = do
-            putMVar problem_mvar ()
+            tryPutMVar problem_mvar ()
+            -- Wake-up any readers...
+            tryPutMVar data_came_mvar ()
             return Nothing
 
         pump :: IO ()
@@ -308,7 +319,7 @@ unencryptChannelData botan_ctx tls_data  = do
     result <- newIORef new_botan_pad
 
     mkWeakIORef result $ do
-        --putStrLn "Deeee"
+        REPORT_EVENT("stable-pointer-freed")
         freeStablePtr botan_pad_stable_ref
 
     -- Create the pump thread

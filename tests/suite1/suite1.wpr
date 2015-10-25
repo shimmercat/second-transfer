@@ -20,10 +20,18 @@ debug.launch-configs = (1,
          'runargs': u'',
          'rundir': ('project',
                     u'')})})
-proj.file-list = [loc('accept_exceptions.py'),
-                  loc('catch_memory_leaks.py')]
+proj.file-list = [loc('catch_memory_leaks.py'),
+                  loc('suite_tools.py'),
+                  loc('t1_accept_exceptions.py'),
+                  loc('t2_tls_memory_usage.py')]
 proj.file-type = 'shared'
 proj.launch-config = {loc('accept_exceptions.py'): ('custom',
         (u'',
+         'launch-psa54b2wIFGWXI8P')),
+                      loc('t1_accept_exceptions.py'): ('project',
+        (u'',
+         'launch-psa54b2wIFGWXI8P')),
+                      loc('t2_tls_memory_usage.py'): ('project',
+        (u'',
          'launch-psa54b2wIFGWXI8P'))}
-proj.main-file = loc('accept_exceptions.py')
+proj.main-file = loc('t2_tls_memory_usage.py')
