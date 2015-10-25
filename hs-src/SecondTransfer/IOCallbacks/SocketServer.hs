@@ -83,22 +83,10 @@ createAndBindListeningSocket hostname portnumber = do
 -- | Simple TCP server. You must give a very short action, as the action
 --   is run straight in the calling thread.
 --   For a typical server, you would be doing a forkIO in the provided action.
+--   Do prefer to use tcpItcli directly.
 tcpServe :: NS.Socket -> ( NS.Socket -> IO () ) -> IO ()
 tcpServe  listen_socket action =
-    do
-        NS.listen listen_socket 20
-        --is_listening <- NS.isListening  listen_socket
-        accept_loop listen_socket
-  where
-    accept_loop bind_socket = do
-        (new_socket, _ ) <- NS.accept bind_socket
-        E.catch
-            (do
-                action new_socket
-            )
-            -- TODO: Have to see this fail sometime
-            ( (\ e -> putStrLn $ show e) :: E.SomeException -> IO ())
-        accept_loop bind_socket
+    tcpItcli listen_socket $$ CL.mapM_  (action . fst)
 
 
 -- | Itcli is a word made from "ITerate-on-CLIents". This function makes an iterated
