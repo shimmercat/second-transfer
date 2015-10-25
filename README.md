@@ -5,38 +5,29 @@ Developer README
 Introduction
 ------------
 
-This is an early-stage and very experimental library to create HTTP/2 servers
-using Haskell.
+This is a library for creating HTTP/2 servers.
 
-To see the package docs, please check the Hackage page or
+To see some introductory docs, please check the Hackage page or
 the file hs-src/SecondTransfer.hs.
+
+Supported platforms
+-------------------
+
+At the moment, we only support Linux. But there are plans to support other platforms.
 
 Building and installing
 -----------------------
 
-You need Haskell GHC compiler installed (version 7.8.3 at least). You also
-need OpenSSL 1.0.2, since the ALPN feature and some very recent cypher-suites
-are needed by HTTP/2. this source distribution will try to find them at
-directory `/opt/openssl-1.0.2`, but you should be able to
-alter the options using `cabal configure`. This package uses Haskell's FFI to interface with OpenSSL.
-
-Provided that you have all the dependencies, you should be able to just do:
-
-    $ cabal install second-transfer
+The preferred method of installing SecondTransfer is through [Stack](https://github.com/commercialhaskell/stack).
 
 Running the tests
 -----------------
 
-    $ cabal test
-
+There are two sets of tests: normal Haskell tests and a custom test suite called Suite 1 that requires 
+Stack, Python 3.4+, Redis running in localhost/standard port with DB 3 erasable, and Numpy. 
+To run Suite 1, SecondTransfer should be compiled with the "Monitoring" flag enabled. 
 
 Debugging complicated scenarios
--------------------------------
-
-To access full debugging capabilities, for example from the test suite, use the
-following command from the project's directory:
-
-    $ cabal exec -- ghci -ihs-src -itests/tests-hs-src -itests/support -XCPP -Imacros/ dist/build/cbits/tlsinc.o
 
 Example
 -------
