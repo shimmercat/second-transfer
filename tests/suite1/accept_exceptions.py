@@ -47,13 +47,14 @@ def try_exhaust_sockets():
     finally:
         try:
             # Grr
-            os.system("pkill ghc")
+            #os.system("pkill ghc")
+            os.kill(-p_server.pid, signal.SIGTERM)
         except OSError as e:
             print(e)
             pass
 
 def spin_server():
-    return invoke("stack runghc t1_accept_exceptions")
+    return invoke("stack runghc t1_accept_exceptions", start_new_session=True)
 
 def main():
     try_exhaust_sockets()
