@@ -9,6 +9,8 @@ import signal
 import redis
 from shlex import (split)
 
+from catch_memory_leaks import LeakDetector
+
 def invoke(s, **kwargs):
     pieces = split(s)
     p = sp.Popen(pieces, **kwargs)
@@ -23,16 +25,20 @@ def ensure(p, msg):
 def try_exhaust_sockets():
     p_server = spin_server()
     restarts = 0
+    ld = LeakDetector(p_server.pid)
     try:
         sockets = []
         time.sleep(1.0)
         for i in range(1025):
             try:
                 conn = socket.create_connection(("127.0.0.1", 3037))
+                ld.sample()
                 if restarts == 1:
                     restarts = 2
                 #conn.recv(1)
             except socket.error:
+                ensure(not ld.leaks(), "It's leaking memory!")
+                ld = LeakDetector(p_server.pid)
                 for s in sockets:
                     s.close()
                 sockets = []

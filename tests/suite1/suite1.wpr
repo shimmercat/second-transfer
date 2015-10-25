@@ -20,7 +20,8 @@ debug.launch-configs = (1,
          'runargs': u'',
          'rundir': ('project',
                     u'')})})
-proj.file-list = [loc('accept_exceptions.py')]
+proj.file-list = [loc('accept_exceptions.py'),
+                  loc('catch_memory_leaks.py')]
 proj.file-type = 'shared'
 proj.launch-config = {loc('accept_exceptions.py'): ('custom',
         (u'',
