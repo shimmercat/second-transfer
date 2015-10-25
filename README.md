@@ -19,6 +19,11 @@ Building and installing
 -----------------------
 
 The preferred method of installing SecondTransfer is through [Stack](https://github.com/commercialhaskell/stack).
+SecondTransfer embeds [Botan](http://botan.randombit.net/) for its TLS layer. 
+Therefore, a modern C++ compiler (e.g., g++ 4.8) should be available at compile time. 
+
+We used OpenSSL in the past
+and there is a possibility of supporting it again in the future. 
 
 Running the tests
 -----------------
@@ -26,8 +31,6 @@ Running the tests
 There are two sets of tests: normal Haskell tests and a custom test suite called Suite 1 that requires 
 Stack, Python 3.4+, Redis running in localhost/standard port with DB 3 erasable, and Numpy. 
 To run Suite 1, SecondTransfer should be compiled with the "Monitoring" flag enabled. 
-
-Debugging complicated scenarios
 
 Example
 -------
