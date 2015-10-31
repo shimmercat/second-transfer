@@ -743,11 +743,11 @@ sessionInputThread  = do
             max_frame_size = lookup NH2.SettingsMaxFrameSize _settings_list
 
         case enable_push of
-            Just 1     -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) True
-            Just 0     -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) False
-            Just _    ->  closeConnectionBecauseIsInvalid NH2.ProtocolError
+            Just 1      -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) True
+            Just 0      -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) False
+            Just _      ->  closeConnectionBecauseIsInvalid NH2.ProtocolError
 
-            Nothing   ->  return ()
+            Nothing     ->  return ()
 
         case max_frame_size of
             -- The spec says clearly what's the minimum size that can come here
@@ -761,6 +761,9 @@ sessionInputThread  = do
                               then return ()
                               else
                                   liftIO $ DIO.writeIORef (session_settings ^. frameSize_SeS) n
+
+            Nothing     -> return ()
+
 
 
         sendOutFrame
