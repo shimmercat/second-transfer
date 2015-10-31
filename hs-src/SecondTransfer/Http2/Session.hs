@@ -752,15 +752,20 @@ sessionInputThread  = do
         case max_frame_size of
             -- The spec says clearly what's the minimum size that can come here
             Just n | n < 16384 || n > 16777215
-                        ->
+                        -> do
+                           liftIO $ putStrLn "Wild max frame size"
                            closeConnectionBecauseIsInvalid NH2.ProtocolError
                    | otherwise
                         ->
                            if n > (sessions_config ^. dataFrameSize)
                               -- Ignore if it is bigger than the size configured in this context
-                              then return ()
+                              then do
+                                 liftIO . putStrLn $ "n= " ++ show n
+                                 return ()
                               else
-                                  liftIO $ DIO.writeIORef (session_settings ^. frameSize_SeS) n
+                                  liftIO $ do
+                                      putStrLn $ "n= " ++ show n
+                                      DIO.writeIORef (session_settings ^. frameSize_SeS) n
 
             Nothing     -> return ()
 
