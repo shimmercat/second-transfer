@@ -753,18 +753,18 @@ sessionInputThread  = do
             -- The spec says clearly what's the minimum size that can come here
             Just n | n < 16384 || n > 16777215
                         -> do
-                           liftIO $ putStrLn "Wild max frame size"
+                           -- liftIO $ putStrLn "Wild max frame size"
                            closeConnectionBecauseIsInvalid NH2.ProtocolError
                    | otherwise
                         ->
                            if n > (sessions_config ^. dataFrameSize)
                               -- Ignore if it is bigger than the size configured in this context
                               then do
-                                 liftIO . putStrLn $ "n= " ++ show n
+                                 -- liftIO . putStrLn $ "n= " ++ show n
                                  return ()
                               else
                                   liftIO $ do
-                                      putStrLn $ "n= " ++ show n
+                                      -- putStrLn $ "n= " ++ show n
                                       DIO.writeIORef (session_settings ^. frameSize_SeS) n
 
             Nothing     -> return ()
@@ -1742,17 +1742,17 @@ dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = fore
                              -- TODO: This probably should be configurable or better tuned.
                              -- However, we are going to send frequent pings to keep a chart
                              -- of latency.
-                             when (B.length fragment == payload_max_length) $ do
+                             --when (B.length fragment == payload_max_length) $ do
                                  -- Force tons and tons of ping frames to see if we get less delays due to
                                  -- congestion...
-                                 writeChan session_output $ Right (
-                                     NH2.EncodeInfo {
-                                         NH2.encodeFlags     = NH2.defaultFlags
-                                         ,NH2.encodeStreamId = 0
-                                         ,NH2.encodePadding  = Nothing
-                                         },
-                                     NH2.PingFrame "talk  on",
-                                     effect )
+                                 -- writeChan session_output $ Right (
+                                 --     NH2.EncodeInfo {
+                                 --         NH2.encodeFlags     = NH2.defaultFlags
+                                 --         ,NH2.encodeStreamId = 0
+                                 --         ,NH2.encodePadding  = Nothing
+                                 --         },
+                                 --     NH2.PingFrame "talk  on",
+                                 --     effect )
 
                              writeChan session_output $ Right (
                                  NH2.EncodeInfo {
