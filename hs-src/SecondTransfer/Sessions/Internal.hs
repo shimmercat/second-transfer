@@ -14,9 +14,8 @@ import           Control.Lens            ((^.), makeLenses, Lens' )
 
 
 
--- | Contains information that applies to all
---   sessions created in the program. Use the lenses
---   interface to access members of this struct.
+-- | Contains information that applies to all sessions created in the program.
+--  Use the lenses interface to access members of this struct.
 --
 -- TODO: members of this record should be renamed to the "suffix" convention.
 data SessionsContext = SessionsContext {

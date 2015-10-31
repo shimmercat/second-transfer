@@ -37,7 +37,13 @@ import           Control.Concurrent                     (ThreadId, forkIO)
 import           Control.Concurrent.Chan
 import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
-import           Control.Monad                          (forever,unless, when, mapM_, forM, forM_)
+import           Control.Monad                          (
+                                                         forever,
+                                                         unless,
+                                                         when,
+                                                         mapM_,
+                                                         forM,
+                                                         forM_)
 import           Control.Monad.IO.Class                 (liftIO)
 import           Control.DeepSeq                        ( ($!!), deepseq )
 import           Control.Monad.Trans.Reader
@@ -52,6 +58,7 @@ import           Data.Conduit
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
 import           Data.Maybe                             (isJust)
+import qualified Data.IORef                             as DIO
 import           Data.Typeable
 
 import           Control.Lens
@@ -115,6 +122,7 @@ data HeaderOutputMessage =
 -- Settings imposed by the peer
 data SessionSettings = SessionSettings {
     _pushEnabled :: Bool
+  , _frameSize :: DIO.IORef (Maybe Int)
     }
 
 makeLenses ''SessionSettings
