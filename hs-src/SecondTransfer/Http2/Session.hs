@@ -769,8 +769,6 @@ sessionInputThread  = do
 
             Nothing     -> return ()
 
-
-
         sendOutFrame
             (NH2.EncodeInfo
                 (NH2.setAck NH2.defaultFlags)
