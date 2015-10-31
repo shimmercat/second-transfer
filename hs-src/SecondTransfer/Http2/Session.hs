@@ -121,8 +121,8 @@ data HeaderOutputMessage =
 
 -- Settings imposed by the peer
 data SessionSettings = SessionSettings {
-    _pushEnabled :: Bool
-  , _frameSize :: DIO.IORef (Maybe Int)
+    _pushEnabled_SeS :: DIO.IORef Bool
+  , _frameSize_SeS   :: DIO.IORef Int
     }
 
 makeLenses ''SessionSettings
@@ -146,7 +146,7 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
 
     ,_streamsCancelled_WTE :: MVar NS.IntSet
 
-    ,_sessionSettings_WTE :: MVar SessionSettings
+    ,_sessionSettings_WTE :: SessionSettings
 
     ,_nextPushStream_WTE :: MVar Int
     }
@@ -360,7 +360,7 @@ data SessionData = SessionData {
     ,_sessionIdAtSession         :: Int
 
     -- And used to keep peer session settings
-    ,_sessionSettings            :: MVar SessionSettings
+    ,_sessionSettings            :: SessionSettings
 
     -- What is the next stream available for push?
     ,_nextPushStream             :: MVar Int
@@ -411,8 +411,14 @@ http2Session session_role aware_worker client_state session_id sessions_context 
     last_good_stream_mvar     <- newMVar (-1)
 
     receiving_headers         <- newMVar Nothing
-    session_settings          <- newMVar $ SessionSettings { _pushEnabled = True }
-    next_push_stream          <- newMVar 8
+    frame_size_ioref          <- DIO.newIORef (sessions_context ^.  sessionsConfig . dataFrameSize)
+    push_enabled_ioref        <- DIO.newIORef (sessions_context ^.  sessionsConfig . pushEnabled)
+    let
+        session_settings = SessionSettings {
+            _pushEnabled_SeS = push_enabled_ioref
+          , _frameSize_SeS   = frame_size_ioref
+            }
+    next_push_stream          <- newMVar (sessions_context ^. sessionsConfig . firstPushStream )
 
     -- What about stream cancellation?
     cancelled_streams_mvar    <- newMVar $ NS.empty :: IO (MVar NS.IntSet)
@@ -499,8 +505,6 @@ http2Session session_role aware_worker client_state session_id sessions_context 
                     )
                     (io_exc_handler component)
 
-        use_chunk_length =  sessions_context ^.  sessionsConfig . dataFrameSize
-
     -- Create an input thread that decodes frames...
     forkIO $ exc_guard SessionInputThread_HTTP2SessionComponent
            $ runReaderT sessionInputThread session_data
@@ -512,7 +516,7 @@ http2Session session_role aware_worker client_state session_id sessions_context 
     -- Create a thread that captures data and sends it down the tube. This is waiting for
     -- stuff coming from all the workers. This function is also in charge of closing streams
     forkIO $ exc_guard SessionDataOutputThread_HTTP2SessionComponent
-           $ dataOutputThread use_chunk_length data_output session_output_mvar
+           $ dataOutputThread frame_size_ioref data_output session_output_mvar
 
     -- If I'm a client, I also need a thread to poll for requests
     when (session_role == Client_SR) $ do
@@ -732,17 +736,33 @@ sessionInputThread  = do
     -- TODO: Do use the settings!!!
     handleSettingsFrame :: NH2.SettingsList -> ReaderT SessionData IO ()
     handleSettingsFrame _settings_list = do
+        session_settings <- view sessionSettings
+        sessions_config <- view $ sessionsContext . sessionsConfig
         let
             enable_push = lookup NH2.SettingsEnablePush _settings_list
-        session_settings_mvar <- view sessionSettings
+            max_frame_size = lookup NH2.SettingsMaxFrameSize _settings_list
+
         case enable_push of
-            Just 1     -> liftIO $ modifyMVar_ session_settings_mvar
-                                     $ \ old_settings -> return ( pushEnabled .~ True $ old_settings)
-            Just 0     -> liftIO $ modifyMVar_ session_settings_mvar
-                                     $ \ old_settings -> return ( pushEnabled .~ False $ old_settings)
+            Just 1     -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) True
+            Just 0     -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) False
             Just _    ->  closeConnectionBecauseIsInvalid NH2.ProtocolError
 
             Nothing   ->  return ()
+
+        case max_frame_size of
+            -- The spec says clearly what's the minimum size that can come here
+            Just n | n < 16384 || n > 16777215
+                        ->
+                           closeConnectionBecauseIsInvalid NH2.ProtocolError
+                   | otherwise
+                        ->
+                           if n > (sessions_config ^. dataFrameSize)
+                              -- Ignore if it is bigger than the size configured in this context
+                              then return ()
+                              else
+                                  liftIO $ DIO.writeIORef (session_settings ^. frameSize_SeS) n
+
+
         sendOutFrame
             (NH2.EncodeInfo
                 (NH2.setAck NH2.defaultFlags)
@@ -1285,8 +1305,7 @@ workerThread req aware_worker =
   do
     headers_output <- view headersOutput
     stream_id      <- view streamId
-    session_settings_mvar <- view sessionSettings_WTE
-    session_settings <- liftIO $ readMVar session_settings_mvar
+    session_settings <- view sessionSettings_WTE
     next_push_stream_mvar <-  view nextPushStream_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
@@ -1331,8 +1350,7 @@ normallyHandleStream :: PrincipalStream -> WorkerMonad ()
 normallyHandleStream principal_stream = do
     headers_output <- view headersOutput
     stream_id      <- view streamId
-    session_settings_mvar <- view sessionSettings_WTE
-    session_settings <- liftIO $ readMVar session_settings_mvar
+    session_settings <- view sessionSettings_WTE
     next_push_stream_mvar <-  view nextPushStream_WTE
 
     -- Pieces of the header
@@ -1342,8 +1360,9 @@ normallyHandleStream principal_stream = do
        effects              = principal_stream ^. effect_PS
        pushed_streams       = principal_stream ^. pushedStreams_PS
 
-       can_push             = session_settings ^. pushEnabled
+       can_push_ioref       = session_settings ^. pushEnabled_SeS
 
+    can_push <- liftIO . DIO.readIORef $ can_push_ioref
       -- This gets executed in normal conditions, when no interruption is required.
 
     -- There are several possible moments where the PUSH_PROMISEs can be sent,
@@ -1417,8 +1436,7 @@ pusherThread :: GlobalStreamId -> Headers -> DataAndConclusion -> Effect  -> Wor
 pusherThread child_stream_id response_headers pushed_data_and_conclusion effects =
   do
     headers_output <- view headersOutput
-    session_settings_mvar <- view sessionSettings_WTE
-    session_settings <- liftIO $ readMVar session_settings_mvar
+    session_settings <- view sessionSettings_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
     --       throws an exception signaling that the request is ill-formed
@@ -1532,7 +1550,8 @@ headersOutputThread :: Chan HeaderOutputMessage  --  (GlobalStreamId, MVar Heade
                        -> ReaderT SessionData IO ()
 headersOutputThread input_chan session_output_mvar = forever $ do
 
-    use_chunk_length <- view $ sessionsContext .  sessionsConfig . dataFrameSize
+    frame_size_ioref <- view $ sessionSettings . frameSize_SeS
+    use_chunk_length <- liftIO $ DIO.readIORef frame_size_ioref
 
     header_output_request <- {-# SCC input_chan  #-} liftIO $ readChan input_chan
     {-# SCC case_ #-} case header_output_request of
@@ -1669,12 +1688,13 @@ bytestringChunk len s = h:(bytestringChunk len xs)
 --       way to avoid that is by holding a frame or by augmenting the end-user interface
 --       so that the user can signal which one is the last frame. The first approach
 --       restricts responsiviness, the second one clutters things.
-dataOutputThread :: Int
+dataOutputThread :: DIO.IORef Int
                     -> MVar DataOutputToConveyor
                     -> MVar SessionOutputChannelAbstraction
                     -> IO ()
-dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
+dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = forever $ do
     (stream_id, maybe_contents, effect) <- takeMVar input_chan
+    payload_max_length <- DIO.readIORef payload_max_length_ioref
     case maybe_contents of
         Nothing -> do
             liftIO $ do
@@ -1694,7 +1714,7 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
 
         Just contents -> do
             -- And now just simply output it...
-            let bs_chunks = bytestringChunk use_chunk_length contents
+            let bs_chunks = bytestringChunk payload_max_length contents
             -- And send the chunks through while locking the output place....
             bs_chunks `deepseq` writeContinuations bs_chunks stream_id effect
             return ()
@@ -1706,12 +1726,15 @@ dataOutputThread use_chunk_length  input_chan session_output_mvar = forever $ do
         (putMVar session_output_mvar) -- <-- There is an implicit argument there!!
 
     writeContinuations :: [B.ByteString] -> GlobalStreamId -> Effect  -> IO ()
-    writeContinuations fragments stream_id effect =
+    writeContinuations fragments stream_id effect = do
+      payload_max_length <- DIO.readIORef payload_max_length_ioref
       mapM_ (\ fragment ->
                   withLockedSessionOutput
                       (\ session_output -> do
-                             -- TODO:
-                             when (B.length fragment == use_chunk_length) $ do
+                             -- TODO: This probably should be configurable or better tuned.
+                             -- However, we are going to send frequent pings to keep a chart
+                             -- of latency.
+                             when (B.length fragment == payload_max_length) $ do
                                  -- Force tons and tons of ping frames to see if we get less delays due to
                                  -- congestion...
                                  writeChan session_output $ Right (

@@ -5,32 +5,33 @@
      underscore. Please prefer to use the lens interface.
 -}
 module SecondTransfer.Sessions.Config(
-    sessionId
-    ,defaultSessionsConfig
-    ,defaultSessionsEnrichedHeaders
-    ,sessionsCallbacks
-    ,sessionsEnrichedHeaders
-    ,reportErrorCallback_SC
-    ,dataDeliveryCallback_SC
-    ,dataFrameSize
-    ,addUsedProtocol
+                 sessionId
+               , defaultSessionsConfig
+               , defaultSessionsEnrichedHeaders
+               , sessionsCallbacks
+               , sessionsEnrichedHeaders
+               , reportErrorCallback_SC
+               , dataDeliveryCallback_SC
+               , dataFrameSize
+               , addUsedProtocol
+               , pushEnabled
+               , firstPushStream
 
 
-    ,SessionComponent(..)
-    ,SessionCoordinates(..)
-    ,SessionsCallbacks(..)
-    ,SessionsEnrichedHeaders(..)
-    -- ,UsedProtocol(..)
-    ,SessionsConfig(..)
-    ,ErrorCallback
-    ,DataFrameDeliveryCallback
-    ) where
+               , SessionComponent                       (..)
+               , SessionCoordinates                     (..)
+               , SessionsCallbacks                      (..)
+               , SessionsEnrichedHeaders                (..)
+               , SessionsConfig                         (..)
+               , ErrorCallback
+               , DataFrameDeliveryCallback
+     ) where
 
 
 -- import           Control.Concurrent.MVar (MVar)
-import           Control.Exception       (SomeException)
-import           Control.Lens            (makeLenses)
-import           System.Clock            (TimeSpec)
+import           Control.Exception                      (SomeException)
+import           Control.Lens                           (makeLenses)
+import           System.Clock                           (TimeSpec)
 
 
 -- | Information used to identify a particular session.
@@ -115,12 +116,18 @@ defaultSessionsEnrichedHeaders = SessionsEnrichedHeaders {
 
 -- | Configuration information you can provide to the session maker.
 data SessionsConfig = SessionsConfig {
-    -- | Session callbacks
-    _sessionsCallbacks         :: SessionsCallbacks
-    ,_sessionsEnrichedHeaders  :: SessionsEnrichedHeaders
-    -- | Size to use when splitting data in data frames
-    ,_dataFrameSize            :: Int
-}
+   -- | Session callbacks
+   _sessionsCallbacks         :: SessionsCallbacks
+ , _sessionsEnrichedHeaders   :: SessionsEnrichedHeaders
+   -- | Size to use when splitting data in data frames
+ , _dataFrameSize             :: Int
+   -- | Should we enable PUSH in sessions? Notice that the client
+   --   can still disable PUSH at will. Also users of the library
+   --   can decide not to use it. This just puts another layer ...
+ , _pushEnabled               :: Bool
+   -- | The number to use for the first pushed stream. Should be even
+ , _firstPushStream            :: Int
+   }
 
 makeLenses ''SessionsConfig
 
@@ -136,10 +143,12 @@ makeLenses ''SessionsConfig
 --   the lenses interfaces
 defaultSessionsConfig :: SessionsConfig
 defaultSessionsConfig = SessionsConfig {
-    _sessionsCallbacks = SessionsCallbacks {
+     _sessionsCallbacks = SessionsCallbacks {
             _reportErrorCallback_SC = Nothing,
             _dataDeliveryCallback_SC = Nothing
-        },
-    _sessionsEnrichedHeaders = defaultSessionsEnrichedHeaders,
-    _dataFrameSize = 2048
+        }
+  , _sessionsEnrichedHeaders = defaultSessionsEnrichedHeaders
+  , _dataFrameSize = 2048
+  , _pushEnabled = True
+  , _firstPushStream = 8
     }
