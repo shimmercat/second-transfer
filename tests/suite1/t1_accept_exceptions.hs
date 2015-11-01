@@ -11,6 +11,7 @@ import           SecondTransfer.IOCallbacks.SocketServer
 shouter :: Sink (NS.Socket, a) IO ()
 shouter = do
     maybe_active_socket <- await
+    --liftIO $ putStrLn "."
     case maybe_active_socket of
         Nothing -> return ()
 
