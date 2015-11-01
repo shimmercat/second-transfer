@@ -135,8 +135,11 @@ iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
     let
         problem_mvar = botan_pad ^. problem_BP
     if (alert_code < 0)
-          then putMVar problem_mvar ()
-          else return ()
+          then do
+             tryPutMVar problem_mvar ()
+             return ()
+          else
+             return ()
 
 
 -- Botan relies a wealth of information here, not using at the moment :-(
