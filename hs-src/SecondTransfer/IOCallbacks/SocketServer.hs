@@ -93,10 +93,15 @@ tcpServe  listen_socket action =
 --   listen...
 tcpItcli :: NS.Socket -> Source IO (NS.Socket, NS.SockAddr)
 tcpItcli listen_socket =
+    -- NOTICE: The messages below should be considered traps. Whenever one
+    -- of them shows up, we have hit a new abnormal condition that should
+    -- be learn from
     do
         liftIO $ NS.listen listen_socket 20
         LIO_REPORT_EVENT("listening")
         let
+          report_abnormality = do
+              putStrLn "ERROR: TCP listen abstraction undone!!"
           -- TODO: System interrupts propagates freely!
           iterate' = do
               either_x <- liftIO . E.try $ NS.accept listen_socket
@@ -114,13 +119,17 @@ tcpItcli listen_socket =
                               putStrLn $ "XXERR: " ++ ioeGetErrorString e
                               E.throwIO $ e
                   Right  (new_socket, sock_addr) -> do
-                      yield (new_socket, sock_addr)
+                      yieldOr (new_socket, sock_addr) report_abnormality
                       iterate'
         iterate'
 
 
 -- | Convenience function to create a TLS server. You are in charge of actually setting
 --   up the TLS session, this only receives a type tagged with the IO thing...
+--   Notice that the action should be short before actually forking towards something doing
+--   the rest of the conversation. If you do the TLS handshake in this thread, you will be in
+--   trouble when more than one client try to handshake simultaeneusly... ibidem if one of the
+--   clients blocks the handshake.
 tlsServe :: NS.Socket ->  ( TLSServerSocketIOCallbacks -> IO () ) -> IO ()
 tlsServe listen_socket tls_action =
     tcpServe listen_socket tcp_action

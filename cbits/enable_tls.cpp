@@ -39,7 +39,9 @@ void alert_cb (void* botan_pad_ref, Botan::TLS::Alert const& alert, const unsign
     {
         // TODO: Propagate this softly.
         iocba_alert_cb(botan_pad_ref, -1);
-    } // Else: don't care
+    } else {
+        // printf("Ignore an alert!!\n");
+    }
 }
 
 bool handshake_cb(void* botan_pad_ref, const Botan::TLS::Session&)
@@ -170,13 +172,21 @@ std::string defaultProtocolSelector(void* botan_pad_ref, std::vector<std::string
 
 } // namespace
 
-extern "C" void iocba_receive_data(
+extern "C" int iocba_receive_data(
     void* tls_channel,
     char* data,
     int length )
 {
     Botan::TLS::Channel* channel = (Botan::TLS::Channel*) tls_channel;
-    channel->received_data( (const unsigned char*) data, length);
+    try {
+        channel->received_data( (const unsigned char*) data, length);
+    } catch (...)
+    {
+        // TODO: control messages
+        printf("BotanTLS engine instance crashed\n");
+        return -1;
+    }
+    return 0;
 }
 
 extern "C" void iocba_cleartext_push(

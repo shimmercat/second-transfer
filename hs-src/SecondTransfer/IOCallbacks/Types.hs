@@ -77,6 +77,7 @@ newPullActionWrapping best_effort_pull_action = do
     bu_ref <- newIORef (mempty, 0)
     return $ PullActionWrapping (bu_ref, best_effort_pull_action)
 
+
 -- | The type of this function is also PullActionWrapping -> PullAction
 pullFromWrapping :: PullActionWrapping -> Int -> IO B.ByteString
 pullFromWrapping (PullActionWrapping (x, bepa)) n = do

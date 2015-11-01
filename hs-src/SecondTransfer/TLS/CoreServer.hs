@@ -16,8 +16,9 @@ module SecondTransfer.TLS.CoreServer (
 
        ) where
 
---import           Control.Concurrent
+import           Control.Concurrent                                        (forkIO)
 import           Control.Monad.IO.Class                                    (liftIO)
+import           Control.Lens                                              ( (^.) )
 
 import           Data.Conduit
 -- import qualified Data.Conduit                                              as Con(yield)
@@ -76,25 +77,54 @@ tlsServeWithALPNUnderSOCKS5 proxy  cert_filename key_filename interface_name att
 
 tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, Attendant)]  ->  ctx ->  encrypted_io -> IO ()
 tlsSessionHandler attendants ctx encrypted_io = do
-    session <- unencryptTLSServerIO ctx encrypted_io
-    plaintext_io_callbacks <- handshake session :: IO IOCallbacks
-    (_, prot_name) <- getSelectedProtocol session
-    --let
-    let
-        Just  use_attendant = lookup (unpack prot_name) attendants
-    use_attendant plaintext_io_callbacks
+    -- Have the handshake happen in another thread
+    forkIO $ do
+      session <- unencryptTLSServerIO ctx encrypted_io
+      plaintext_io_callbacks <- handshake session :: IO IOCallbacks
+      maybe_sel_prot <- getSelectedProtocol session
+      case maybe_sel_prot of
+          Just (_, prot_name) -> do
+              let
+                  Just  use_attendant = lookup (unpack prot_name) attendants
+              use_attendant plaintext_io_callbacks
+              return ()
+          Nothing -> do
+              let
+                  maybe_attendant = lookup "" attendants
+              case maybe_attendant of
+                  Just use_attendant ->
+                      use_attendant plaintext_io_callbacks
+                  Nothing ->
+                      -- Silently do nothing, and close the connection
+                      plaintext_io_callbacks ^. closeAction_IOC
+              return ()
     return ()
 
 
-tlsSessionHandlerControllable ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, ControllableAttendant controller)]  ->  ctx ->  encrypted_io -> IO controller
+tlsSessionHandlerControllable ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, ControllableAttendant controller)]  ->  ctx ->  encrypted_io -> IO (Maybe controller)
 tlsSessionHandlerControllable attendants ctx encrypted_io = do
     session <- unencryptTLSServerIO ctx encrypted_io
     plaintext_io_callbacks <- handshake session :: IO IOCallbacks
-    (_, prot_name) <- getSelectedProtocol session
-    --let
-    let
-        Just  use_attendant = lookup (unpack prot_name) attendants
-    use_attendant plaintext_io_callbacks
+    maybe_sel_prot <- getSelectedProtocol session
+    case maybe_sel_prot of
+        Just (_, prot_name) -> do
+            let
+                Just  use_attendant = lookup (unpack prot_name) attendants
+            x <- use_attendant plaintext_io_callbacks
+            return . Just $ x
+
+        Nothing -> do
+            let
+                maybe_attendant = lookup "" attendants
+            case maybe_attendant of
+                Just use_attendant -> do
+                    x <- use_attendant plaintext_io_callbacks
+                    return . Just $ x
+                Nothing -> do
+                    -- Silently do nothing, and close the connection
+                    plaintext_io_callbacks ^. closeAction_IOC
+                    return Nothing
+
 
 
 chooseProtocol :: [(String, a)] ->  [B.ByteString] -> IO B.ByteString
@@ -131,7 +161,8 @@ coreListen _ certificate_filename key_filename listen_abstraction session_forker
 
 -- | A conduit that takes TLS-encrypted callbacks, creates a TLS server session on top of it, passes the resulting
 --   plain-text io-callbacks to a chosen Attendant in the argument list, and passes up the controller of the attendant
---   so that it can be undone if needs come.
+--   so that it can be undone if needs come. This should be considered a toy API, as multiple handshake can not progress
+--   simultaeneusly through Conduits :-(
 coreItcli ::
          forall controller ctx session b . (TLSContext ctx session, TLSServerIO b)
      => ctx                                                      -- ^ Passing in a tls context already-built value allows for sharing a single
@@ -140,6 +171,6 @@ coreItcli ::
      -> Conduit b IO controller
 coreItcli  ctx  controllable_attendants = do
     let
-        monomorphicHandler :: [(String, ControllableAttendant controller)]  ->  ctx ->  b -> IO controller
+        monomorphicHandler :: [(String, ControllableAttendant controller)]  ->  ctx ->  b -> IO (Maybe controller)
         monomorphicHandler =  tlsSessionHandlerControllable
-    CL.mapM  $  liftIO <$> monomorphicHandler controllable_attendants ctx
+    CL.mapMaybeM  $  liftIO <$> monomorphicHandler controllable_attendants ctx
