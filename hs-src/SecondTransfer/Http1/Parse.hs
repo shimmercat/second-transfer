@@ -9,7 +9,8 @@ module SecondTransfer.Http1.Parse(
     ,locateCRLFs
     ,splitByColon
     ,stripBs
-    ,headerListToHTTP11Text
+    ,headerListToHTTP1RequestText
+    ,headerListToHTTP1ResponseText
     ,serializeHTTPResponse
 
     ,IncrementalHttp1Parser
@@ -31,19 +32,18 @@ import           Data.ByteString.Char8                  (pack, unpack)
 import qualified Data.ByteString.Char8                  as Ch8
 import qualified Data.ByteString.Lazy                   as Lb
 import           Data.Char                              (toLower)
-import           Data.Maybe                             (isJust)
-#ifndef IMPLICIT_MONOID
-import           Data.Monoid                            (mappend,
-                                                         mempty,
-                                                         mconcat)
-#endif
+import           Data.Maybe                             (isJust, fromMaybe)
+
 import qualified Data.Attoparsec.ByteString             as Ap
 
 import           Data.Foldable                          (find)
 import           Data.Word                              (Word8)
 import qualified Data.Map                               as M
 
+import qualified Network.URI                            as U
+
 import qualified SecondTransfer.Utils.HTTPHeaders       as E
+import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
@@ -335,8 +335,8 @@ httpFirstLine :: Ap.Parser RequestOrResponseLine
 httpFirstLine = requestLine <|> responseLine
 
 
-headerListToHTTP11Text :: Headers -> Bu.Builder
-headerListToHTTP11Text headers =
+headerListToHTTP1ResponseText :: Headers -> Bu.Builder
+headerListToHTTP1ResponseText headers =
     case headers of
         -- According to the specs, :status can be only
         -- the first header
@@ -367,6 +367,27 @@ headerListToHTTP11Text headers =
         "\r\n"
         ]
 
+-- Invoke with the request data. Don't forget to clean the headers first.
+headerListToHTTP1RequestText :: Headers -> Bu.Builder
+headerListToHTTP1RequestText headers =
+    go1 Nothing Nothing mempty headers
+  where
+    go1 mb_method mb_local_uri assembled_body [] =
+        (fromMaybe "GET" mb_method) `mappend` " " `mappend` (fromMaybe "*" mb_local_uri) `mappend` " " `mappend` "HTTP/1.1" `mappend` "\r\n"
+          `mappend` assembled_body
+
+    go1 _           mb_local_uri assembled_body ((hn,hv): rest)
+      | hn == ":method" =
+          go1 (Just . Bu.byteString . validMethod $ hv) mb_local_uri assembled_body rest
+
+    go1 mb_method   _mb_local_uri    assembled_body ((hn,hv): rest)
+      | hn == ":path"   =
+          go1 mb_method  (Just . Bu.byteString . cleanupAbsoluteUri $ hv) assembled_body rest
+
+    go1 mb_method mb_local_uri assembled_body ((hn,hv):rest)   -- Ignore any strange pseudo-headers
+      | He.headerIsPseudo hn = go1 mb_method mb_local_uri assembled_body rest
+      | otherwise = go1 mb_method mb_local_uri (assembled_body `mappend` (Bu.byteString hn) `mappend` ":" `mappend` (Bu.byteString hv) `mappend` "\r\n") rest
+
 
 
 serializeHTTPResponse :: Headers -> [B.ByteString] -> Lb.ByteString
@@ -393,7 +414,7 @@ serializeHTTPResponse response_headers fragments =
         headers_editor
     h3 = E.toList he2
     -- Next, I must serialize the headers....
-    headers_text_as_builder = headerListToHTTP11Text h3
+    headers_text_as_builder = headerListToHTTP1ResponseText h3
 
     -- We dump the headers first... unfortunately when talking
     -- HTTP/1.1 the most efficient way to write those bytes is
@@ -414,6 +435,34 @@ serializeHTTPResponse response_headers fragments =
 
   in Bu.toLazyByteString $ headers_text_as_builder `mappend` "\r\n" `mappend`
                     body_builder
+
+
+validMethod :: B.ByteString -> B.ByteString
+validMethod mth | mth == "GET"     =  mth
+                | mth == "POST"    =  mth
+                | mth == "HEAD"    =  mth
+                | mth == "OPTIONS" =  mth
+                | mth == "PUT"     =  mth
+                | mth == "DELETE"  =  mth
+                | mth == "TRACE"   =  mth
+                | otherwise        = "GET"
+
+
+cleanupAbsoluteUri :: B.ByteString -> B.ByteString
+-- Just trigger a 404 with an informative message (perhaps)
+cleanupAbsoluteUri u
+  | B.length u == 0
+     = "/client-gives-invalid-uri/"
+  | B.head u /= 47
+     = "/client-gives-invalid-uri/"
+  | otherwise
+     =
+       let
+           str = unpack u
+           ok = U.isRelativeReference str
+       in if ok then u else "/client-gives-invalid-uri/"
+
+
 
 
 httpStatusTable :: M.Map Int Bu.Builder
