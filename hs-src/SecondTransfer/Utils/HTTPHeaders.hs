@@ -254,16 +254,30 @@ replaceHeaderValue (HeaderEditor m) header_name maybe_header_value =
   let
     lst = Ms.toList m
 
-    rpl (e1@(Autosorted (_hp, hn,_n), _hv):rest) | hn == header_name , Just new_value <- maybe_header_value =
-                                                 (Autosorted (_hp, hn, _n), new_value): rest
-                                             | hn == header_name, Nothing <- maybe_header_value =
-                                                 rest
-                                             | otherwise = e1:rest
-    rpl [] = []
+    rpl :: Int -> [(Autosorted, HeaderValue)] -> [(Autosorted, HeaderValue)]
+    rpl rc (e1@(Autosorted (_hp, hn,_n), _hv):rest)
+        | rc==0, hn == header_name , Just new_value <- maybe_header_value =
+            (Autosorted (_hp, hn, _n), new_value): (rpl 1 rest)
+        | rc > 0, hn == header_name  =
+            rpl rc rest
+        | hn == header_name, Nothing <- maybe_header_value =
+            rpl rc rest
+        | otherwise =
+            e1:(rpl rc rest)
 
-    at1 = rpl lst
-    at2 = rebase 0 at1
-  in HeaderEditor . Ms.fromList $ at2
+    rpl rc []
+        | rc > 0 =
+            []
+        | rc == 0, Just new_value <- maybe_header_value =
+            [(Autosorted (headerPriority header_name, header_name, 0), new_value)]
+        | otherwise =
+            []
+
+    at1 = rpl 0 lst
+    ms1 = Ms.fromList at1
+    at2 = Ms.toList ms1
+    at3 = rebase 0 at2
+  in HeaderEditor . Ms.fromList $ at3
 
 
 

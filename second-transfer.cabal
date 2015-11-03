@@ -191,7 +191,7 @@ library
 
 
   if flag(debug)
-      cc-options: -O0 -g3 -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
+      cc-options: -O0 -g3 -std=c++11
       ld-options: -g3
   else
       cc-options: -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
@@ -271,36 +271,14 @@ Test-Suite hunit-tests
                        ,clock >= 0.4
                        ,stm >= 2.3
                        ,deepseq >= 1.4.1
+                       ,second-transfer
+
   build-tools        : cpphs
   default-extensions : CPP
   include-dirs       : macros/
   CPP-Options        : -DDISABLE_OPENSSL_TLS
-  ghc-options        : -threaded -pgmPcpphs  -optP--cpp
+  ghc-options        : -threaded -pgmPcpphs "-pgmc gcc"  -optP--cpp
   other-modules      :  SecondTransfer.Test.DecoySession
-                       , SecondTransfer
-                       , SecondTransfer.MainLoop
-                       , SecondTransfer.Http2
-                       , SecondTransfer.Http1
-                       , SecondTransfer.Exception
-                       , SecondTransfer.Types
-                       , SecondTransfer.Utils.HTTPHeaders
-                       , SecondTransfer.Utils.DevNull
-                       , SecondTransfer.MainLoop.Internal
-                       , SecondTransfer.Sessions
-                       , SecondTransfer.Sessions.Config
-                       , SecondTransfer.Http1.Parse
-                       , SecondTransfer.MainLoop.CoherentWorker
-                       , SecondTransfer.MainLoop.Tokens
-                       , SecondTransfer.MainLoop.Framer
-                       , SecondTransfer.MainLoop.Logging
-                       , SecondTransfer.MainLoop.Protocol
-                       , SecondTransfer.Sessions.Internal
-                       , SecondTransfer.MainLoop.ClientPetitioner
-                       , SecondTransfer.Utils
-                       , SecondTransfer.Http2.Framer
-                       , SecondTransfer.Http2.MakeAttendant
-                       , SecondTransfer.Http2.Session
-                       , SecondTransfer.Http1.Session
                        , Tests.HTTP1Parse
                        , Tests.HTTP2Session
                        , Tests.Utils

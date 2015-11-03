@@ -42,5 +42,5 @@ testGenerate = TestCase $ do
         fragments = ["hello world"]
         serialized = serializeHTTPResponse headers_list fragments
     assertEqual "testGenerate.1"
-        "HTTP/1.1 200 OK\r\ncontent-length: 11\r\netag: afrh\r\nhost: www.example.com\r\n\r\nhello world"
+        "HTTP/1.1 200 OK\r\ncontent-length: 11\r\nhost: www.example.com\r\netag: afrh\r\n\r\nhello world"
         serialized
