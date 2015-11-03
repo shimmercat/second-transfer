@@ -379,7 +379,9 @@ instance IOChannels BotanSession where
         botan_pad' <- readIORef botan_ioref
         let
             pull_action :: PullAction
-            pull_action = pullFromWrapping pull_action_wrapping
+            pull_action = pullFromWrapping' pull_action_wrapping
+
+            best_effort_pull_action' = bestEffortPullFromWrapping pull_action_wrapping
 
             -- TODO: Implement me!!!!!!!
             close_action :: CloseAction
@@ -393,7 +395,7 @@ instance IOChannels BotanSession where
         return $ IOCallbacks {
             _pushAction_IOC = push_action
           , _pullAction_IOC = pull_action
-          , _bestEffortPullAction_IOC = best_effort_pull_action
+          , _bestEffortPullAction_IOC = best_effort_pull_action'
           , _closeAction_IOC = close_action
             }
 

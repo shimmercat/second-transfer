@@ -75,11 +75,12 @@ socketIOCallbacks socket = do
             ) (( \ _ -> return () ) :: E.SomeException -> IO () )
     pull_action_wrapping <- newPullActionWrapping  best_effort_pull_action
     let
-        pull_action = pullFromWrapping pull_action_wrapping
+        pull_action = pullFromWrapping' pull_action_wrapping
+        best_effort_pull_action'  = bestEffortPullFromWrapping pull_action_wrapping
         io_callbacks = IOCallbacks {
             _pushAction_IOC           = push_action
           , _pullAction_IOC           = pull_action
-          , _bestEffortPullAction_IOC = best_effort_pull_action
+          , _bestEffortPullAction_IOC = best_effort_pull_action'
           , _closeAction_IOC          = close_action
             }
     return $ SocketIOCallbacks {

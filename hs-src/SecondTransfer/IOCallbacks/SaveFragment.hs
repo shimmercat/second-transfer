@@ -39,7 +39,7 @@ bestEffortPullAction srf can_block  = do
 
 closeAction :: SaveReadFragment -> IO ()
 closeAction srf = do
-    tryTakeMVar (srf ^. fragment_SRF)
+    _ <- tryTakeMVar (srf ^. fragment_SRF)
     srf ^. inner_SRF . closeAction_IOC
 
 
@@ -59,7 +59,7 @@ instance IOChannels SaveReadFragment where
 
         return $ IOCallbacks {
             _pushAction_IOC = pushAction srf
-          , _pullAction_IOC = pullFromWrapping pull_action_wrapping
-          , _bestEffortPullAction_IOC = bestEffortPullAction srf
+          , _pullAction_IOC = pullFromWrapping' pull_action_wrapping
+          , _bestEffortPullAction_IOC = bestEffortPullFromWrapping pull_action_wrapping
           , _closeAction_IOC = closeAction srf
             }

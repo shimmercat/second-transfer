@@ -32,7 +32,8 @@ module SecondTransfer.IOCallbacks.Types (
                -- * Utility functions
                , PullActionWrapping
                , newPullActionWrapping
-               , pullFromWrapping
+               , pullFromWrapping'
+               , bestEffortPullFromWrapping
        ) where
 
 
@@ -80,8 +81,8 @@ newPullActionWrapping best_effort_pull_action = do
 
 
 -- | The type of this function is also PullActionWrapping -> PullAction
-pullFromWrapping :: PullActionWrapping -> Int -> IO B.ByteString
-pullFromWrapping (PullActionWrapping (x, bepa)) n = do
+pullFromWrapping' :: PullActionWrapping -> Int -> IO B.ByteString
+pullFromWrapping' (PullActionWrapping (x, bepa)) n = do
     (hathz, len) <- readIORef x
     let
         nn = fromIntegral n
@@ -106,6 +107,25 @@ pullFromWrapping (PullActionWrapping (x, bepa)) n = do
     return to_return
 
 
+bestEffortPullFromWrapping :: PullActionWrapping -> Bool -> IO B.ByteString
+bestEffortPullFromWrapping (PullActionWrapping (x, bepa)) False = do
+    (hathz, len) <- atomicModifyIORef' x $ \ (h,l) -> ((mempty,0), (h,l))
+    if len > 0
+      then do
+        return . LB.toStrict . Bu.toLazyByteString $ hathz
+      else do
+        -- At least we ought to try
+        bepa False
+
+bestEffortPullFromWrapping (PullActionWrapping (x, bepa)) True = do
+    (hathz, len) <- atomicModifyIORef' x $ \ (h,l) -> ((mempty,0), (h,l))
+    if len > 0
+      then do
+        return . LB.toStrict . Bu.toLazyByteString $ hathz
+      else do
+        bepa True
+
+
 -- | Callback that the session calls to realease resources
 --   associated with the channels. Take into account that your
 --   callback should be able to deal with non-clean shutdowns
@@ -114,7 +134,10 @@ pullFromWrapping (PullActionWrapping (x, bepa)) n = do
 type CloseAction = IO ()
 
 -- | A set of functions describing how to do I/O in a session.
---   As usual, we provide lenses accessors.
+--  There is one rule for IOCallbacks: only one user of it.
+--  That is, only one can write, only one can read concurrently.
+--  We don't protect for anything else, so concurrent read and
+--  writes would result in terrible things happening.
 data IOCallbacks = IOCallbacks {
     -- | put some data in the channel
     _pushAction_IOC               :: PushAction,
