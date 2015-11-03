@@ -36,7 +36,7 @@ makeLenses ''SocketIOCallbacks
 instance IOChannels SocketIOCallbacks where
     handshake s = return ( s ^. callbacks_SS )
 
--- | This function wraps an active socket (e.g., one where it is possible to send and receve data)
+-- | This function wraps an active socket (e.g., one where it is possible to send and receive data)
 --   in something with a set of active callbacks
 socketIOCallbacks :: NS.Socket -> IO SocketIOCallbacks
 socketIOCallbacks socket = do

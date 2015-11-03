@@ -49,7 +49,7 @@ instance Http1CycleController IO IOCallbacksConn where
     releaseResponseResources (IOCallbacksConn conn) = (conn ^. closeAction_IOC)
 
 
--- | Takes an IOCallbacksConn (not straight IOCallbacks since we plan on adding controllobaility)
+-- | Takes an IOCallbacksConn (not straight IOCallbacks since we plan on adding controllabiility)
 --   features on top of this type), and serializes a request (encoded HTTP/2 style in headers and streams)
 --   on top of the callback, waits for the results, and returns the response. Notice that this proxy
 --   may fail for any reason, do take measures and handle exceptions.
