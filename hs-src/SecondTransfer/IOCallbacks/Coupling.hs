@@ -1,4 +1,4 @@
-{-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable, Rank2Types #-}
+{-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable, Rank2Types, OverloadedStrings #-}
 module SecondTransfer.IOCallbacks.Coupling (
                  Coupling
                , couple
@@ -161,7 +161,9 @@ popActions t pullside pushside =
             Nothing  -> return ()
             Just _ -> E.throwIO NoMoreDataException
 
+    push_action :: LB.ByteString -> IO ()
     push_action datum = do
+        --putStrLn . show $ "PUSHED" `mappend` datum
         throwIfNeeded
         atomicModifyIORef'  (t ^. pushside . dt_SD) $ \ bu ->  (bu `mappend` (Bu.lazyByteString datum), () )
         -- Notify the other side that there is more data

@@ -11,6 +11,7 @@ import SecondTransfer
 import Tests.HTTP2Session
 import Tests.Utils
 import Tests.HTTP1Parse
+import Tests.TestIOCalbks
 
 
 tests = TestList [
@@ -36,6 +37,12 @@ tests = TestList [
     ,TestLabel "testCombineAuthorityAndHost2" testCombineAuthorityAndHost2
     ,TestLabel "testHeadersToRequest" testHeadersToRequest
     ,TestLabel "testHeadersToRequest2" testHeadersToRequest2
+
+    ,TestLabel "testPair" testPair
+    ,TestLabel "testPair2" testPair2
+    ,TestLabel "testPair3" testPair3
+
+    ,TestLabel "http1Cycle" testCycle
     ]
 
 

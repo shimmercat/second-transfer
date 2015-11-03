@@ -1,16 +1,25 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Tests.HTTP1Parse where
 
+import           Control.Lens
+import           Control.Concurrent                  hiding (yield)
 
 import qualified Data.ByteString                     as B
 import qualified Data.ByteString.Lazy                as LB
 import qualified Data.ByteString.Builder             as Bu
 import           Data.Maybe                          (isJust)
+import           Data.Conduit
+import qualified Data.Conduit.List                   as DCL
 
 import           Test.HUnit
 
+import           SecondTransfer.IOCallbacks.Types
+import           SecondTransfer.IOCallbacks.Coupling
+
 import           SecondTransfer                      (Headers)
 import           SecondTransfer.Http1.Parse
+import           SecondTransfer.Http1.Types
+import           SecondTransfer.Http1.Proxy
 import qualified SecondTransfer.Utils.HTTPHeaders    as He
 
 
@@ -118,3 +127,39 @@ testHeadersToRequest2 = TestCase $ do
     assertEqual "testGenerate.1"
         "HEAD /important HTTP/1.1\r\nhost:www.example.com\r\netag:afrh\r\n"
         serialized
+
+
+testCycle :: Test
+testCycle = TestCase $ do
+    let
+        headers_list :: Headers
+        headers_list = [
+            (":authority", "www.example.com"),
+            (":path", "/interesting"),
+            (":method", "POST"),
+            ("etag", "afrh")
+            ]
+        rqsource = yield "Hello world"
+        request = HttpRequest {
+            _headers_Rq = headers_list
+          , _body_Rq = rqsource
+            }
+    (ioap, iobp) <- popIOCallbacksIntoExistance
+    ioa <- handshake ioap
+    iob <- handshake iobp
+
+    let
+        controller = IOCallbacksConn ioa
+
+    finished <- newEmptyMVar
+    forkIO $ do
+        request_text <- (iob ^. pullAction_IOC) 74
+        --putStrLn . show $ request_text
+        assertEqual "test.Request" "POST /interesting HTTP/1.1\r\nhost:www.example.com\r\netag:afrh\r\n\r\nHello world" request_text
+        (iob ^. pushAction_IOC)  "HTTP/1.1 200 OK\r\ncontent-length: 11\r\nhost: www.example.com\r\netag: afrh\r\n\r\nhello world"
+        putMVar finished ()
+
+    (response, _) <- ioProxyToConnection controller request
+    assertEqual "test.Response" (response ^. headers_Rp ) [(":status","200"),("content-length","11"),("host","www.example.com"),("etag","afrh")]
+    contents <- (response ^. body_Rp) $$ DCL.consume
+    assertEqual "test.rp1Txt" "hello world" (mconcat contents)

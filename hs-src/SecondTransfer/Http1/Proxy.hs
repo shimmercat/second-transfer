@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies #-}
 module SecondTransfer.Http1.Proxy (
                  ioProxyToConnection
+
+               , IOCallbacksConn                                          (..)
         ) where
 
 import           Control.Lens
@@ -69,8 +71,8 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
 
     -- This code can throw an exception, in that case, just let it
     -- bubble. But the upper layer should deal with it.
-    LB.putStr cnt1_lbz
-    LB.putStr "\n"
+    --LB.putStr cnt1_lbz
+    --LB.putStr "\n"
     (ioc ^. pushAction_IOC) cnt1_lbz
 
     -- Send the rest only if the method has something ....
@@ -109,6 +111,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
         pull :: Int -> Source IO B.ByteString
         pull n = do
             s <- liftIO $ (ioc ^. pullAction_IOC ) n
+            -- liftIO $ putStrLn . show $ "S=" `mappend` s
             yield s
 
     parser_completion <- pump0 incremental_http_parser
@@ -128,8 +131,9 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
             return (HttpResponse {
                 _headers_Rp = headers
-              , _body_Rp = pumpout leftovers n
+              , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
                 }, c)
 
+        -- TODO: See what happens when this exception passes from place to place.
         _ ->
-            E.throwIO $ HTTP11SyntaxException "undefined"
+            E.throwIO $ HTTP11SyntaxException "undefinedCaseWithBadSyntax"
