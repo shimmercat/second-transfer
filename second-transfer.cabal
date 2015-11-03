@@ -104,7 +104,11 @@ library
 
                   , SecondTransfer.Sessions
                   , SecondTransfer.Sessions.Config
+
                   , SecondTransfer.Http1.Parse
+                  , SecondTransfer.Http1.Types
+                  , SecondTransfer.Http1.Proxy
+
                   -- TODO: Most of these should be moved back to "other-modules"
                   , SecondTransfer.TLS.Botan
 
