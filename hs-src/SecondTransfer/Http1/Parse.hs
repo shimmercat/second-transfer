@@ -12,6 +12,8 @@ module SecondTransfer.Http1.Parse(
     ,headerListToHTTP1RequestText
     ,headerListToHTTP1ResponseText
     ,serializeHTTPResponse
+    ,methodHasRequestBody
+    ,methodHasResponseBody
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
@@ -54,6 +56,7 @@ data IncrementalHttp1Parser = IncrementalHttp1Parser {
     ,_stateParser :: HeaderParseClosure
     }
 
+
 type HeaderParseClosure = (B.ByteString ->  ([Int], Int, Word8))
 
 -- L.makeLenses ''IncrementalHttp1Parser
@@ -76,13 +79,14 @@ data Http1ParserCompletion =
     MustContinue_H1PC IncrementalHttp1Parser
     -- | Headers were completed. For some HTTP methods that's all
     --   there is, and that's what this case represents. The second
-    --   argument is a left-overs string.
+    --   argument is a left-overs string, that should be completed
+    --   with any other data required
     |OnlyHeaders_H1PC      Headers B.ByteString
     -- | For requests with a body. The second argument is a condition
     --   to stop receiving the body, the third is leftovers from
     --   parsing the headers.
     |HeadersAndBody_H1PC   Headers BodyStopCondition B.ByteString
-    -- | Some requests are mal-formed. We can check those cases
+    -- | Some requests are ill-formed. We can check those cases
     --   here.
     |RequestIsMalformed_H1PC
     deriving Show
@@ -122,6 +126,7 @@ addBytes (IncrementalHttp1Parser full_text header_parse_closure) new_bytes =
                         (locateCRLFs length_so_far positions last_char)
 
 
+-- This function takes care of retrieving headers....
 elaborateHeaders :: Bu.Builder -> [Int] -> Int -> Http1ParserCompletion
 elaborateHeaders full_text crlf_positions last_headers_position =
   let
@@ -173,10 +178,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
           let
             -- No lowercase, methods are case sensitive
             -- lc_method = bsToLower method
-            has_body' = case method of
-                "POST"   -> True
-                "PUT"    -> True
-                _        -> False
+            has_body' = methodHasRequestBody method
           in
             ( (":path", uri):(":method",method):headers_1, has_body' )
 
@@ -225,6 +227,7 @@ parseFirstLine s =
     case either_error_or_rrl of
         Left _ -> throw exc
         Right rrl -> rrl
+
 
 bsToLower :: B.ByteString -> B.ByteString
 bsToLower = Ch8.map toLower
@@ -277,14 +280,17 @@ isWsCh8 s = isJust (Ch8.elemIndex
         " \t"
     )
 
+
 isWs :: Word8 -> Bool
 isWs s = isJust (B.elemIndex
         s
         " \t"
     )
 
+
 http1Token :: Ap.Parser B.ByteString
 http1Token = Ap.string "HTTP/1.1" <|> Ap.string "HTTP/1.0"
+
 
 http1Method :: Ap.Parser B.ByteString
 http1Method =
@@ -296,12 +302,14 @@ http1Method =
     <|> Ap.string "TRACE"
     <|> Ap.string "CONNECT"
 
+
 unspacedUri :: Ap.Parser B.ByteString
 unspacedUri = Ap.takeWhile (not . isWs)
 
 
 space :: Ap.Parser Word8
 space = Ap.word8 32
+
 
 requestLine :: Ap.Parser RequestOrResponseLine
 requestLine =
@@ -314,8 +322,10 @@ requestLine =
     <* space
     <* http1Token
 
+
 digit :: Ap.Parser Word8
 digit = Ap.satisfy (Ap.inClass "0-9")
+
 
 responseLine :: Ap.Parser RequestOrResponseLine
 responseLine =
@@ -331,10 +341,13 @@ responseLine =
     <*
     Ap.takeByteString
 
+
 httpFirstLine :: Ap.Parser RequestOrResponseLine
 httpFirstLine = requestLine <|> responseLine
 
 
+-- This is a serialization function: it goes from content to string
+-- It is not using during parse, but during the inverse process.
 headerListToHTTP1ResponseText :: Headers -> Bu.Builder
 headerListToHTTP1ResponseText headers =
     case headers of
@@ -367,6 +380,7 @@ headerListToHTTP1ResponseText headers =
         "\r\n"
         ]
 
+
 -- Invoke with the request data. Don't forget to clean the headers first.
 headerListToHTTP1RequestText :: Headers -> Bu.Builder
 headerListToHTTP1RequestText headers =
@@ -383,6 +397,11 @@ headerListToHTTP1RequestText headers =
     go1 mb_method   _mb_local_uri    assembled_body ((hn,hv): rest)
       | hn == ":path"   =
           go1 mb_method  (Just . Bu.byteString . cleanupAbsoluteUri $ hv) assembled_body rest
+
+    -- Authority pseudo-header becomes a host header.
+    go1 mb_method   _mb_local_uri    assembled_body ((hn,hv): rest)
+      | hn == ":authority"   =
+          go1 mb_method  (Just . Bu.byteString . cleanupAbsoluteUri $ hv) (assembled_body `mappend` "host" `mappend` ":" `mappend` (Bu.byteString hv) `mappend` "\r\n") rest
 
     go1 mb_method mb_local_uri assembled_body ((hn,hv):rest)   -- Ignore any strange pseudo-headers
       | He.headerIsPseudo hn = go1 mb_method mb_local_uri assembled_body rest
@@ -448,6 +467,29 @@ validMethod mth | mth == "GET"     =  mth
                 | otherwise        = "GET"
 
 
+methodHasRequestBody :: B.ByteString -> Bool
+methodHasRequestBody mth | mth == "GET"     =  False
+                         | mth == "POST"    =  True
+                         | mth == "HEAD"    =  False
+                         | mth == "OPTIONS" =  False
+                         | mth == "PUT"     =  True
+                         | mth == "DELETE"  =  False
+                         | mth == "TRACE"   =  False
+                         | otherwise        =  False
+
+
+-- These are most likely wrong TODO: fix
+methodHasResponseBody :: B.ByteString -> Bool
+methodHasResponseBody mth | mth == "GET"     = True
+                         | mth == "POST"    =  True
+                         | mth == "HEAD"    =  False
+                         | mth == "OPTIONS" =  False
+                         | mth == "PUT"     =  True
+                         | mth == "DELETE"  =  False
+                         | mth == "TRACE"   =  False
+                         | otherwise        =  False
+
+
 cleanupAbsoluteUri :: B.ByteString -> B.ByteString
 -- Just trigger a 404 with an informative message (perhaps)
 cleanupAbsoluteUri u
@@ -509,15 +551,3 @@ httpStatusTable = M.fromList
         (504, "Gateway Timeout"),
         (505, "HTTP Version Not Supported")
     ]
-
--- For testing purposes... --------------------------------------------------------------
------------------------------------------------------------------------------------------
-
--- assertEqual :: Eq a => String -> a -> a -> IO ()
--- assertEqual label v1 v2 = do
---     putStrLn label
---     if v1 == v2
---       then
---         putStrLn "Ok"
---       else
---         putStrLn "NoOk"

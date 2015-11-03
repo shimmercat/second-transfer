@@ -3,6 +3,8 @@ module SecondTransfer.IOCallbacks.Coupling (
                  Coupling
                , couple
                , breakCoupling
+               , sendSourceToIO
+               , iocallbacksToSink
        )where
 
 import           Control.Lens
@@ -12,6 +14,8 @@ import qualified Control.Exception                            as E
 
 --import           Data.IORef
 --import           Data.Typeable
+import           Data.Conduit
+import qualified Data.Conduit.List                            as DCL
 
 import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
@@ -49,14 +53,14 @@ pump break_now pull push = do
                                 Right _ ->  go
 
                                 Left e -> do
-                                    tryPutMVar break_now ()
+                                    _succeeded <- tryPutMVar break_now ()
                                     E.throwIO e
 
                         (Just (), _) ->
                             return ()
 
                         (Nothing, Left e ) -> do
-                            tryPutMVar break_now ()
+                            _succeeded <- tryPutMVar break_now ()
                             E.throwIO e
 
                 Just _ ->
@@ -64,13 +68,15 @@ pump break_now pull push = do
     go
 
 
-
+-- | Connects two IO callbacks so that data received in one is sent to the
+--   other.
 couple :: IOCallbacks -> IOCallbacks -> IO Coupling
-couple a b = do
+couple a b =
+  do
     break_now_mvar <- newEmptyMVar
 
-    forkIO $ pump break_now_mvar ( a ^. bestEffortPullAction_IOC ) ( b ^. pushAction_IOC)
-    forkIO $ pump break_now_mvar ( b ^. bestEffortPullAction_IOC ) ( a ^. pushAction_IOC)
+    _pump_thread1 <- forkIO $ pump break_now_mvar ( a ^. bestEffortPullAction_IOC ) ( b ^. pushAction_IOC)
+    _pump_thread2 <- forkIO $ pump break_now_mvar ( b ^. bestEffortPullAction_IOC ) ( a ^. pushAction_IOC)
 
     return Coupling {
         _breakNow_Cou = break_now_mvar
@@ -79,5 +85,17 @@ couple a b = do
 
 breakCoupling :: Coupling -> IO ()
 breakCoupling coupling = do
-    tryPutMVar (coupling ^. breakNow_Cou ) ()
+    _succeeded <- tryPutMVar (coupling ^. breakNow_Cou ) ()
     return ()
+
+
+iocallbacksToSink :: IOCallbacks -> Sink LB.ByteString IO ()
+iocallbacksToSink ioc = DCL.mapM_ (ioc ^. pushAction_IOC)
+
+
+-- | Sends the data coming from the source to the IOCallbacks.
+-- No exceptions are handled here. This consumes the thread until
+-- it finishes. The iocallbacks is not closed.
+sendSourceToIO :: Source IO LB.ByteString -> IOCallbacks -> IO ()
+sendSourceToIO source ioc =
+  source $$ iocallbacksToSink ioc

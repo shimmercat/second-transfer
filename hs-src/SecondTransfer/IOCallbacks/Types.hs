@@ -67,7 +67,8 @@ type BestEffortPullAction = Bool -> IO B.ByteString
 --   know how many bytes we are expecting with HTTP/2.
 type PullAction  = Int -> IO B.ByteString
 
--- | Generic implementation of PullAction from BestEffortPullAction
+-- | Generic implementation of PullAction from BestEffortPullAction, where we keep around
+--   any leftovers data ...
 newtype PullActionWrapping = PullActionWrapping (IORef (Bu.Builder,Int), BestEffortPullAction)
 
 -- The type above contains stuff already read, its length and the the action

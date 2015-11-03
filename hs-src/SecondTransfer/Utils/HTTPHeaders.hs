@@ -31,6 +31,7 @@ module SecondTransfer.Utils.HTTPHeaders (
     ,replaceHostByAuthority
     ,introduceDateHeader
     ,headerIsPseudo
+    ,combineAuthorityAndHost
     ) where
 
 import qualified Control.Lens                           as L
@@ -86,7 +87,7 @@ aTitleIsLowercase a_title = not . T.any isUpper . decodeUtf8 $ a_title
 
 
 -- | Looks for a given header
-fetchHeader :: Headers -> B.ByteString -> Maybe B.ByteString
+fetchHeader :: Headers -> HeaderName -> Maybe HeaderValue
 fetchHeader headers header_name =
     snd
       <$>
@@ -178,6 +179,10 @@ headerIsSingleton hn | hn == "date"  = True
                      | hn == "last-modified" = True
                      | hn == "content-encoding" = True
                      | hn == "server" = True
+                     | hn == ":authority" = True
+                     | hn == "host" = True
+                     | hn == ":status" = True
+                     | hn == ":path" = True
                      | otherwise = False
 
 
@@ -302,6 +307,31 @@ replaceHostByAuthority  headers =
     case maybe_host_header of
         Nothing -> headers
         Just host -> L.set authority_lens (Just host) no_hosts
+
+-- | Combines ":authority" and "host", giving priority to the first. This is used when proxying
+--   HTTP/2 to HTTP/1.1. It leaves whichever header of highest priority is present
+combineAuthorityAndHost :: HeaderEditor -> HeaderEditor
+combineAuthorityAndHost (HeaderEditor mp) =
+  let
+    ap1 = Ms.toList mp
+
+    go :: Int -> [(Autosorted, HeaderValue)] -> [(Autosorted, HeaderValue)]
+    go _ []                                    = []
+    go n  (a1@(Autosorted (_,hn,_) , _): rest)
+      | hn == ":authority" && n < 2
+          =  (a1: go 2 rest)
+      | hn == ":authority" && n >= 2
+          =  go n rest
+      | hn == "host" && n < 1
+          =  (a1: go 1 rest)
+      | hn == "host" && n >= 1
+          =  (go n rest)
+      | otherwise
+          =  (a1 : go n rest)
+
+    mp2 = Ms.fromList . go 0 $ ap1
+
+    in HeaderEditor mp2
 
 
 -- | Given a header editor, introduces a "Date" header. This function has
