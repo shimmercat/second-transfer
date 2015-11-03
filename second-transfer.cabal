@@ -96,6 +96,7 @@ library
                   -- from the documentation.
                   , SecondTransfer.MainLoop.Internal
                   , SecondTransfer.MainLoop.Disruptible
+                  , SecondTransfer.MainLoop.CoherentWorker
 
                   -- These are instrumentation utilities, they are mostly
                   -- disabled if the flag monitoring is off.
@@ -113,8 +114,7 @@ library
                   , SecondTransfer.TLS.Botan
 
 
-  other-modules:    SecondTransfer.MainLoop.CoherentWorker
-                  , SecondTransfer.MainLoop.Protocol
+  other-modules:    SecondTransfer.MainLoop.Protocol
                   , SecondTransfer.MainLoop.Tokens
                   , SecondTransfer.MainLoop.Framer
                   , SecondTransfer.MainLoop.ClientPetitioner
