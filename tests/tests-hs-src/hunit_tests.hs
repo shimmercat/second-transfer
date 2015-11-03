@@ -32,6 +32,10 @@ tests = TestList [
     ,TestLabel "testClosedInteraction3" testClosedInteraction3
     ,TestLabel "testWorkerClosesAfter"  testWorkerClosesAfter
     ,TestLabel "testWorkerClosesBefore" testWorkerClosesBefore
+    ,TestLabel "testCombineAuthorityAndHost" testCombineAuthorityAndHost
+    ,TestLabel "testCombineAuthorityAndHost2" testCombineAuthorityAndHost2
+    ,TestLabel "testHeadersToRequest" testHeadersToRequest
+    ,TestLabel "testHeadersToRequest2" testHeadersToRequest2
     ]
 
 

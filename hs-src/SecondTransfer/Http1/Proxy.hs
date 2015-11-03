@@ -58,7 +58,8 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
        headers_bu = headerListToHTTP1RequestText h3
        separator = "\r\n"
 
-       -- Contents of the header
+       -- Contents of the head, including the separator, which should always
+       -- be there.
        cnt1 = headers_bu `mappend` separator
        cnt1_lbz = Bu.toLazyByteString cnt1
 

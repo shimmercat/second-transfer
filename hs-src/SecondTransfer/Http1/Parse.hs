@@ -381,7 +381,10 @@ headerListToHTTP1ResponseText headers =
         ]
 
 
+-- | Converts a list of headers to a request head.
 -- Invoke with the request data. Don't forget to clean the headers first.
+-- NOTICE that this function doesn't add the \r\n extra-token for the empty
+-- line at the end of headers.
 headerListToHTTP1RequestText :: Headers -> Bu.Builder
 headerListToHTTP1RequestText headers =
     go1 Nothing Nothing mempty headers
