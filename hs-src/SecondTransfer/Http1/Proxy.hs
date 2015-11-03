@@ -116,7 +116,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
 
         OnlyHeaders_H1PC headers leftovers -> do
             when (B.length leftovers > 0) $ do
-                --REPORT_EVENT("suspicious-leftovers")
+                REPORT_EVENT("suspicious-leftovers")
                 return ()
             return (HttpResponse {
                 _headers_Rp = headers

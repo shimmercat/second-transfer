@@ -106,6 +106,8 @@ L.makeLenses ''DecoySession
 --      (Just $ setError mvar) defaultSessionsConfig
 
 
+-- | Creates a IOCallbacks where "pullAction" reads from input_data_channel and where
+--   "pushData" writes to output_data_channel.
 channelsToIOCallbacks :: TChan B.ByteString -> TChan B.ByteString -> TMVar DataContinuityEngine -> IOCallbacks
 channelsToIOCallbacks input_data_channel output_data_channel incoming_data_tmvar =
   let
