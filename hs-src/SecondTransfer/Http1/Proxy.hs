@@ -37,7 +37,8 @@ import           SecondTransfer.Http1.Parse                                (
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.Coupling                       (sendSourceToIO)
 import           SecondTransfer.Exception                                  (
-                                                                            HTTP11SyntaxException(..)
+                                                                              HTTP11SyntaxException(..)
+                                                                            , NoMoreDataException
                                                                            )
 
 #include "instruments.cpphs"
@@ -117,6 +118,19 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
             s <- liftIO $ (ioc ^. pullAction_IOC ) n
             liftIO $ putStrLn . show $ "S=" `mappend` s
             yield s
+
+        pump_until_exception fragment = do
+            if B.length fragment > 0
+              then
+                yield fragment
+              else do
+                s <- liftIO $ E.try $ (ioc ^. bestEffortPullAction_IOC) True
+                case (s :: Either NoMoreDataException B.ByteString) of
+                    Left _ -> return ()
+
+                    Right datum -> do
+                        yield datum
+                        pump_until_exception mempty
 
     parser_completion <- pump0 incremental_http_parser
 
