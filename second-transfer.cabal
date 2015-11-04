@@ -118,7 +118,6 @@ library
                   , SecondTransfer.MainLoop.Tokens
                   , SecondTransfer.MainLoop.Framer
                   , SecondTransfer.MainLoop.ClientPetitioner
-                  , SecondTransfer.MainLoop.OpenSSL_TLS
 
                   , SecondTransfer.Sessions.Internal
 
@@ -144,7 +143,8 @@ library
   default-extensions: CPP
 
   if flag(fastc)
-     CPP-Options: -DINCLUDE_BOTAN_H -I/usr/local/include/botan-1.11/
+     CPP-Options: -DINCLUDE_BOTAN_H
+     include-dirs: /usr/local/include/botan-1.11/
   else
      CPP-Options: -DINCLUDE_BOTAN_ALL_H
 
@@ -205,10 +205,9 @@ library
 
   --               v------ remove this
   if flag(fastc)
-        c-sources:      cbits/tlsinc.c, cbits/enable_tls.cpp
+        c-sources:       cbits/enable_tls.cpp
   else
-        c-sources:       cbits/tlsinc.c
-                       , cbits/enable_tls.cpp
+        c-sources:       cbits/enable_tls.cpp
                        , cbits/botan_all.cpp
                        , cbits/botan_all_avx2.cpp
                        , cbits/botan_all_aesni.cpp
@@ -217,15 +216,14 @@ library
 
   -- TODO: Refactor
   if flag(fastc)
-      extra-libraries: ssl crypto stdc++ botan-1.11
+      extra-libraries: stdc++ botan-1.11
   else
-      extra-libraries: ssl crypto stdc++
+      extra-libraries: stdc++
 
   -- NOTE: Please fill-in with an-up-to date library path here.
   -- It should point to openssl 1.0.2 or greater. See note for
   -- include-dirs above.
-  extra-lib-dirs: /opt/openssl-1.0.2/lib
-                , /usr/local/lib
+  extra-lib-dirs: /usr/local/lib
 
   include-dirs: macros/
 
@@ -281,7 +279,6 @@ Test-Suite hunit-tests
   build-tools        : cpphs
   default-extensions : CPP
   include-dirs       : macros/
-  CPP-Options        : -DDISABLE_OPENSSL_TLS
   ghc-options        : -threaded -pgmPcpphs "-pgmc gcc"  -optP--cpp
   other-modules      :  SecondTransfer.Test.DecoySession
                        , Tests.HTTP1Parse

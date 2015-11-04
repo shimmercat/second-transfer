@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 import SecondTransfer(
-    tlsServeWithALPN
+      tlsServeWithALPN
+    , botanTLS
     , http2Attendant
     , http11Attendant
     , dropIncomingData
@@ -203,6 +204,7 @@ main = do
         http2_attendant = {-# SCC a2 #-} http2Attendant sessions_context   simpleWorker
         http11_attendant = http11Attendant sessions_context simpleWorker
     do {-# SCC serveStuff #-} tlsServeWithALPN
+        botanTLS
         "tests/support/servercert.pem"   -- Server certificate
         "tests/support/privkey.pem"      -- Certificate private key
         "127.0.0.1"                      -- On which interface to bind

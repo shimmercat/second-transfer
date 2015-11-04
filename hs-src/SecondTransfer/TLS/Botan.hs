@@ -4,6 +4,7 @@ module SecondTransfer.TLS.Botan (
                 , BotanSession
                 , unencryptChannelData
                 , newBotanTLSContext
+                , botanTLS
        ) where
 
 import           Control.Concurrent
@@ -14,6 +15,7 @@ import           Foreign.C.Types                                           (CCha
 import           Foreign.C.String                                          (CString)
 
 import           Data.List                                                 (elemIndex)
+import           Data.Typeable                                             (Proxy(..))
 import           Data.Maybe                                                (fromMaybe)
 import           Data.IORef
 import qualified Data.ByteString                                           as B
@@ -406,3 +408,7 @@ instance TLSContext BotanTLSContext BotanSession where
     getSelectedProtocol (BotanSession pad_ioref) = do
         botan_pad <- readIORef pad_ioref
         readMVar (botan_pad ^. selectedProtocol_BP)
+
+
+botanTLS :: Proxy BotanTLSContext
+botanTLS = Proxy

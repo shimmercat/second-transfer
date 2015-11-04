@@ -164,17 +164,12 @@ module SecondTransfer(
     , http2Attendant
     , coherentToAwareWorker
 
-#ifndef DISABLE_OPENSSL_TLS
     -- * High level OpenSSL functions.
     --
     -- | Use these functions to create your TLS-compliant
     --   HTTP/2 server in a snap.
     , tlsServeWithALPN
-    , tlsServeWithALPNAndFinishOnRequest
-
-    , TLSLayerGenericProblem(..)
-    , FinishRequest(..)
-#endif -- DISABLE_OPENSSL_TLS
+    , botanTLS
 
     , dropIncomingData
     ) where
@@ -184,4 +179,5 @@ import           SecondTransfer.Http2.MakeAttendant     (http2Attendant)
 import           SecondTransfer.MainLoop
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.Types
+import           SecondTransfer.TLS.Botan               (botanTLS)
 import           SecondTransfer.Utils.DevNull           (dropIncomingData)
