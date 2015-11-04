@@ -75,7 +75,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
             -- completion = addBytes parser $ traceShow ("At session " ++ (show session_tag) ++ " Received: " ++ (unpack bytes) ) bytes
         case completion of
 
-            RequestIsMalformed_H1PC -> do
+            RequestIsMalformed_H1PC _ -> do
                 -- This is a syntactic error..., so just close the connectin
                 close_action
                 -- We exit by returning nothing

@@ -39,6 +39,7 @@ import           SecondTransfer.IOCallbacks.Coupling                       (send
 import           SecondTransfer.Exception                                  (
                                                                               HTTP11SyntaxException(..)
                                                                             , NoMoreDataException
+                                                                            , reportExceptions
                                                                            )
 
 #include "instruments.cpphs"
@@ -53,7 +54,8 @@ instance Http1CycleController IO IOCallbacksConn where
 -- | Takes an IOCallbacksConn (not straight IOCallbacks since we plan on adding controllabiility)
 --   features on top of this type), and serializes a request (encoded HTTP/2 style in headers and streams)
 --   on top of the callback, waits for the results, and returns the response. Notice that this proxy
---   may fail for any reason, do take measures and handle exceptions.
+--   may fail for any reason, do take measures and handle exceptions. Also, must headers manipulations
+--   (e.g. removing the "Connection" header) are left to the upper layers
 ioProxyToConnection :: IOCallbacksConn -> HttpRequest IO -> IO (HttpResponse IO, IOCallbacksConn)
 ioProxyToConnection c@(IOCallbacksConn ioc) request =
   do
@@ -116,17 +118,18 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
         pull :: Int -> Source IO B.ByteString
         pull n = do
             s <- liftIO $ (ioc ^. pullAction_IOC ) n
-            liftIO $ putStrLn . show $ "S=" `mappend` s
             yield s
 
         pump_until_exception fragment = do
             if B.length fragment > 0
-              then
+              then do
                 yield fragment
+                pump_until_exception mempty
               else do
-                s <- liftIO $ E.try $ (ioc ^. bestEffortPullAction_IOC) True
+                s <- liftIO $ reportExceptions $ E.try $ (ioc ^. bestEffortPullAction_IOC) True
                 case (s :: Either NoMoreDataException B.ByteString) of
-                    Left _ -> return ()
+                    Left _ -> do
+                        return ()
 
                     Right datum -> do
                         yield datum
@@ -137,7 +140,6 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
     case parser_completion of
 
         OnlyHeaders_H1PC headers leftovers -> do
-            putStrLn "A"
             when (B.length leftovers > 0) $ do
                 REPORT_EVENT("suspicious-leftovers")
                 return ()
@@ -146,15 +148,19 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
               , _body_Rp = return ()
                 }, c)
 
-
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
-            putStrLn $ "B "  ++ (show headers) ++ " " ++ (show n ) ++ " " ++ (show leftovers)
             return (HttpResponse {
                 _headers_Rp = headers
               , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
                 }, c)
 
+        HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC leftovers -> do
+            putStrLn . show $ headers
+            return (HttpResponse {
+                _headers_Rp = headers
+              , _body_Rp = pump_until_exception leftovers
+                }, c)
+
         -- TODO: See what happens when this exception passes from place to place.
-        _ -> do
-            putStrLn "C"
-            E.throwIO $ HTTP11SyntaxException "BadHttp1Response"
+        RequestIsMalformed_H1PC msg -> do
+            E.throwIO $ HTTP11SyntaxException msg

@@ -90,7 +90,7 @@ data Http1ParserCompletion =
     |HeadersAndBody_H1PC   Headers BodyStopCondition B.ByteString
     -- | Some requests are ill-formed. We can check those cases
     --   here.
-    |RequestIsMalformed_H1PC
+    |RequestIsMalformed_H1PC String
     deriving Show
 
 
@@ -134,7 +134,7 @@ addBytes (IncrementalHttp1Parser full_text header_parse_closure) new_bytes =
     case (could_finish, head_is_suspicious) of
         (Just at_position, _) -> elaborateHeaders new_full_text positions at_position
 
-        (Nothing, True ) -> RequestIsMalformed_H1PC
+        (Nothing, True ) -> RequestIsMalformed_H1PC "Head is suspicious"
 
         (Nothing, False) -> MustContinue_H1PC
                     $ IncrementalHttp1Parser
