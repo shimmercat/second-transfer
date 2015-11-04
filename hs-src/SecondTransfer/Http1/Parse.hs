@@ -41,6 +41,7 @@ import qualified Data.Attoparsec.ByteString             as Ap
 import           Data.Foldable                          (find)
 import           Data.Word                              (Word8)
 import qualified Data.Map                               as M
+import           Text.Read                              (readEither)
 
 import qualified Network.URI                            as U
 
@@ -93,13 +94,16 @@ data Http1ParserCompletion =
     deriving Show
 
 
--- | Stop condition when parsing the body. Right now only length
---   is supported, given with Content-Length.
+-- | Stop condition when parsing the body.
+--  Tons and tons of messages in the internet go without a Content-Length
+--  header, in those cases there is a long chain of conditions to determine the
+--  message length, and at the end of those, there is CloseConnection
 --
 --  TODO: Support "chunked" transfer encoding for classical
 --  HTTP/1.1, uploads will need it.
 data BodyStopCondition =
      UseBodyLength_BSC Int
+   | ConnectionClosedByPeer_BSC
      deriving (Show, Eq)
 
 
@@ -227,19 +231,21 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         ( (stripBs . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
         ]
 
-    content_length :: Int
-    content_length =
+    content_stop :: BodyStopCondition
+    content_stop =
       let
         cnt_length_header = find (\ x -> (fst x) == "content-length" ) headers_3
       in case cnt_length_header of
-        Just (_, hv) -> read . unpack $ hv
-        Nothing -> throw ContentLengthMissingException
+        Just (_, hv) -> case readEither . unpack $ hv of
+           Left _ -> throw ContentLengthMissingException
+           Right n -> UseBodyLength_BSC n
+        Nothing -> ConnectionClosedByPeer_BSC
 
     leftovers = B.drop (last_headers_position + 4) full_headers_text
   in
     if has_body
       then
-        HeadersAndBody_H1PC headers_3 (UseBodyLength_BSC content_length) leftovers
+        HeadersAndBody_H1PC headers_3 content_stop leftovers
       else
         OnlyHeaders_H1PC headers_3 leftovers
 
