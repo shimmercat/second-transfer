@@ -21,7 +21,7 @@ import SecondTransfer.MainLoop.CoherentWorker
 dropIncomingData :: Maybe InputDataStream -> IO ()
 dropIncomingData Nothing = return ()
 dropIncomingData (Just data_source) = do
-    forkIO $
+    _ <- forkIO $
         data_source $$ awaitForever (\ _ -> do
                                          return () )
     return ()

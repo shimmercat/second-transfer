@@ -55,13 +55,15 @@ socketIOCallbacks socket = do
         -- Unfortunately we are forced to totally rely on sockets blocking or not nature
         -- TODO:  Check if ignoring the flag here becomes a problem.
         best_effort_pull_action _ = do
+            --putStrLn "wait-for-data"
             datum <- E.catch (NSB.recv socket 4096) uhandler
             if B.length datum == 0
                 then do
                    -- Pre-emptively close the socket, don't wait for anything else
                    close_action
                    E.throwIO NoMoreDataException
-                else
+                else do
+                   --putStrLn $ "Received" ++ show datum
                    return datum
 
         -- Exceptions are close are possible

@@ -115,7 +115,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
         pull :: Int -> Source IO B.ByteString
         pull n = do
             s <- liftIO $ (ioc ^. pullAction_IOC ) n
-            -- liftIO $ putStrLn . show $ "S=" `mappend` s
+            liftIO $ putStrLn . show $ "S=" `mappend` s
             yield s
 
     parser_completion <- pump0 incremental_http_parser
@@ -123,6 +123,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
     case parser_completion of
 
         OnlyHeaders_H1PC headers leftovers -> do
+            putStrLn "A"
             when (B.length leftovers > 0) $ do
                 REPORT_EVENT("suspicious-leftovers")
                 return ()
@@ -133,11 +134,13 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
 
 
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
+            putStrLn "B"
             return (HttpResponse {
                 _headers_Rp = headers
               , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
                 }, c)
 
         -- TODO: See what happens when this exception passes from place to place.
-        _ ->
+        _ -> do
+            putStrLn "C"
             E.throwIO $ HTTP11SyntaxException "undefinedCaseWithBadSyntax"
