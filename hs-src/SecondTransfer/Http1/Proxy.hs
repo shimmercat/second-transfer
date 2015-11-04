@@ -134,7 +134,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
 
 
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
-            putStrLn "B"
+            putStrLn $ "B "  ++ (show headers) ++ " " ++ (show n ) ++ " " ++ (show leftovers)
             return (HttpResponse {
                 _headers_Rp = headers
               , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
