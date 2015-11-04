@@ -143,4 +143,4 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
         -- TODO: See what happens when this exception passes from place to place.
         _ -> do
             putStrLn "C"
-            E.throwIO $ HTTP11SyntaxException "undefinedCaseWithBadSyntax"
+            E.throwIO $ HTTP11SyntaxException "BadHttp1Response"

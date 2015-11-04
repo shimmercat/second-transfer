@@ -49,6 +49,7 @@ import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
+import qualified SecondTransfer.ConstantsAndLimits      as Constant
 
 
 data IncrementalHttp1Parser = IncrementalHttp1Parser {
@@ -116,14 +117,43 @@ addBytes (IncrementalHttp1Parser full_text header_parse_closure) new_bytes =
     (positions, length_so_far, last_char ) = header_parse_closure new_bytes
     new_full_text = full_text `mappend` (Bu.byteString new_bytes)
     could_finish = twoCRLFsAreConsecutive positions
+    total_length_now = B.length new_bytes + length_so_far
+    -- This will only trigger for ill-formed heads, if the head is parsed successfully, this
+    -- flag will be ignored.
+    head_is_suspicious =
+      if total_length_now > 399 then
+         if total_length_now < Constant.maxUrlLength
+            then looksSuspicious (Bu.toLazyByteString new_full_text)
+            else True
+      else False
   in
-    case could_finish of
-        Just at_position -> elaborateHeaders new_full_text positions at_position
+    case (could_finish, head_is_suspicious) of
+        (Just at_position, _) -> elaborateHeaders new_full_text positions at_position
 
-        Nothing -> MustContinue_H1PC
+        (Nothing, True ) -> RequestIsMalformed_H1PC
+
+        (Nothing, False) -> MustContinue_H1PC
                     $ IncrementalHttp1Parser
                         new_full_text
                         (locateCRLFs length_so_far positions last_char)
+
+
+-- Look for suspicious patterns in the bs, like tab characters, or \r or \n
+-- which are alone
+looksSuspicious :: Lb.ByteString -> Bool
+looksSuspicious bs  =
+  let
+    have_weird_characters = isJust $ Lb.find (\w8 -> w8 < 32 && w8 /= 10 && w8 /= 13 ) bs
+    have_lone_n  = let
+        ei = Lb.elemIndices 13 bs
+        eii = Lb.elemIndices 10 bs
+        zp = zip ei eii
+        f ((i,j):rest)  | i+1 == j = f rest
+                        | i == Lb.length bs - 1 = False
+                        | otherwise            = True
+        f []                                   = False
+        in f zp
+    in have_lone_n || have_weird_characters
 
 
 -- This function takes care of retrieving headers....

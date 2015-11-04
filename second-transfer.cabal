@@ -123,6 +123,7 @@ library
                   , SecondTransfer.Sessions.Internal
 
                   , SecondTransfer.Utils
+                  , SecondTransfer.ConstantsAndLimits
 
                   , SecondTransfer.Socks5.Serializers
                   , SecondTransfer.Socks5.Parsers
