@@ -155,7 +155,6 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 }, c)
 
         HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC leftovers -> do
-            putStrLn . show $ headers
             return (HttpResponse {
                 _headers_Rp = headers
               , _body_Rp = pump_until_exception leftovers
