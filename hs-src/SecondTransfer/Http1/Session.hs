@@ -6,8 +6,8 @@ module SecondTransfer.Http1.Session(
 
 
 import           Control.Lens
-import           Control.Exception                       (catch)
-import           Control.Concurrent                      (forkIO)
+import           Control.Exception                       (catch, try)
+--import           Control.Concurrent                      (forkIO)
 import           Control.Monad.IO.Class                  (liftIO)
 
 import qualified Data.ByteString                         as B
@@ -29,9 +29,14 @@ import           SecondTransfer.IOCallbacks.Types
 import           System.Clock
 
 import           SecondTransfer.Http1.Parse
-import           SecondTransfer.Exception                (IOProblem)
+import           SecondTransfer.Exception                (
+                                                         IOProblem,
+                                                         NoMoreDataException,
+                                                         forkIOExc
+                                                         )
 import           SecondTransfer.Sessions.Config
 import qualified SecondTransfer.Utils.HTTPHeaders        as He
+
 
 -- import           Debug.Trace                             (traceShow)
 
@@ -44,7 +49,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
     do
         new_session_tag <- acquireNewSessionTag sessions_context
         -- infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
-        forkIO $ go new_session_tag (Just "") 1
+        _ <- forkIOExc $ go new_session_tag (Just "") 1
         return ()
   where
     push_action = attendant_callbacks ^. pushAction_IOC
@@ -69,6 +74,12 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
             completion = addBytes parser bytes
             -- completion = addBytes parser $ traceShow ("At session " ++ (show session_tag) ++ " Received: " ++ (unpack bytes) ) bytes
         case completion of
+
+            RequestIsMalformed_H1PC -> do
+                -- This is a syntactic error..., so just close the connectin
+                close_action
+                -- We exit by returning nothing
+                return Nothing
 
             MustContinue_H1PC new_parser ->
                 -- print "MustContinue_H1PC"
@@ -133,10 +144,14 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                     modified_headers = addExtraHeaders sessions_context headers
                 started_time <- getTime Monotonic
                 set_leftovers <- newIORef ""
+                let
+                    source = case stopcondition of
+                        UseBodyLength_BSC n -> counting_read recv_leftovers n set_leftovers
+                        ConnectionClosedByPeer_BSC -> readforever recv_leftovers
 
                 principal_stream <- coherent_worker Request {
                         _headers_RQ = modified_headers,
-                        _inputData_RQ = Just $ counting_read recv_leftovers stopcondition set_leftovers,
+                        _inputData_RQ = Just source,
                         _perception_RQ = Perception {
                           _startedTime_Pr       = started_time,
                           _streamId_Pr          = reuse_no,
@@ -165,32 +180,47 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                         return Nothing
                     ) :: IOProblem -> IO (Maybe B.ByteString) )
 
-    counting_read :: B.ByteString -> BodyStopCondition -> IORef B.ByteString -> Source IO B.ByteString
-    counting_read leftovers un@(UseBodyLength_BSC n) set_leftovers = do
+    counting_read :: B.ByteString -> Int -> IORef B.ByteString -> Source IO B.ByteString
+    counting_read leftovers n set_leftovers = do
         -- Can I continue?
-        if n == 0 then
-          do
+        if n == 0
+          then do
             liftIO $ writeIORef set_leftovers leftovers
             return ()
-        else
-          do
-            let
-                lngh_leftovers = B.length leftovers
-            if lngh_leftovers > 0 then
-                if lngh_leftovers <= n then
-                  do
-                    yield leftovers
-                    counting_read "" (UseBodyLength_BSC (n - lngh_leftovers )) set_leftovers
+          else
+            do
+              let
+                  lngh_leftovers = B.length leftovers
+              if lngh_leftovers > 0
+                then
+                  if lngh_leftovers <= n
+                    then do
+                      yield leftovers
+                      counting_read "" (n - lngh_leftovers ) set_leftovers
+                    else
+                      do
+                        let
+                          (pass, new_leftovers) = B.splitAt n leftovers
+                        yield pass
+                        counting_read new_leftovers  0 set_leftovers
                 else
                   do
-                    let
-                      (pass, new_leftovers) = B.splitAt n leftovers
-                    yield pass
-                    counting_read new_leftovers (UseBodyLength_BSC 0) set_leftovers
-            else
-              do
-                more_text <- liftIO $ best_effort_pull_action True
-                counting_read more_text un set_leftovers
+                    more_text <- liftIO $ best_effort_pull_action True
+                    counting_read more_text n set_leftovers
+
+    readforever :: B.ByteString  -> Source IO B.ByteString
+    readforever leftovers  =
+        if B.length leftovers > 0
+          then do
+            yield leftovers
+            readforever mempty
+          else do
+            more_text_or_error <- liftIO . try $ best_effort_pull_action True
+            case more_text_or_error :: Either NoMoreDataException B.ByteString of
+                Left _ -> return ()
+                Right bs -> do
+                    yield bs
+                    readforever mempty
 
 
 addExtraHeaders :: SessionsContext -> Headers -> Headers
