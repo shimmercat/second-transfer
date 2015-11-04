@@ -686,7 +686,7 @@ startStreamOutputQueue stream_id priority = do
 
 
     read_state <- ask
-    liftIO $ forkIO $ close_on_error session_id' sessions_context  $ runReaderT
+    liftIO $ forkIOExc $ close_on_error session_id' sessions_context  $ runReaderT
         ({-# SCC forkFlowControlOutput  #-} flowControlOutput stream_id priority initial_cap 0 "" command_chan bytes_chan)
         read_state
 
@@ -805,7 +805,8 @@ flowControlOutput :: Int
 flowControlOutput stream_id priority capacity ordinal leftovers commands_chan bytes_chan =
     ordinal `seq` if leftovers == ""
       then {-# SCC fcOBranch1  #-} do
-        -- Get more data (possibly block waiting for it)
+        -- Get more data (possibly block waiting for it)... there will be an
+        -- exception here from time to time...
         bytes_to_send <- liftIO $ {-# SCC perfectlyHarmlessExceptionPoint #-} takeMVar bytes_chan
         flowControlOutput stream_id priority capacity ordinal  bytes_to_send commands_chan bytes_chan
       else {-# SCC fcOBranch2  #-}  do
