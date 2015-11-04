@@ -179,6 +179,8 @@ instance Exception ContentLengthMissingException where
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
 
+
+-- Concrete exception
 data HTTP11SyntaxException = HTTP11SyntaxException String
     deriving (Typeable, Show)
 
