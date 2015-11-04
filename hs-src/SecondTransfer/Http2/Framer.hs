@@ -686,7 +686,9 @@ startStreamOutputQueue stream_id priority = do
 
 
     read_state <- ask
-    liftIO $ forkIOExc $ close_on_error session_id' sessions_context  $ runReaderT
+    liftIO $ forkIOExc
+           $ ignoreException blockedIndefinitelyOnMVar  ()
+           $ close_on_error session_id' sessions_context  $ runReaderT
         ({-# SCC forkFlowControlOutput  #-} flowControlOutput stream_id priority initial_cap 0 "" command_chan bytes_chan)
         read_state
 

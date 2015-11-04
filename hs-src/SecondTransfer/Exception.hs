@@ -32,6 +32,9 @@ module SecondTransfer.Exception (
     , ignoreException
     , reportExceptions
     , forkIOExc
+
+      -- * Proxies
+    , blockedIndefinitelyOnMVar
     ) where
 
 import           Control.Exception
@@ -265,3 +268,7 @@ reportExceptions comp =
 ---  in forked threads
 forkIOExc :: IO () -> IO ThreadId
 forkIOExc comp = forkIO $ reportExceptions comp
+
+
+blockedIndefinitelyOnMVar :: Proxy BlockedIndefinitelyOnMVar
+blockedIndefinitelyOnMVar = Proxy
