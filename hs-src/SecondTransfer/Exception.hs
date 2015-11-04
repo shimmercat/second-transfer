@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, ExistentialQuantification #-}
+{-# LANGUAGE DeriveDataTypeable, ExistentialQuantification, ScopedTypeVariables #-}
 {-|
 Module      : SecondTransfer.Exception
 -}
@@ -27,10 +27,16 @@ module SecondTransfer.Exception (
 
       -- * Internal exceptions
     , HTTP2ProtocolException                      (..)
+
+      -- * Utility functions
+    , ignoreException
+    , reportExceptions
+    , forkIOExc
     ) where
 
 import           Control.Exception
 import           Data.Typeable
+import           Control.Concurrent               (forkIO, ThreadId)
 
 
 
@@ -227,4 +233,35 @@ instance Exception StreamCancelledException
 data SOCKS5ProtocolException = SOCKS5ProtocolException
     deriving (Show, Typeable)
 
+
 instance Exception SOCKS5ProtocolException
+
+
+-- | Simple utility function that ignores an exception. Good to work
+--   on threads when we know stuff. It takes as a first parameter a
+--   proxy.
+ignoreException :: Exception e => Proxy e -> a -> IO a -> IO a
+ignoreException prx default_value comp =
+  let
+    predicate :: Proxy e ->  e -> Maybe ()
+    predicate _prx _ = Just ()
+    in catchJust (predicate prx ) comp (const $ return default_value)
+
+
+-- | Simple utility function that reports exceptions
+reportExceptions :: forall a . IO a -> IO a
+reportExceptions comp =
+  do
+    ei <- try comp
+    case (ei :: Either SomeException a) of
+        Left e -> do
+            putStrLn $ "Bubbling exc " ++ displayException e
+            throwIO e
+
+        Right a -> do
+            return a
+
+-- | Just report all unhandled and un-ignored exceptions
+---  in forked threads
+forkIOExc :: IO () -> IO ThreadId
+forkIOExc comp = forkIO $ reportExceptions comp
