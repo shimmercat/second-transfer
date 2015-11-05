@@ -120,6 +120,9 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
         pull :: Int -> Source IO B.ByteString
         pull n = do
             s <- liftIO $ (ioc ^. pullAction_IOC ) n
+            -- After getting all that sweet data close the connection
+            -- TODO: KEEP alive connections won't appreciate this!!
+            liftIO $ ignoreException ioProblem () (ioc ^. closeAction_IOC)
             yield s
 
         pump_until_exception fragment = do
