@@ -259,8 +259,8 @@ reportExceptions comp =
   do
     ei <- try comp
     case (ei :: Either SomeException a) of
-        Left e -> do
-            putStrLn $ "Bubbling exc " ++ displayException e
+        Left e@(SomeException ee) -> do
+            putStrLn $ "Bubbling exc " ++ displayException e ++ " (with type " ++ (show $ typeOf ee) ++ ")"
             throwIO e
 
         Right a -> do
