@@ -52,6 +52,8 @@ import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 import qualified SecondTransfer.ConstantsAndLimits      as Constant
 
+import           Debug.Trace
+
 
 data IncrementalHttp1Parser = IncrementalHttp1Parser {
     _fullText :: Bu.Builder
@@ -134,7 +136,7 @@ addBytes (IncrementalHttp1Parser full_text header_parse_closure) new_bytes =
     case (could_finish, head_is_suspicious) of
         (Just at_position, _) -> elaborateHeaders new_full_text positions at_position
 
-        (Nothing, True ) -> RequestIsMalformed_H1PC "Head is suspicious"
+        (Nothing, True ) -> trace "GRRHERE--" $ RequestIsMalformed_H1PC "Head is suspicious"
 
         (Nothing, False) -> MustContinue_H1PC
                     $ IncrementalHttp1Parser

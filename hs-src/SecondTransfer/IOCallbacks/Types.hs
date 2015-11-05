@@ -81,6 +81,7 @@ newPullActionWrapping best_effort_pull_action = do
 
 
 -- | The type of this function is also PullActionWrapping -> PullAction
+--   There should be only one reader concurrently.
 pullFromWrapping' :: PullActionWrapping -> Int -> IO B.ByteString
 pullFromWrapping' (PullActionWrapping (x, bepa)) n = do
     (hathz, len) <- readIORef x

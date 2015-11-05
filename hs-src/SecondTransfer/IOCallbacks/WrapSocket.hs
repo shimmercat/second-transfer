@@ -42,7 +42,6 @@ socketIOCallbacks :: NS.Socket -> IO SocketIOCallbacks
 socketIOCallbacks socket = do
     let
         uhandler = ((\ e -> do
-                               -- TODO: You may need to comment the putStrLn below
                                -- Preserve sockets!!
                                close_action
                                E.throwIO NoMoreDataException
