@@ -4,27 +4,27 @@ module Tests.HTTP2Session where
 
 import           Data.Typeable
 
-import           Control.Concurrent               (threadDelay)
-import qualified Control.Concurrent               as C (yield)
+import           Control.Concurrent                         (threadDelay)
+import qualified Control.Concurrent                         as C(yield)
 import           Control.Concurrent.MVar
 import           Control.Exception
 import           Control.Lens
-import qualified Control.Lens                     as L
-import           Control.Monad.IO.Class           (liftIO)
-import qualified Network.HTTP2                    as NH2
+import qualified Control.Lens                               as L
+import           Control.Monad.IO.Class                     (liftIO)
+import qualified Network.HTTP2                              as NH2
 import           Test.HUnit
 import           SecondTransfer.Exception
-import           SecondTransfer.Http2             (http2Attendant)
+import           SecondTransfer.Http2                       (http2Attendant)
 import           SecondTransfer.Sessions
 import           SecondTransfer.Test.DecoySession
 import           SecondTransfer.Types
-import           SecondTransfer.Utils.HTTPHeaders (fetchHeader)
-import           SecondTransfer.MainLoop.CoherentWorker (defaultEffects)
+import           SecondTransfer.Utils.HTTPHeaders           (fetchHeader)
+import           SecondTransfer.MainLoop.CoherentWorker     (defaultEffects)
 import           SecondTransfer.MainLoop.ClientPetitioner
 
 
 
-import           Data.Conduit                     (yield)
+import           Data.Conduit                               (yield)
 
 
 
@@ -92,7 +92,7 @@ throwingWorker2  = coherentToAwareWorker . const .  return $ (
     [], -- No pushed streams
     do
         yield "Error coming down"
-        liftIO $ throwIO Internal500Exception
+        _ <- liftIO $ throwIO Internal500Exception
         return []
     )
 
@@ -348,16 +348,16 @@ testSessionBreaksOnLateError = TestCase $ do
     seen3 <- frameIsGoAwayBecauseInternalError decoy_session seen2 f2
 
     f3 <- recvFrameFromSession decoy_session
-    seen4 <- frameIsGoAwayBecauseInternalError decoy_session seen3 f3
+    seen4 <- frameIsResetBecauseInternalError decoy_session seen3 f3
 
     if not seen4 then do
-        assertFailure "Didn't see GoAwayFrame"
+        assertFailure "Didn't see RSTFrame for faulty stream"
     else
         return ()
 
 
 frameIsGoAwayBecauseInternalError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool
-frameIsGoAwayBecauseInternalError decoy_session prev maybe_frame = do
+frameIsGoAwayBecauseInternalError _decoy_session prev maybe_frame = do
     case prev of
         True -> return True
         False ->
@@ -372,7 +372,7 @@ frameIsGoAwayBecauseInternalError decoy_session prev maybe_frame = do
 
 
 frameIsGoAwayBecauseProtocolError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool
-frameIsGoAwayBecauseProtocolError decoy_session prev maybe_frame = do
+frameIsGoAwayBecauseProtocolError _decoy_session prev maybe_frame = do
     case prev of
         True -> return True
         False ->
@@ -380,6 +380,20 @@ frameIsGoAwayBecauseProtocolError decoy_session prev maybe_frame = do
                 Just (NH2.Frame _  (NH2.GoAwayFrame _ ec _) ) -> do
                     case ec of
                         NH2.ProtocolError   -> return True
+                        _                   -> return False
+
+                _ ->
+                    return False
+
+frameIsResetBecauseInternalError :: DecoySession -> Bool -> Maybe NH2.Frame -> IO Bool
+frameIsResetBecauseInternalError _decoy_session prev maybe_frame = do
+    case prev of
+        True -> return True
+        False ->
+            case maybe_frame of
+                Just (NH2.Frame _  (NH2.RSTStreamFrame ec) ) -> do
+                    case ec of
+                        NH2.InternalError   -> return True
                         _                   -> return False
 
                 _ ->
