@@ -11,6 +11,7 @@ module SecondTransfer.Exception (
     , HTTP11SyntaxException                       (..)
     , ClientSessionAbortedException               (..)
     , HTTP500PrecursorException                   (..)
+    , GatewayAbortedException                     (..)
     , ConnectionCloseReason                       (..)
     , convertHTTP500PrecursorExceptionToException
     , getHTTP500PrecursorExceptionFromException
@@ -23,7 +24,7 @@ module SecondTransfer.Exception (
     , NoMoreDataException                         (..)
 
       -- * Exceptions related to SOCKS5
-    , SOCKS5ProtocolException                      (..)
+    , SOCKS5ProtocolException                     (..)
 
       -- * Internal exceptions
     , HTTP2ProtocolException                      (..)
@@ -38,6 +39,7 @@ module SecondTransfer.Exception (
     , blockedIndefinitelyOnMVar
     , noMoreDataException
     , ioProblem
+    , gatewayAbortedException
     ) where
 
 import           Control.Exception
@@ -145,9 +147,12 @@ getHTTP11ExceptionFromException x = do
     cast a
 
 -- | Abstract exception. It is an error if an exception of this type bubbles
---   to this library, but we will do our best to handle it gracefully.
+--   to this library, but we will do our best to handle it gracefully in the
+--   Session engines.
 --   All internal error precursors at the workers can thus inherit from here
---   to have a fallback option in case they forget to handle the error.
+--   to have a fallback option in case they forget to handle the error. It should
+--   also be used for the case of streaming requests that are interrupted by the
+--   upstream server.
 --   This exception inherits from HTTP11Exception
 data HTTP500PrecursorException = forall e . Exception e => HTTP500PrecursorException e
     deriving Typeable
@@ -171,6 +176,17 @@ getHTTP500PrecursorExceptionFromException x = do
 instance Exception HTTP500PrecursorException where
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
+
+-- | Used by the ReverseProxy to signal an error from the upstream/Gateway
+data GatewayAbortedException = GatewayAbortedException
+    deriving (Typeable, Show)
+
+instance Exception GatewayAbortedException where
+    toException = convertHTTP500PrecursorExceptionToException
+    fromException = getHTTP11ExceptionFromException
+
+gatewayAbortedException :: Proxy GatewayAbortedException
+gatewayAbortedException = Proxy
 
 -- | Thrown with HTTP/1.1 over HTTP/1.1 sessions when the response body
 --   or the request body doesn't include a Content-Length header field,

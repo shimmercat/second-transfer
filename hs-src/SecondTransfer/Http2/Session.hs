@@ -47,7 +47,7 @@ import           Control.Monad                          (
 import           Control.Monad.IO.Class                 (liftIO)
 import           Control.DeepSeq                        ( ($!!), deepseq )
 import           Control.Monad.Trans.Reader
--- import           Control.Monad.Catch                    (throwM)
+import qualified Control.Monad.Catch                    as CMC
 
 import           Control.Concurrent.MVar
 import qualified Data.ByteString                        as B
@@ -55,6 +55,7 @@ import           Data.ByteString.Char8                  (pack,unpack)
 import qualified Data.ByteString.Builder                as Bu
 import qualified Data.ByteString.Lazy                   as Bl
 import           Data.Conduit
+import qualified Data.Conduit                           as Cnd
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
 import           Data.Maybe                             (isJust)
@@ -133,22 +134,26 @@ makeLenses ''SessionSettings
 -- this is to make refactoring easier, but not strictly needed.
 data WorkerThreadEnvironment = WorkerThreadEnvironment {
     -- What's the header stream id?
-    _streamId :: GlobalStreamId
+    _streamId                     :: GlobalStreamId
 
     -- A full block of headers can come here... the mvar in the middle should
     -- be populate to signal end of headers transmission. A thread will be suspended
     -- waiting for that
-    , _headersOutput :: Chan HeaderOutputMessage
+    , _headersOutput              :: Chan HeaderOutputMessage
 
     -- And regular contents can come this way and thus be properly mixed
     -- with everything else.... for now...
-    ,_dataOutput :: MVar DataOutputToConveyor
+    ,_dataOutput                  :: MVar DataOutputToConveyor
 
-    ,_streamsCancelled_WTE :: MVar NS.IntSet
+    ,_streamsCancelled_WTE        :: MVar NS.IntSet
 
-    ,_sessionSettings_WTE :: SessionSettings
+    ,_sessionSettings_WTE         :: SessionSettings
 
-    ,_nextPushStream_WTE :: MVar Int
+    ,_nextPushStream_WTE          :: MVar Int
+
+    ,_resetStreamButton_WTE       :: IO ()
+
+    ,_childResetStreamButton_WTE  :: GlobalStreamId -> IO ()
     }
 
 makeLenses ''WorkerThreadEnvironment
@@ -192,10 +197,11 @@ type WorkerMonad = ReaderT WorkerThreadEnvironment IO
 -- Have to figure out which are these...but I would expect to have things
 -- like unexpected aborts here in this type.
 data SessionInputCommand =
-    FirstFrame_SIC InputFrame       -- This frame is special
-    |MiddleFrame_SIC InputFrame     -- Ordinary frame
-    |InternalAbort_SIC              -- Internal abort from the session itself
-    |CancelSession_SIC              -- Cancel request from the framer
+    FirstFrame_SIC InputFrame               -- This frame is special
+    |MiddleFrame_SIC InputFrame             -- Ordinary frame
+    |InternalAbort_SIC                      -- Internal abort from the session itself
+    |InternalAbortStream_SIC GlobalStreamId  -- Internal abort, but only for a frame
+    |CancelSession_SIC                      -- Cancel request from the framer
   deriving Show
 
 
@@ -430,6 +436,8 @@ http2Session session_role aware_worker client_state session_id sessions_context 
         ,_streamsCancelled_WTE = cancelled_streams_mvar
         ,_sessionSettings_WTE = session_settings
         ,_nextPushStream_WTE = next_push_stream
+        ,_resetStreamButton_WTE = error "Not initialized"
+        ,_childResetStreamButton_WTE = error "Not initialized"
         }
 
     let session_data  = SessionData {
@@ -599,6 +607,21 @@ sessionInputThread  = do
             -- When this is sent, the connection is closed
             closeConnectionBecauseIsInvalid NH2.InternalError
             return ()
+
+        InternalAbortStream_SIC stream_id -> do
+            -- Message triggered because the worker failed to behave, but
+            -- here we believe that it is not necessary to tear down the
+            -- entire session and therefore it's enough with a stream
+            -- reset
+            sendOutFrame
+                (NH2.EncodeInfo
+                    NH2.defaultFlags
+                    stream_id
+                    Nothing
+                )
+                (NH2.RSTStreamFrame NH2.InternalError
+                )
+            continue
 
         -- The block below will process both HEADERS and CONTINUATION frames.
         -- TODO: As it stands now, the server will happily start a new stream with
@@ -834,7 +857,18 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
         -- Lets get a time
         headers_arrived_time      <- liftIO $ getTime Monotonic
         -- Let's decode the headers
-        let for_worker_thread     = set streamId stream_id for_worker_thread_uns
+        let
+            reset_button  = writeChan session_input (InternalAbortStream_SIC stream_id)
+            child_reset_button = \stream_id -> writeChan session_input  (InternalAbortStream_SIC stream_id)
+            -- Prepare the environment for the new working thread
+            for_worker_thread     =
+                (set streamId stream_id)
+                .
+                (set resetStreamButton_WTE reset_button)
+                .
+                (set childResetStreamButton_WTE child_reset_button)
+                $
+                for_worker_thread_uns
         headers_bytes             <- getHeaderBytes stream_id
         dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
         (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
@@ -892,7 +926,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
         -- I'm clear to start the worker, in its own thread
         --
         -- NOTE: Some late internal errors from the worker thread are
-        --       handled here by clossing the session.
+        --       handled here by closing the session.
         --
         -- TODO: Log exceptions handled here.
         liftIO $ do
@@ -906,6 +940,10 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                 (
                     (   \ _ ->  do
                         -- Actions to take when the thread breaks....
+                         -- We cancel the entire session because there is a more specific
+                        -- handler that doesn't somewhere below. If the exception bubles here,
+                        -- it is because the situation is out of control. We may as well
+                        -- exit the server, but I'm not being so extreme now.
                         writeChan session_input InternalAbort_SIC
                     )
                     :: HTTP500PrecursorException -> IO ()
@@ -992,8 +1030,9 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
 
         good_headers <- case maybe_good_headers_editor of
             Just yes_they_are_good -> return yes_they_are_good
+            -- Function below throws an exception and therefore closes everything
+            -- TODO: Can we device smoother ways of terminating the session?
             Nothing -> closeConnectionBecauseIsInvalid NH2.ProtocolError
-
 
         -- If the headers end the request....
         post_data_source <- if not (frameEndsStream frame)
@@ -1314,11 +1353,11 @@ workerThread req aware_worker =
     session_settings <- view sessionSettings_WTE
     next_push_stream_mvar <-  view nextPushStream_WTE
 
-    -- TODO: Handle exceptions here: what happens if the coherent worker
-    --       throws an exception signaling that the request is ill-formed
-    --       and should be dropped? That could happen in a couple of occassions,
-    --       but really most cases should be handled here in this file...
+    -- If the request get rejected right away, we can just send
+    -- a 500 error in this very stream, without making any fuss.
     -- (headers, _, data_and_conclussion)
+    --
+    -- TODO: Can we add debug information in a header here?
     principal_stream <-
         liftIO $ E.catch
             (
@@ -1335,7 +1374,7 @@ workerThread req aware_worker =
        interrupt_maybe      = effects          ^. interrupt_Ef
 
 
-
+    -- Exceptions can bubble in the points below. If so, send proper resets...
     case interrupt_maybe of
 
         Nothing -> do
@@ -1358,6 +1397,7 @@ normallyHandleStream principal_stream = do
     stream_id      <- view streamId
     session_settings <- view sessionSettings_WTE
     next_push_stream_mvar <-  view nextPushStream_WTE
+    reset_button <- view resetStreamButton_WTE
 
     -- Pieces of the header
     let
@@ -1394,8 +1434,6 @@ normallyHandleStream principal_stream = do
       else
         return []
 
-
-
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO  newEmptyMVar
     liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers_sent, headers, effects)
@@ -1412,14 +1450,25 @@ normallyHandleStream principal_stream = do
         -- This threadlet should block here waiting for the headers to finish going
         -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
         -- are let to bubble and managed in this thread fork point...
-        (_maybe_footers, _) <- runConduit $
+        either_err_or_candies <- CMC.try . runConduit $
              transPipe liftIO data_and_conclusion
             `fuseBothMaybe`
-            sendDataOfStream stream_id headers_sent effects
+             sendDataOfStream stream_id headers_sent effects
+
+        case either_err_or_candies :: Either HTTP500PrecursorException (Maybe Footers, ()) of
+             Left e -> do
+                 -- Exceptions can happen for a number of reason, we just
+                 -- press the reset button for this stream
+                 liftIO reset_button
+
+             Right (_maybe_footers, _) ->
+                 return ()
+
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
         -- will need to be changed.
 
-        -- Now, time to fork threads for the pusher streams ....
+        -- Now, time to fork threads for the pusher streams
+        -- we send those pushers even if the main stream is cancelled...
         forM_ data_promises
             $ \ (child_stream_id, response_headers, pushed_data_and_conclusion, effects) -> do
                   environment <- ask
@@ -1436,13 +1485,14 @@ normallyHandleStream principal_stream = do
 
 
 
--- Invokes the Coherent worker. Data is sent through pipes to
+-- Takes care of pushed data, which  is sent through pipes to
 -- the output thread here in this session.
 pusherThread :: GlobalStreamId -> Headers -> DataAndConclusion -> Effect  -> WorkerMonad ()
 pusherThread child_stream_id response_headers pushed_data_and_conclusion effects =
   do
     headers_output <- view headersOutput
     session_settings <- view sessionSettings_WTE
+    pushed_reset_button <- view childResetStreamButton_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
     --       throws an exception signaling that the request is ill-formed
@@ -1468,12 +1518,19 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
         -- This threadlet should block here waiting for the headers to finish going
         -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
         -- are let to bubble and managed in this thread fork point...
-        (_maybe_footers, _) <- runConduit $
+        either_err_or_candies <- CMC.try . runConduit $
              transPipe liftIO pushed_data_and_conclusion
             `fuseBothMaybe`
-            sendDataOfStream child_stream_id headers_sent effects
-        -- BIG TODO: Send the footers ... likely stream conclusion semantics
-        -- will need to be changed.
+             sendDataOfStream child_stream_id headers_sent effects
+
+        case either_err_or_candies :: Either HTTP500PrecursorException (Maybe Footers, ()) of
+             Left e -> do
+                 -- Exceptions can happen for a number of reasons, we just
+                 -- press the reset button for this stream
+                 liftIO $ pushed_reset_button child_stream_id
+
+             Right (_maybe_footers, _) ->
+                  return ()
 
         return ()
 
@@ -1765,6 +1822,7 @@ dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = fore
              fragments
 
 
+-- This function works for HTTP/2 client sessions only...
 sessionPollThread :: SessionData -> Chan HeaderOutputMessage -> IO ()
 sessionPollThread  session_data headers_output = do
     let
@@ -1788,18 +1846,26 @@ sessionPollThread  session_data headers_output = do
     headers_sent <- liftIO  newEmptyMVar
     liftIO $ writeChan headers_output $ NormalResponse_HM (new_stream_id, headers_sent, headers, effects)
 
-    liftIO . forkIO $ E.catch
-        (runReaderT
+    liftIO . forkIO $ do
+        either_e0 <- E.try $ runReaderT
             (clientWorkerThread new_stream_id effects headers_sent input_data_stream )
             worker_environment
-        )
-        (
-            (   \ _ ->  do
-                -- Actions to take when the thread breaks....
-                writeChan session_input InternalAbort_SIC
-            )
-            :: HTTP500PrecursorException -> IO ()
-        )
+        case either_e0 :: Either HTTP500PrecursorException () of
+            Left _ -> writeChan session_input $ InternalAbortStream_SIC new_stream_id
+            Right _ -> return ()
+
+     -- E.catch
+     --        (runReaderT
+     --            (clientWorkerThread new_stream_id effects headers_sent input_data_stream )
+     --            worker_environment
+     --        )
+     --        (
+     --            (   \ _ ->  do
+     --                -- Actions to take when the thread breaks....
+     --                writeChan session_input InternalAbort_SIC
+     --            )
+     --            :: HTTP500PrecursorException -> IO ()
+     --        )
 
     sessionPollThread session_data headers_output
 

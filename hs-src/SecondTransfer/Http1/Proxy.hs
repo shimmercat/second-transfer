@@ -39,6 +39,8 @@ import           SecondTransfer.IOCallbacks.Coupling                       (send
 import           SecondTransfer.Exception                                  (
                                                                               HTTP11SyntaxException(..)
                                                                             , NoMoreDataException
+                                                                            , IOProblem (..)
+                                                                            , GatewayAbortedException (..)
                                                                             , keyedReportExceptions
                                                                             , ignoreException
                                                                             , ioProblem
@@ -119,7 +121,10 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
        -- (but should be ok for relatively small responses)
         pull :: Int -> Source IO B.ByteString
         pull n = do
-            s <- liftIO $ keyedReportExceptions "pll-" $ (ioc ^. pullAction_IOC ) n
+            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "pll-" $ E.try  $ (ioc ^. pullAction_IOC ) n
+            s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
+                Left exc -> liftIO $ E.throwIO GatewayAbortedException
+                Right datum -> return datum
             -- After getting all that sweet data close the connection
             -- TODO: KEEP alive connections won't appreciate this!!
             liftIO $ ignoreException ioProblem () (ioc ^. closeAction_IOC)
