@@ -27,6 +27,7 @@ testPair = TestCase $ do
   n <- (iob ^. pullAction_IOC) $ B.length "Hello world"
   assertEqual "testTransitsInPair" n "Hello world"
 
+
 testPair2 :: Test
 testPair2 = TestCase $ do
   (ioap, iobp) <- popIOCallbacksIntoExistance
@@ -39,6 +40,7 @@ testPair2 = TestCase $ do
 
   nn <- (iob ^. pullAction_IOC) $ B.length "dxebo"
   assertEqual "testTransitsInPair2" nn "dxebo"
+
 
 testPair3 :: Test
 testPair3 = TestCase $ do

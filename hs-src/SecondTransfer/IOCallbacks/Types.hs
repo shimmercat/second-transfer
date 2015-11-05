@@ -100,7 +100,7 @@ pullFromWrapping' (PullActionWrapping (x, bepa)) n = do
                   more <- bepa True
                   -- Append
                   let
-                      new_len = len + B.length more
+                      new_len = fromIntegral len' + B.length more
                       new_hazth = hathz' `mappend` Bu.byteString more
                   pullData new_hazth new_len
     (to_return, new_hazth, new_len) <- pullData hathz len
@@ -117,6 +117,7 @@ bestEffortPullFromWrapping (PullActionWrapping (x, bepa)) False = do
       else do
         -- At least we ought to try
         bepa False
+
 
 bestEffortPullFromWrapping (PullActionWrapping (x, bepa)) True = do
     (hathz, len) <- atomicModifyIORef' x $ \ (h,l) -> ((mempty,0), (h,l))

@@ -161,7 +161,6 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 }, c)
 
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
-            putStrLn $ "Promised " ++ show n ++ " have " ++ (show . B.length $ leftovers)
             return (HttpResponse {
                 _headers_Rp = headers
               , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
