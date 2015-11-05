@@ -31,6 +31,7 @@ module SecondTransfer.Exception (
       -- * Utility functions
     , ignoreException
     , reportExceptions
+    , keyedReportExceptions
     , forkIOExc
 
       -- * Proxies
@@ -268,6 +269,19 @@ reportExceptions comp =
     case (ei :: Either SomeException a) of
         Left e@(SomeException ee) -> do
             putStrLn $ "Bubbling exc " ++ displayException e ++ " (with type " ++ (show $ typeOf ee) ++ ")"
+            throwIO e
+
+        Right a -> do
+            return a
+
+
+keyedReportExceptions :: forall a . String -> IO a -> IO a
+keyedReportExceptions key comp =
+  do
+    ei <- try comp
+    case (ei :: Either SomeException a) of
+        Left e@(SomeException ee) -> do
+            putStrLn $ "Bubbling exc " ++ displayException e ++ " (with type " ++ (show $ typeOf ee) ++ ") at " ++ key
             throwIO e
 
         Right a -> do
