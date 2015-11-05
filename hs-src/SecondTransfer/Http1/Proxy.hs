@@ -40,6 +40,8 @@ import           SecondTransfer.Exception                                  (
                                                                               HTTP11SyntaxException(..)
                                                                             , NoMoreDataException
                                                                             , reportExceptions
+                                                                            , ignoreException
+                                                                            , ioProblem
                                                                            )
 
 #include "instruments.cpphs"
@@ -129,6 +131,8 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 s <- liftIO $ reportExceptions $ E.try $ (ioc ^. bestEffortPullAction_IOC) True
                 case (s :: Either NoMoreDataException B.ByteString) of
                     Left _ -> do
+                        -- Just ensure a close
+                        liftIO $ ignoreException ioProblem () (ioc ^. closeAction_IOC)
                         return ()
 
                     Right datum -> do

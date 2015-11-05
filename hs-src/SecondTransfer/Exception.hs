@@ -35,6 +35,8 @@ module SecondTransfer.Exception (
 
       -- * Proxies
     , blockedIndefinitelyOnMVar
+    , noMoreDataException
+    , ioProblem
     ) where
 
 import           Control.Exception
@@ -198,16 +200,8 @@ instance  Show IOProblem where
 
 instance Exception IOProblem
 
--- | This is raised by the IOCallbacks when the endpoint
---   is not willing to return or to accept more data
-data NoMoreDataException = NoMoreDataException
-    deriving (Show, Typeable)
-
-instance Exception NoMoreDataException where
-    toException = toException . IOProblem
-    fromException x = do
-        IOProblem  a <- fromException x
-        cast a
+ioProblem :: Proxy IOProblem
+ioProblem = Proxy
 
 -- | A concrete case of the above exception. Throw one of this
 --   if you don't want to implement your own type. Use
@@ -221,6 +215,19 @@ instance Exception GenericIOProblem where
         IOProblem a <- fromException x
         cast a
 
+-- | This is raised by the IOCallbacks when the endpoint
+--   is not willing to return or to accept more data
+data NoMoreDataException = NoMoreDataException
+    deriving (Show, Typeable)
+
+instance Exception NoMoreDataException where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem  a <- fromException x
+        cast a
+
+noMoreDataException :: Proxy NoMoreDataException
+noMoreDataException = Proxy
 
 -- | This exception will be raised inside a `CoherentWorker` when the underlying
 -- stream is cancelled (STREAM_RESET in HTTP\/2). Do any necessary cleanup
