@@ -93,7 +93,11 @@ breakCoupling coupling = do
 
 
 iocallbacksToSink :: IOCallbacks -> Sink LB.ByteString IO ()
-iocallbacksToSink ioc = DCL.mapM_ (ioc ^. pushAction_IOC)
+iocallbacksToSink ioc = DCL.mapM_ (
+    \ s -> do
+         --putStrLn $ "send: " ++ (show s)
+         ioc ^. pushAction_IOC $ s
+    )
 
 
 -- | Sends the data coming from the source to the IOCallbacks.
