@@ -26,6 +26,7 @@ import           Control.Exception                      (throw)
 -- import           Control.Lens
 import qualified Control.Lens                           as L
 import           Control.Applicative
+import           Control.DeepSeq                        (deepseq)
 
 import qualified Data.ByteString                        as B
 import           Data.List                              (foldl')
@@ -52,7 +53,7 @@ import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 import qualified SecondTransfer.ConstantsAndLimits      as Constant
 
-import           Debug.Trace
+-- import           Debug.Trace
 
 
 data IncrementalHttp1Parser = IncrementalHttp1Parser {
@@ -80,16 +81,16 @@ newIncrementalHttp1Parser = IncrementalHttp1Parser {
 data Http1ParserCompletion =
     -- | No, not even headers are done. Use the returned
     --   value to continue
-    MustContinue_H1PC IncrementalHttp1Parser
+    MustContinue_H1PC !IncrementalHttp1Parser
     -- | Headers were completed. For some HTTP methods that's all
     --   there is, and that's what this case represents. The second
     --   argument is a left-overs string, that should be completed
     --   with any other data required
-    |OnlyHeaders_H1PC      Headers B.ByteString
+    |OnlyHeaders_H1PC  !Headers !B.ByteString
     -- | For requests with a body. The second argument is a condition
     --   to stop receiving the body, the third is leftovers from
     --   parsing the headers.
-    |HeadersAndBody_H1PC   Headers BodyStopCondition B.ByteString
+    |HeadersAndBody_H1PC  !Headers !BodyStopCondition !B.ByteString
     -- | Some requests are ill-formed. We can check those cases
     --   here.
     |RequestIsMalformed_H1PC String
@@ -124,21 +125,22 @@ addBytes (IncrementalHttp1Parser full_text header_parse_closure) new_bytes =
     new_full_text = full_text `mappend` (Bu.byteString new_bytes)
     could_finish = twoCRLFsAreConsecutive positions
     total_length_now = B.length new_bytes + length_so_far
+    full_text_lbs = (Bu.toLazyByteString new_full_text)
     -- This will only trigger for ill-formed heads, if the head is parsed successfully, this
     -- flag will be ignored.
     head_is_suspicious =
       if total_length_now > 399 then
          if total_length_now < Constant.maxUrlLength
-            then looksSuspicious (Bu.toLazyByteString new_full_text)
+            then looksSuspicious full_text_lbs
             else True
       else False
   in
     case (could_finish, head_is_suspicious) of
         (Just at_position, _) -> elaborateHeaders new_full_text positions at_position
 
-        (Nothing, True ) -> trace "GRRHERE--" $ RequestIsMalformed_H1PC "Head is suspicious"
+        (Nothing,      True ) -> RequestIsMalformed_H1PC "Head is suspicious"
 
-        (Nothing, False) -> MustContinue_H1PC
+        (Nothing,      False) -> MustContinue_H1PC
                     $ IncrementalHttp1Parser
                         new_full_text
                         (locateCRLFs length_so_far positions last_char)
@@ -171,19 +173,21 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     full_headers_text = Lb.toStrict $ Bu.toLazyByteString full_text
 
     -- Filter out CRLF pairs corresponding to multiline headers.
-    no_cont_positions_reverse = filter
-        (\ pos -> if pos >= last_headers_position then True else
-            not . isWsCh8 $
-                (Ch8.index
-                    full_headers_text
-                    (pos + 2)
-                )
-        )
-        crlf_positions
+    no_cont_positions_reverse =
+        filter
+            (\ pos -> if pos >= last_headers_position then True else
+                not . isWsCh8 $
+                    (Ch8.index
+                        full_headers_text
+                        (pos + 2)
+                    )
+            )
+            crlf_positions
 
     no_cont_positions = reverse . tail $ no_cont_positions_reverse
 
     -- Now get the headers as slices from the original string.
+    headers_pre :: [B.ByteString]
     headers_pre = map
         (\ (start, stop) ->
             subByteString start stop full_headers_text
@@ -199,8 +203,11 @@ elaborateHeaders full_text crlf_positions last_headers_position =
             no_cont_positions
         )
 
+    no_empty_headers ::[B.ByteString]
+    no_empty_headers = filter (\x -> B.length x > 0)  headers_pre
+
     -- TODO: We must reject header names ending in space.
-    headers_0 = map splitByColon $ tail headers_pre
+    headers_0 =  map splitByColon $ tail no_empty_headers
 
     -- The first line is not actually a header, but contains the method, the version
     -- and the URI
@@ -216,6 +223,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
             -- lc_method = bsToLower method
             has_body' = methodHasRequestBody method
           in
+            -- TODO:  We should probably add the "scheme" pseudo header here
             ( (":path", uri):(":method",method):headers_1, has_body' )
 
         Response_RoRL status ->
@@ -245,7 +253,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
 
     leftovers = B.drop (last_headers_position + 4) full_headers_text
   in
-    if has_body
+    headers_3 `deepseq` if has_body
       then
         HeadersAndBody_H1PC headers_3 content_stop leftovers
       else
@@ -307,9 +315,17 @@ locateCRLFs initial_offset other_positions prev_last_char next_chunk =
   in (positions_list, strlen, last_char)
 
 
+-- Parses the given list of positions, which is a reversed list. If
+-- we find that the two latest positions of CRLF are consecutive,
+-- then we are ok. and return it
 twoCRLFsAreConsecutive :: [Int] -> Maybe Int
-twoCRLFsAreConsecutive (p2:p1:_) | p2 - p1 == 2 = Just p1
-twoCRLFsAreConsecutive _                        = Nothing
+twoCRLFsAreConsecutive  positions =
+  let
+    -- This function is moving from tail to head
+    go  seen (p2:p1:r) | p2 - p1 == 2         = go (Just p1)  (p1:r)
+                       | otherwise            = go seen       (p1:r)
+    go  seen _                                = seen
+  in go Nothing positions
 
 
 isWsCh8 :: Char -> Bool
