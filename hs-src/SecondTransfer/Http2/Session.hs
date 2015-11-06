@@ -892,8 +892,9 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
             Nothing -> {-# SCC ccB3 #-} closeConnectionBecauseIsInvalid NH2.ProtocolError
 
         -- Add any extra headers, on demand
-        headers_extra_good      <- addExtraHeaders good_headers
+        --headers_extra_good      <- addExtraHeaders good_headers
         let
+            headers_extra_good = good_headers
             header_list_after = He.toList headers_extra_good
         -- liftIO $ putStrLn $ "header list after " ++ (show header_list_after)
 
