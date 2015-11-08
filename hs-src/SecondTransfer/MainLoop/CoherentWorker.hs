@@ -207,7 +207,6 @@ data PrincipalStream = PrincipalStream {
 
 makeLenses ''PrincipalStream
 
-
 -- | Main type of this library. You implement one of these for your server.
 --   This is a callback that the library calls as soon as it has
 --   all the headers of a request. For GET requests that's the entire request
