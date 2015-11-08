@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings  #-}
 module SecondTransfer.Utils.DevNull(
-    dropIncomingData
-    ) where
+       dropIncomingData
+    ,  dropWouldGoData
+     ) where
 
 
 import Control.Concurrent (forkIO)
@@ -24,4 +25,18 @@ dropIncomingData (Just data_source) = do
     _ <- forkIO $
         data_source $$ awaitForever (\ _ -> do
                                          return () )
+    return ()
+
+
+dropWouldGoData :: DataAndConclusion -> IO ()
+dropWouldGoData data_source = do
+    let
+        do_empty = do
+            x <- await
+            case x of
+                Nothing -> return ()
+                Just _ -> do_empty
+    _ <- forkIO $ do
+        _ <- runConduit $ fuseBoth data_source  do_empty
+        return ()
     return ()
