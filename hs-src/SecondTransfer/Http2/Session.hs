@@ -32,7 +32,7 @@ module SecondTransfer.Http2.Session(
     ) where
 
 
--- System grade utilities
+-- System grade utilities imports
 import           Control.Concurrent                     (ThreadId, forkIO)
 import           Control.Concurrent.Chan
 import           Control.Exception                      (throwTo)
@@ -41,7 +41,7 @@ import           Control.Monad                          (
                                                          forever,
                                                          unless,
                                                          when,
-                                                         mapM_,
+--                                                         mapM_,
                                                          forM,
                                                          forM_)
 import           Control.Monad.IO.Class                 (liftIO)
@@ -1351,8 +1351,8 @@ workerThread req aware_worker =
   do
     headers_output <- view headersOutput
     stream_id      <- view streamId
-    session_settings <- view sessionSettings_WTE
-    next_push_stream_mvar <-  view nextPushStream_WTE
+    --session_settings <- view sessionSettings_WTE
+    --next_push_stream_mvar <-  view nextPushStream_WTE
 
     -- If the request get rejected right away, we can just send
     -- a 500 error in this very stream, without making any fuss.
