@@ -11,13 +11,13 @@ import           Control.Monad                                             (when
 import           Control.Monad.IO.Class                                    (liftIO)
 
 import qualified Data.ByteString                                           as B
-import           Data.List                                                 (foldl')
+--import           Data.List                                                 (foldl')
 import qualified Data.ByteString.Builder                                   as Bu
-import           Data.ByteString.Char8                                     (pack, unpack)
-import qualified Data.ByteString.Char8                                     as Ch8
+--import           Data.ByteString.Char8                                     (pack, unpack)
+--import qualified Data.ByteString.Char8                                     as Ch8
 import qualified Data.ByteString.Lazy                                      as LB
-import           Data.Char                                                 (toLower)
-import           Data.Maybe                                                (isJust, fromMaybe)
+--import           Data.Char                                                 (toLower)
+import           Data.Maybe                                                (fromMaybe)
 
 import           Data.Conduit
 
@@ -28,6 +28,7 @@ import           SecondTransfer.Http1.Types
 import           SecondTransfer.Http1.Parse                                (
                                                                               headerListToHTTP1RequestText
                                                                             , methodHasRequestBody
+                                                                            , methodHasResponseBody
                                                                             , newIncrementalHttp1Parser
                                                                             , IncrementalHttp1Parser
                                                                             , Http1ParserCompletion(..)
@@ -123,7 +124,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
         pull n = do
             either_ioproblem_or_s <- liftIO $ keyedReportExceptions "pll-" $ E.try  $ (ioc ^. pullAction_IOC ) n
             s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
-                Left exc -> liftIO $ E.throwIO GatewayAbortedException
+                Left _exc -> liftIO $ E.throwIO GatewayAbortedException
                 Right datum -> return datum
             -- After getting all that sweet data close the connection
             -- TODO: KEEP alive connections won't appreciate this!!
@@ -153,7 +154,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
 
         OnlyHeaders_H1PC headers leftovers -> do
             when (B.length leftovers > 0) $ do
-                REPORT_EVENT("suspicious-leftovers")
+                --REPORT_EVENT("suspicious-leftovers")
                 return ()
             return (HttpResponse {
                 _headers_Rp = headers
@@ -161,16 +162,37 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 }, c)
 
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
-            return (HttpResponse {
-                _headers_Rp = headers
-              , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
-                }, c)
+            --  HEADs must be handled differently!
+            if methodHasResponseBody method
+              then
+                return (HttpResponse {
+                    _headers_Rp = headers
+                  , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
+                    }, c)
+              else
+                return (HttpResponse {
+                    _headers_Rp = headers
+                  , _body_Rp = return ()
+                    }, c)
 
         HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC leftovers -> do
-            return (HttpResponse {
-                _headers_Rp = headers
-              , _body_Rp = pump_until_exception leftovers
-                }, c)
+            -- The parser will assume that most responses have a body in the absence of
+            -- content-length, and that's probably as well. We work around that for
+            -- "HEAD" kind responses
+            if methodHasResponseBody method
+              then
+                return (HttpResponse {
+                    _headers_Rp = headers
+                  , _body_Rp = pump_until_exception leftovers
+                    }, c)
+              else
+                return (HttpResponse {
+                    _headers_Rp = headers
+                  , _body_Rp = return ()
+                    }, c)
+
+        MustContinue_H1PC _ ->
+            error "UnexpectedIncompleteParse"
 
         -- TODO: See what happens when this exception passes from place to place.
         RequestIsMalformed_H1PC msg -> do
