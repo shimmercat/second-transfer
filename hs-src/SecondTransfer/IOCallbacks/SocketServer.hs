@@ -1,8 +1,9 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
 module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
-              , TLSServerSocketIOCallbacks         (..)
+              , TLSServerSocketIOCallbacks                          (..)
               , createAndBindListeningSocket
+              , createAndBindListeningSocketNSSockAddr
               , socketIOCallbacks
 
               -- ** Socket server with callbacks
@@ -76,6 +77,27 @@ createAndBindListeningSocket hostname portnumber = do
     --
     NS.setSocketOption the_socket NS.NoDelay 1
     NS.bind the_socket host_address
+    -- bound <- NS.isBound the_socket
+    return the_socket
+
+-- | Same as above, but it takes a pre-built address
+createAndBindListeningSocketNSSockAddr :: NS.SockAddr ->  IO NS.Socket
+createAndBindListeningSocketNSSockAddr host_addr = do
+    the_socket <- case host_addr of
+        NS.SockAddrInet _ _ -> NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
+        NS.SockAddrUnix _ -> NS.socket NS.AF_UNIX NS.Stream NS.defaultProtocol
+        _ -> error "NetworkAddressTypeNotHandled"
+    NS.setSocketOption the_socket NS.ReusePort 1
+    NS.setSocketOption the_socket NS.RecvBuffer 32000
+    NS.setSocketOption the_socket NS.SendBuffer 32000
+    -- Linux honors the Low Water thingy below, and this setting is OK for HTTP/2 connections, but
+    -- not very needed since the TLS wrapping will inflate the packet well beyond that size.
+    -- See about this option here: http://stackoverflow.com/questions/8245937/whats-the-purpose-of-the-socket-option-so-sndlowat
+    --
+    -- NS.setSocketOption the_socket NS.RecvLowWater 8
+    --
+    NS.setSocketOption the_socket NS.NoDelay 1
+    NS.bind the_socket host_addr
     -- bound <- NS.isBound the_socket
     return the_socket
 

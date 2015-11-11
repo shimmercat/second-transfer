@@ -4,6 +4,7 @@ module SecondTransfer.TLS.CoreServer (
                -- These functions are simple enough but don't work with controllable
                -- processes.
                  tlsServeWithALPN
+               , tlsServeWithALPNNSSockAddr
                , tlsSessionHandler
                , tlsServeWithALPNUnderSOCKS5
                , coreListen
@@ -28,8 +29,12 @@ import           Data.List                                                 (elem
 import           Data.Maybe                                                (fromMaybe, isJust)
 import qualified Data.ByteString                                           as B
 import           Data.ByteString.Char8                                     (pack, unpack)
+
 --import qualified Data.ByteString.Lazy                                      as LB
 --import qualified Data.ByteString.Builder                                   as Bu
+
+import qualified Network.Socket                                            as NS
+
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.TLS.Types
 import           SecondTransfer.IOCallbacks.SocketServer
@@ -54,6 +59,20 @@ tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
                  -> IO ()
 tlsServeWithALPN proxy  cert_filename key_filename interface_name attendants interface_port = do
     listen_socket <- createAndBindListeningSocket interface_name interface_port
+    coreListen proxy cert_filename key_filename listen_socket tlsServe attendants
+
+-- | Use a previously given network address
+tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
+                 => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
+                                          --   of TLS backend to use during the invocation
+                 -> FilePath              -- ^ Path to certificate chain
+                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> NS.SockAddr           -- ^ Address to bind to
+                  -> [(String, Attendant)] -- ^ List of attendants and their handlers
+ --                 -> MVar FinishRequest    -- ^ Finish request event, write a value here to finish serving
+                 -> IO ()
+tlsServeWithALPNNSSockAddr proxy  cert_filename key_filename sock_addr attendants = do
+    listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
     coreListen proxy cert_filename key_filename listen_socket tlsServe attendants
 
 
