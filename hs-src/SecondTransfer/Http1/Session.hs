@@ -76,14 +76,15 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
             -- completion = addBytes parser $ traceShow ("At session " ++ (show session_tag) ++ " Received: " ++ (unpack bytes) ) bytes
         case completion of
 
-            RequestIsMalformed_H1PC _ -> do
+            RequestIsMalformed_H1PC _msg -> do
+                --putStrLn $ "Syntax Error: " ++ msg
                 -- This is a syntactic error..., so just close the connectin
                 close_action
                 -- We exit by returning nothing
                 return Nothing
 
-            MustContinue_H1PC new_parser ->
-                -- print "MustContinue_H1PC"
+            MustContinue_H1PC new_parser -> do
+                --putStrLn "MustContinue_H1PC"
                 catch
                     (do
                         -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
@@ -101,7 +102,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
 
 
             OnlyHeaders_H1PC headers leftovers -> do
-                -- print "OnlyHeaders_H1PC"
+                -- putStrLn $ "OnlyHeaders_H1PC " ++ (show leftovers)
                 -- Ready for action...
                 -- ATTENTION: Not use for pushed streams here....
                 -- We must decide what to do if the user return those
@@ -141,6 +142,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                     ) :: IOProblem -> IO (Maybe B.ByteString) )
 
             HeadersAndBody_H1PC headers stopcondition recv_leftovers -> do
+                -- putStrLn $ "HeadersAndBody_H1PC " ++ (show recv_leftovers)
                 let
                     modified_headers = addExtraHeaders sessions_context headers
                 started_time <- getTime Monotonic

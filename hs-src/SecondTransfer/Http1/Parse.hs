@@ -176,12 +176,13 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     -- Filter out CRLF pairs corresponding to multiline headers.
     no_cont_positions_reverse =
         filter
-            (\ pos -> if pos >= last_headers_position then True else
-                not . isWsCh8 $
-                    (Ch8.index
-                        full_headers_text
-                        (pos + 2)
-                    )
+            (\ pos -> if pos == last_headers_position then True else
+                if pos > last_headers_position then False else
+                    not . isWsCh8 $
+                        (Ch8.index
+                            full_headers_text
+                            (pos + 2)
+                        )
             )
             crlf_positions
 
@@ -207,7 +208,6 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     no_empty_headers ::[B.ByteString]
     no_empty_headers = filter (\x -> B.length x > 0)  headers_pre
 
-    -- TODO: We must reject header names ending in space.
     headers_0 =  map splitByColon $ tail no_empty_headers
 
     -- The first line is not actually a header, but contains the method, the version
