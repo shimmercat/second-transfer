@@ -9,6 +9,7 @@ import           Control.Lens
 import           Control.Exception                       (catch, try)
 --import           Control.Concurrent                      (forkIO)
 import           Control.Monad.IO.Class                  (liftIO)
+import           Control.Monad                           (when)
 
 import qualified Data.ByteString                         as B
 -- import qualified Data.ByteString.Lazy                   as LB
@@ -219,7 +220,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
             case more_text_or_error :: Either NoMoreDataException B.ByteString of
                 Left _ -> return ()
                 Right bs -> do
-                    yield bs
+                    when (B.length bs > 0) $ yield bs
                     readforever mempty
 
 

@@ -201,6 +201,17 @@ extern "C" void iocba_cleartext_push(
 }
 
 
+extern "C" void iocba_close(
+    void* tls_channel
+    )
+{
+    // TODO: Check for "can send"!!!!!
+    // OTHERWISE THIS WON'T WORK
+    Botan::TLS::Channel* channel = (Botan::TLS::Channel*) tls_channel;
+    channel->close();
+}
+
+
 struct botan_tls_context_t {
     second_transfer::HereCredentialsManager credentials_manager;
     Botan::TLS::Session_Manager_In_Memory* session_manager;

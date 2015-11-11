@@ -119,22 +119,18 @@ tlsSessionHandler attendants ctx encrypted_io = do
       session <- unencryptTLSServerIO ctx encrypted_io
       plaintext_io_callbacks <- handshake session :: IO IOCallbacks
       maybe_sel_prot <- getSelectedProtocol session
-      case maybe_sel_prot of
-          Just (_, prot_name) -> do
-              let
-                  Just  use_attendant = lookup (unpack prot_name) attendants
+      let maybe_attendant =
+            case maybe_sel_prot of
+                Just (_, prot_name) ->
+                    lookup (unpack prot_name) attendants
+                Nothing ->
+                    lookup "" attendants
+      case maybe_attendant of
+          Just use_attendant ->
               use_attendant plaintext_io_callbacks
-              return ()
           Nothing -> do
-              let
-                  maybe_attendant = lookup "" attendants
-              case maybe_attendant of
-                  Just use_attendant ->
-                      use_attendant plaintext_io_callbacks
-                  Nothing ->
-                      -- Silently do nothing, and close the connection
-                      plaintext_io_callbacks ^. closeAction_IOC
-              return ()
+              -- Silently do nothing, and close the connection
+              plaintext_io_callbacks ^. closeAction_IOC
     return ()
 
 

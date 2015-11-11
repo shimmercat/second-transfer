@@ -26,7 +26,7 @@ import           Control.Exception                      (throw)
 -- import           Control.Lens
 import qualified Control.Lens                           as L
 import           Control.Applicative
-import           Control.DeepSeq                        (deepseq)
+--import           Control.DeepSeq                        (deepseq)
 
 import qualified Data.ByteString                        as B
 import           Data.List                              (foldl')
@@ -53,7 +53,7 @@ import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 import qualified SecondTransfer.ConstantsAndLimits      as Constant
 
--- import           Debug.Trace
+import           Debug.Trace
 
 
 data IncrementalHttp1Parser = IncrementalHttp1Parser {
@@ -160,8 +160,9 @@ looksSuspicious bs  =
                         | i == Lb.length bs - 1 = False
                         | otherwise            = True
         f []                                   = False
-        in f zp
-    in have_lone_n || have_weird_characters
+        in  f zp || abs ( length ei - length eii) > 1
+    result = have_lone_n || have_weird_characters
+  in  result
 
 
 -- This function takes care of retrieving headers....
@@ -211,9 +212,13 @@ elaborateHeaders full_text crlf_positions last_headers_position =
 
     -- The first line is not actually a header, but contains the method, the version
     -- and the URI
-    request_or_response = parseFirstLine (head headers_pre)
+    maybe_request_or_response = parseFirstLine (head headers_pre)
 
-    headers_1 = headers_0
+    headers_1 =  [
+        ( (stripBsHName . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_0
+        ]
+
+    Just request_or_response = maybe_request_or_response
 
     (headers_2, has_body) = case request_or_response of
 
@@ -238,7 +243,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
 
     -- Still we need to lower-case header names, and trim them
     headers_3 = [
-        ( (stripBs . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
+        ( (stripBsHName . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
         ]
 
     content_stop :: BodyStopCondition
@@ -252,27 +257,51 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         Nothing -> ConnectionClosedByPeer_BSC
 
     leftovers = B.drop (last_headers_position + 4) full_headers_text
+    all_headers_ok = all verifyHeaderSyntax headers_1
   in
-    headers_3 `deepseq` if has_body
-      then
-        HeadersAndBody_H1PC headers_3 content_stop leftovers
-      else
-        OnlyHeaders_H1PC headers_3 leftovers
+    if isJust maybe_request_or_response then
+        (if all_headers_ok then
+            if has_body
+              then
+                HeadersAndBody_H1PC headers_3 content_stop leftovers
+              else
+                OnlyHeaders_H1PC headers_3 leftovers
+        else
+            RequestIsMalformed_H1PC "InvalidSyntaxOnHeaders")
+    else
+        RequestIsMalformed_H1PC "InvalidFirstLineOnRequest"
 
 
 splitByColon :: B.ByteString -> (B.ByteString, B.ByteString)
 splitByColon  = L.over L._2 (B.tail) . Ch8.break (== ':')
 
 
-parseFirstLine :: B.ByteString -> RequestOrResponseLine
+verifyHeaderName :: B.ByteString -> Bool
+verifyHeaderName =
+  B.all ( \ w8 ->
+     (    ( w8 >= 48 && w8 <=57 ) || ( w8 >= 65 && w8 <= 90)
+       || ( w8 >= 97 && w8 <= 122) )
+       || ( w8 == 43 ) || ( w8 == 95)   -- "extensions" for our local tooling
+       || ( w8 == 45)  -- Standard dash
+  )
+
+verifyHeaderValue :: B.ByteString -> Bool
+verifyHeaderValue =   B.all ( \ w8 ->
+   w8 >= 32 && w8 < 127
+  )
+
+verifyHeaderSyntax :: (B.ByteString, B.ByteString) -> Bool
+verifyHeaderSyntax (a,b) = verifyHeaderName a && verifyHeaderValue b
+
+
+parseFirstLine :: B.ByteString -> Maybe RequestOrResponseLine
 parseFirstLine s =
   let
-    either_error_or_rrl = Ap.parseOnly httpFirstLine s
-    exc = HTTP11SyntaxException "BadMessageFirstLine"
+    either_error_or_rrl = Ap.parseOnly (httpFirstLine <* Ap.endOfInput ) s
   in
     case either_error_or_rrl of
-        Left _ -> throw exc
-        Right rrl -> rrl
+        Left _ -> Nothing
+        Right rrl -> Just rrl
 
 
 bsToLower :: B.ByteString -> B.ByteString
@@ -297,6 +326,10 @@ stripBs s =
         )
         (Ch8.dropWhile isWsCh8 s, ' ')
 
+
+stripBsHName :: B.ByteString -> B.ByteString
+stripBsHName s =
+   Ch8.dropWhile isWsCh8 s
 
 locateCRLFs :: Int -> [Int] -> Word8 ->  B.ByteString ->  ([Int], Int, Word8)
 locateCRLFs initial_offset other_positions prev_last_char next_chunk =
@@ -329,17 +362,14 @@ twoCRLFsAreConsecutive  positions =
 
 
 isWsCh8 :: Char -> Bool
-isWsCh8 s = isJust (Ch8.elemIndex
-        s
+isWsCh8 ch = isJust (Ch8.elemIndex
+        ch
         " \t"
     )
 
 
 isWs :: Word8 -> Bool
-isWs s = isJust (B.elemIndex
-        s
-        " \t"
-    )
+isWs ch =  (ch == 32) || (ch == 9)
 
 
 http1Token :: Ap.Parser B.ByteString

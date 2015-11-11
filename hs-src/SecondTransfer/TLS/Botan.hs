@@ -50,6 +50,7 @@ data BotanPad = BotanPad {
   , _handshakeCompleted_BP :: MVar ()
   , _readLock_BP           :: MVar ()
   , _writeLock_BP          :: MVar ()
+  , _active_BP             :: MVar ()
   , _protocolSelector_BP   :: B.ByteString -> IO (Int, B.ByteString)
   , _selectedProtocol_BP   :: MVar (Maybe (Int, B.ByteString))
   , _problem_BP            :: MVar ()
@@ -180,6 +181,8 @@ iocba_select_protocol_cb siocb p len =
 
 foreign import ccall iocba_cleartext_push :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
 
+foreign import ccall iocba_close :: BotanTLSChannelPtr -> IO ()
+
 foreign import ccall "&iocba_delete_tls_context" iocba_delete_tls_context :: FunPtr( BotanTLSContextCSidePtr -> IO () )
 
 foreign import ccall iocba_make_tls_context :: CString -> CString -> IO BotanTLSContextCSidePtr
@@ -280,6 +283,7 @@ unencryptChannelData botan_ctx tls_data  = do
     handshake_completed_mvar <- newEmptyMVar
     problem_mvar <- newEmptyMVar
     selected_protocol_mvar <- newEmptyMVar
+    active_mvar <- newMVar ()
     tls_channel_ioref <- newIORef (error "")
     avail_data_ioref <- newIORef mempty
 
@@ -298,6 +302,7 @@ unencryptChannelData botan_ctx tls_data  = do
           , _protocolSelector_BP   = protocolSelectorToC protocol_selector
           , _selectedProtocol_BP   = selected_protocol_mvar
           , _problem_BP            = problem_mvar
+          , _active_BP             = active_mvar
           }
 
         tls_pull_data_action = tls_io_callbacks ^. bestEffortPullAction_IOC
@@ -311,9 +316,9 @@ unencryptChannelData botan_ctx tls_data  = do
 
         pump_exc_handler :: IOProblem -> IO (Maybe B.ByteString)
         pump_exc_handler _ = do
-            tryPutMVar problem_mvar ()
+            _ <- tryPutMVar problem_mvar ()
             -- Wake-up any readers...
-            tryPutMVar data_came_mvar ()
+            _ <- tryPutMVar data_came_mvar ()
             return Nothing
 
         pump :: IO ()
@@ -333,8 +338,8 @@ unencryptChannelData botan_ctx tls_data  = do
                                 return (-1)
                     if engine_result < 0
                       then do
-                        tryPutMVar problem_mvar ()
-                        tryPutMVar data_came_mvar ()
+                        _ <- tryPutMVar problem_mvar ()
+                        _ <- tryPutMVar data_came_mvar ()
                         return ()
                       else
                         pump
@@ -346,18 +351,38 @@ unencryptChannelData botan_ctx tls_data  = do
 
     result <- newIORef new_botan_pad
 
-    mkWeakIORef result $ do
+    _ <- mkWeakIORef result $ do
         REPORT_EVENT("stable-pointer-freed")
-        -- Ensure that no calls are made to any of the IO callbacks after the
-        -- stable pointer is fred
-        tryPutMVar problem_mvar ()
-        (tls_io_callbacks ^. closeAction_IOC)
+        closeBotan new_botan_pad
         freeStablePtr botan_pad_stable_ref
 
     -- Create the pump thread
-    forkIO pump
+    _ <- forkIO pump
 
     return $ BotanSession result
+
+
+closeBotan :: BotanPad -> IO ()
+closeBotan botan_pad =
+  do
+    tls_channel_fptr <- readIORef (botan_pad ^. tlsChannel_BP)
+    withForeignPtr tls_channel_fptr $ \ tls_channel_ptr -> do
+        maybe_gotit <- tryTakeMVar (botan_pad ^. active_BP)
+        case maybe_gotit of
+            Just _ -> do
+                -- Cleanly close tls, if nobody else is writing there
+                withMVar (botan_pad ^. writeLock_BP) $ \ _ ->
+                    iocba_close tls_channel_ptr
+                -- Close the cypher-text transport
+                (botan_pad ^. encryptedSide_BP . closeAction_IOC)
+                -- Ensure that no calls are made to any of the IO callbacks after the
+                -- stable pointer is fred
+                _ <- tryPutMVar (botan_pad ^. problem_BP) ()
+                return ()
+
+            Nothing ->
+                return ()
+
 
 
 instance IOChannels BotanSession where
@@ -385,9 +410,8 @@ instance IOChannels BotanSession where
 
             best_effort_pull_action' = bestEffortPullFromWrapping pull_action_wrapping
 
-            -- TODO: Implement me!!!!!!!
             close_action :: CloseAction
-            close_action = return ()
+            close_action = closeBotan botan_pad'
 
             handshake_completed_mvar = botan_pad' ^. handshakeCompleted_BP
 
