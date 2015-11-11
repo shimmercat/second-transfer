@@ -7,6 +7,7 @@ module SecondTransfer.TLS.CoreServer (
                , tlsServeWithALPNNSSockAddr
                , tlsSessionHandler
                , tlsServeWithALPNUnderSOCKS5
+               , tlsServeWithALPNUnderSOCKS5SockAddr
                , coreListen
 
                -- * Utility
@@ -93,6 +94,22 @@ tlsServeWithALPNUnderSOCKS5 proxy  cert_filename key_filename interface_name att
     listen_socket <- createAndBindListeningSocket interface_name interface_port
     coreListen proxy cert_filename key_filename listen_socket (tlsSOCKS5Serve approver) attendants
 
+
+tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx session)
+                 => Proxy ctx             -- ^ This is a simple proxy type from Typeable that is used to select the type
+                                          --   of TLS backend to use during the invocation
+                 -> FilePath              -- ^ Path to certificate chain
+                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> NS.SockAddr           -- ^ Address to bind to
+                 -> [(String, Attendant)] -- ^ List of attendants and their handlers
+                 -> [B.ByteString]        -- ^ Names of "internal" hosts.
+                 -> IO ()
+tlsServeWithALPNUnderSOCKS5SockAddr proxy  cert_filename key_filename host_addr attendants  internal_hosts = do
+    let
+        approver :: B.ByteString -> Bool
+        approver name = isJust $ elemIndex name internal_hosts
+    listen_socket <- createAndBindListeningSocketNSSockAddr host_addr
+    coreListen proxy cert_filename key_filename listen_socket (tlsSOCKS5Serve approver) attendants
 
 tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, Attendant)]  ->  ctx ->  encrypted_io -> IO ()
 tlsSessionHandler attendants ctx encrypted_io = do
