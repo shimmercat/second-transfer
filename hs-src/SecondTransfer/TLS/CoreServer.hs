@@ -160,16 +160,16 @@ tlsSessionHandlerControllable attendants ctx encrypted_io = do
 
 
 
-chooseProtocol :: [(String, a)] ->  [B.ByteString] -> IO B.ByteString
+chooseProtocol :: [(String, a)] ->  [B.ByteString] -> IO (Maybe Int)
 chooseProtocol attendants proposed_protocols =
     let
         i_want_protocols = map (pack . fst) attendants
-        chosen = fromMaybe "http/1.1" $
+        chosen =
             foldl
                   ( \ selected want_protocol ->
                          case (selected, elemIndex want_protocol proposed_protocols) of
                              ( Just a, _) -> Just a
-                             (_,   Just _) -> Just want_protocol
+                             (_,   Just idx) -> Just idx
                              (_,   _ ) -> Nothing
                   )
                   Nothing

@@ -16,7 +16,7 @@ import           SecondTransfer.IOCallbacks.Types                          (TLSS
 --   at its earliest convenience and call the `CloseAction` for any open sessions.
 data FinishRequest = FinishRequest
 
-type ProtocolSelector = [B.ByteString] -> IO B.ByteString
+type ProtocolSelector = [B.ByteString] -> IO (Maybe Int)
 
 type RawFilePath = B.ByteString
 

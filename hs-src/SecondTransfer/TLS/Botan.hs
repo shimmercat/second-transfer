@@ -15,6 +15,7 @@ import           Foreign.C.Types                                           (CCha
 import           Foreign.C.String                                          (CString)
 
 import           Data.List                                                 (elemIndex)
+import           Data.Tuple                                                (swap)
 import           Data.Typeable                                             (Proxy(..))
 import           Data.Maybe                                                (fromMaybe)
 import           Data.IORef
@@ -52,7 +53,7 @@ data BotanPad = BotanPad {
   , _writeLock_BP          :: MVar ()
   , _active_BP             :: MVar ()
   , _protocolSelector_BP   :: B.ByteString -> IO (Int, B.ByteString)
-  , _selectedProtocol_BP   :: MVar (Maybe (Int, B.ByteString))
+  , _selectedProtocol_BP   :: MVar (Maybe (B.ByteString, Int))
   , _problem_BP            :: MVar ()
     }
 
@@ -161,6 +162,7 @@ iocba_handshake_cb siocb = do
             Nothing -> do
                 putMVar (botan_pad ^. selectedProtocol_BP ) Nothing
             Just _something -> do
+                -- It's already in the var
                 return ()
         return ()
 
@@ -172,10 +174,10 @@ iocba_select_protocol_cb siocb p len =
             cstr = (p, fromIntegral len)
             selector = botan_pad ^. protocolSelector_BP
         b <- B.packCStringLen cstr
-        cp@(chosen_protocol_int, _chosen_protocol_str) <- selector b
+        (chosen_protocol_int, ss) <- selector b
         let
             selected_protocol_mvar = botan_pad ^. selectedProtocol_BP
-        putMVar selected_protocol_mvar (Just cp)
+        putMVar selected_protocol_mvar (Just (ss, chosen_protocol_int ))
         return chosen_protocol_int
 
 
@@ -255,10 +257,11 @@ protocolSelectorToC :: ProtocolSelector -> B.ByteString -> IO (Int, B.ByteString
 protocolSelectorToC prot_sel flat_protocols = do
     let
         protocol_list =  B.split 0 flat_protocols
-    selected <- prot_sel protocol_list
+    maybe_idx <- prot_sel protocol_list
     let
-        maybe_idx = elemIndex selected protocol_list
-    return (fromMaybe 0 maybe_idx, selected)
+        report_idx = fromMaybe (-1) maybe_idx
+        report_bs = if report_idx >= 0 then protocol_list !! report_idx else "<no-protocol>"
+    return (report_idx, report_bs)
 
 
 newBotanTLSContext :: RawFilePath -> RawFilePath -> ProtocolSelector ->  IO BotanTLSContext
@@ -352,7 +355,7 @@ unencryptChannelData botan_ctx tls_data  = do
     result <- newIORef new_botan_pad
 
     _ <- mkWeakIORef result $ do
-        REPORT_EVENT("stable-pointer-freed")
+        -- REPORT_EVENT("stable-pointer-freed")
         closeBotan new_botan_pad
         freeStablePtr botan_pad_stable_ref
 
@@ -431,7 +434,8 @@ instance TLSContext BotanTLSContext BotanSession where
     unencryptTLSServerIO = unencryptChannelData
     getSelectedProtocol (BotanSession pad_ioref) = do
         botan_pad <- readIORef pad_ioref
-        readMVar (botan_pad ^. selectedProtocol_BP)
+        a <- readMVar (botan_pad ^. selectedProtocol_BP)
+        return ( swap <$> a)
 
 
 botanTLS :: Proxy BotanTLSContext

@@ -8,6 +8,7 @@
 #include <botan/tls_session.h>
 #include <botan/tls_alert.h>
 #include <botan/tls_policy.h>
+#include <botan/tls_exceptn.h>
 #include <botan/credentials_manager.h>
 #include <botan/tls_channel.h>
 #include <botan/pkcs8.h>
@@ -166,8 +167,10 @@ std::string defaultProtocolSelector(void* botan_pad_ref, std::vector<std::string
         pass_to_haskell += prots[i];
     }
     int idx = iocba_select_protocol_cb( botan_pad_ref, (void*)pass_to_haskell.c_str(), pass_to_haskell.size());
-    //printf("Chosen protocol %d -> %s \n", idx, prots[idx].c_str());
-    return prots[idx];
+    if ( idx >= 0 )
+        return prots[idx];
+    else
+        throw Botan::TLS::TLS_Exception( Botan::TLS::Alert::NO_APPLICATION_PROTOCOL, "ShimmerCat:NoApplicationProtocol" );
 }
 
 } // namespace
@@ -183,7 +186,7 @@ extern "C" int iocba_receive_data(
     } catch (...)
     {
         // TODO: control messages
-        printf("BotanTLS engine instance crashed\n");
+        printf("BotanTLS engine instance crashed (normal if ALPN didn't go well)\n");
         return -1;
     }
     return 0;
