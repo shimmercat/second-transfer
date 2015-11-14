@@ -105,6 +105,7 @@ negotiateSocksAndForward approver socks_here =
 
             -- Other commands not handled for now
             _             -> do
+                putStrLn "SOCKS5 HAS NEGLECTED TO REJECT A CONNECTION"
                 return Nothing
 
     case ei of

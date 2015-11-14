@@ -24,11 +24,17 @@ import qualified Data.ByteString.Builder                                   as Bu
 import qualified Data.ByteString.Lazy                                      as LB
 import qualified Data.ByteString.Unsafe                                    as Un
 
-import           Control.Lens                                              ( (^.), makeLenses, set, Lens' )
+import           Control.Lens                                              ( (^.), makeLenses,
+                                                                             --set, Lens'
+                                                                           )
 
 -- Import all of it!
 import           SecondTransfer.IOCallbacks.Types
-import           SecondTransfer.Exception                                  ( IOProblem, NoMoreDataException(..) )
+import           SecondTransfer.Exception                                  (
+                                                                             IOProblem
+                                                                           , NoMoreDataException(..)
+                                                                           , keyedReportExceptions
+                                                                           )
 import           SecondTransfer.TLS.Types                                  ( FinishRequest
                                                                            , ProtocolSelector
                                                                            , TLSContext (..) )
@@ -49,7 +55,6 @@ data BotanPad = BotanPad {
   , _tlsChannel_BP         :: IORef BotanTLSChannelFPtr
   , _dataCame_BP           :: MVar ()
   , _handshakeCompleted_BP :: MVar ()
-  , _readLock_BP           :: MVar ()
   , _writeLock_BP          :: MVar ()
   , _active_BP             :: MVar ()
   , _protocolSelector_BP   :: B.ByteString -> IO (Int, B.ByteString)
@@ -96,7 +101,10 @@ withBotanPad siocb cb = do
 -- withBotanPadWriteLock = withBotanPadLock writeLock_BP
 
 
+-- Botan calls this function whenever it wishes to send any data
+-- to the remote peer. In some cases we can not honor Botan's wishes
 foreign export ccall iocba_push :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
+iocba_push :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
 iocba_push siocb p len =
     withBotanPad siocb $ \ botan_pad ->  do
         let
@@ -105,20 +113,20 @@ iocba_push siocb p len =
             problem_mvar = botan_pad ^. problem_BP
             handler :: IOProblem -> IO ()
             handler _ = do
-                tryPutMVar problem_mvar ()
-                tryPutMVar (botan_pad ^. dataCame_BP) ()
-                -- putStrLn "E ok"
+                _ <- tryPutMVar problem_mvar ()
+                _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
                 return ()
         b <- B.packCStringLen cstr
         problem <- tryReadMVar problem_mvar
         case problem of
             Nothing ->
-                E.catch
+                keyedReportExceptions "iocba_push" $ E.catch
                    (push_action (LB.fromStrict b))
                    handler
 
-            Just _ ->
+            Just _ -> do
                 -- Ignore, but don't send any data
+                --putStrLn "IGNORED DATA SEND ON ENCR SOCKET"
                 return ()
 
 
@@ -129,6 +137,7 @@ iocba_data_cb siocb p len = withBotanPad siocb $ \ botan_pad -> do
         avail_data = botan_pad ^. availableData_BP
     b <- B.packCStringLen cstr
     atomicModifyIORef' avail_data $ \ previous -> ( previous `mappend` (Bu.byteString b), ())
+    --putStrLn "Got data"
     tryPutMVar (botan_pad ^. dataCame_BP) ()
     return ()
 
@@ -139,6 +148,7 @@ foreign export ccall iocba_alert_cb :: BotanPadRef -> CInt -> IO ()
 iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
     let
         problem_mvar = botan_pad ^. problem_BP
+    --putStrLn "alert"
     if (alert_code < 0)
           then do
              tryPutMVar problem_mvar ()
@@ -215,7 +225,8 @@ botanPushData botan_pad datum = do
                      iocba_cleartext_push c pch len
 
             Just _ -> do
-                (botan_pad ^. encryptedSide_BP . closeAction_IOC )
+                --(botan_pad ^. encryptedSide_BP . closeAction_IOC )
+                --putStrLn "bpRaise"
                 E.throwIO $ NoMoreDataException
 
 
@@ -233,14 +244,15 @@ pullAvailableData botan_pad can_wait = do
         avail_data_lb = Bu.toLazyByteString avail_data
     case ( LB.length avail_data_lb == 0 , can_wait ) of
         (True, True) -> do
+            -- Just wait for more data coming here
             takeMVar data_came_mvar
             maybe_problem <- tryReadMVar io_problem_mvar
             case maybe_problem of
-                Nothing ->
+                Nothing -> do
                     pullAvailableData botan_pad True
 
                 Just () -> do
-                    (botan_pad ^. encryptedSide_BP . closeAction_IOC )
+                    --putStrLn "ProblemTranslated"
                     E.throwIO NoMoreDataException
 
         (_, _) ->
@@ -290,7 +302,6 @@ unencryptChannelData botan_ctx tls_data  = do
     tls_channel_ioref <- newIORef (error "")
     avail_data_ioref <- newIORef mempty
 
-    read_lock_mvar <- newMVar ()
     write_lock_mvar <- newMVar ()
 
     let
@@ -300,7 +311,6 @@ unencryptChannelData botan_ctx tls_data  = do
           , _tlsChannel_BP         = tls_channel_ioref
           , _dataCame_BP           = data_came_mvar
           , _handshakeCompleted_BP = handshake_completed_mvar
-          , _readLock_BP           = read_lock_mvar
           , _writeLock_BP          = write_lock_mvar
           , _protocolSelector_BP   = protocolSelectorToC protocol_selector
           , _selectedProtocol_BP   = selected_protocol_mvar
@@ -324,6 +334,7 @@ unencryptChannelData botan_ctx tls_data  = do
             _ <- tryPutMVar data_came_mvar ()
             return Nothing
 
+        -- Feeds encrypted data to Botan
         pump :: IO ()
         pump = do
             maybe_new_data <- E.catch
@@ -331,21 +342,27 @@ unencryptChannelData botan_ctx tls_data  = do
                 pump_exc_handler
             case maybe_new_data of
                 Just new_data -> do
-                    engine_result <- withMVar write_lock_mvar $ \_ -> do
+                    can_continue <- withMVar write_lock_mvar $ \_ -> do
                         maybe_problem <- tryReadMVar problem_mvar
                         case maybe_problem of
-                            Nothing ->
-                                Un.unsafeUseAsCStringLen new_data $ \ (pch, len) -> do
+                            Nothing -> do
+                                engine_result <- Un.unsafeUseAsCStringLen new_data $ \ (pch, len) -> do
                                     iocba_receive_data tls_channel_ptr pch (fromIntegral len)
+                                if engine_result < 0
+                                  then do
+                                    _ <- tryPutMVar problem_mvar ()
+                                    -- Just awake any variables
+                                    _ <- tryPutMVar data_came_mvar ()
+                                    return False
+                                  else
+                                    return True
                             Just _ ->
-                                return (-1)
-                    if engine_result < 0
+                                return False
+                    if can_continue
                       then do
-                        _ <- tryPutMVar problem_mvar ()
-                        _ <- tryPutMVar data_came_mvar ()
-                        return ()
-                      else
                         pump
+                      else
+                        return ()
                 Nothing -> do
                     -- On exceptions, finish this thread
                     return ()
@@ -374,16 +391,20 @@ closeBotan botan_pad =
         case maybe_gotit of
             Just _ -> do
                 -- Cleanly close tls, if nobody else is writing there
-                withMVar (botan_pad ^. writeLock_BP) $ \ _ ->
+                withMVar (botan_pad ^. writeLock_BP) $ \ _ -> do
                     iocba_close tls_channel_ptr
+                    _ <- tryPutMVar (botan_pad ^. problem_BP) ()
+                    _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
+                    return ()
                 -- Close the cypher-text transport
                 (botan_pad ^. encryptedSide_BP . closeAction_IOC)
                 -- Ensure that no calls are made to any of the IO callbacks after the
                 -- stable pointer is fred
-                _ <- tryPutMVar (botan_pad ^. problem_BP) ()
+
                 return ()
 
             Nothing ->
+                -- Thing already closed, don't do it again
                 return ()
 
 

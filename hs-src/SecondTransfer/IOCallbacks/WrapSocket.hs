@@ -47,22 +47,20 @@ socketIOCallbacks socket = do
                                E.throwIO NoMoreDataException
                     ) :: E.SomeException -> IO a )
 
-        push_action lazy_bs =
+        push_action lazy_bs = keyedReportExceptions "pushAtSocket" $
             E.catch
                 (NSB.sendMany socket . LB.toChunks $ lazy_bs)
                 uhandler
         -- Unfortunately we are forced to totally rely on sockets blocking or not nature
         -- TODO:  Check if ignoring the flag here becomes a problem.
         best_effort_pull_action _ = do
-            --putStrLn "wait-for-data"
-            datum <- E.catch (NSB.recv socket 4096) uhandler
+            datum <- keyedReportExceptions "pullAtSocket" $ E.catch (NSB.recv socket 4096) uhandler
             if B.length datum == 0
                 then do
                    -- Pre-emptively close the socket, don't wait for anything else
                    close_action
                    E.throwIO NoMoreDataException
                 else do
-                   --putStrLn $ "Received" ++ show datum
                    return datum
 
         -- Exceptions are close are possible

@@ -9,11 +9,13 @@
 #include <botan/tls_alert.h>
 #include <botan/tls_policy.h>
 #include <botan/tls_exceptn.h>
+#include <botan/exceptn.h>
 #include <botan/credentials_manager.h>
 #include <botan/tls_channel.h>
 #include <botan/pkcs8.h>
 #include <botan/tls_session_manager.h>
 #include <botan/tls_server.h>
+#include <botan/data_src.h>
 #endif
 
 #include "../SecondTransfer/TLS/Botan_stub.h"
@@ -36,6 +38,7 @@ void data_cb (void* botan_pad_ref, const unsigned char a[], size_t sz)
 
 void alert_cb (void* botan_pad_ref, Botan::TLS::Alert const& alert, const unsigned char a[], size_t sz) 
 {
+    printf("BOTAN WAS TO DELIVER ALERT: %d \n", alert.type_string().c_str());
     if (alert.is_valid() && alert.is_fatal() )
     {
         // TODO: Propagate this softly.
@@ -52,7 +55,7 @@ bool handshake_cb(void* botan_pad_ref, const Botan::TLS::Session&)
     return false;
 }
 
-// TODO: We can use stronger ciphers here. For now let's go simple 
+// TODO: We can use stronger ciphers here. For now let's go simple
 class HereTLSPolicy: public Botan::TLS::Policy {
 public:
     virtual bool acceptable_protocol_version(const Botan::TLS::Protocol_Version& v)
@@ -125,7 +128,26 @@ public:
         ):
             cert(cert_filename)
     {
-        certs.push_back(cert);
+        // In addition to  the certificate itself, build a chain
+        // of certificates
+        Botan::DataSource_Stream dss(cert_filename);
+        int i = 0;
+        while ( not dss.end_of_data() )
+        {
+            try {
+                certs.push_back(Botan::X509_Certificate(dss));
+            } catch (Botan::Decoding_Error const& err)
+            {
+                if ( i == 0)
+                {
+                    throw;
+                } else
+                {
+                    break;
+                }
+            }
+            i ++;
+        }
         privkey = Botan::PKCS8::load_key(
             privkey_filename, rng
         );
