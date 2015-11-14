@@ -38,7 +38,7 @@ void data_cb (void* botan_pad_ref, const unsigned char a[], size_t sz)
 
 void alert_cb (void* botan_pad_ref, Botan::TLS::Alert const& alert, const unsigned char a[], size_t sz) 
 {
-    printf("BOTAN WAS TO DELIVER ALERT: %d \n", alert.type_string().c_str());
+    // printf("BOTAN WAS TO DELIVER ALERT: %d \n", alert.type_string().c_str());
     if (alert.is_valid() && alert.is_fatal() )
     {
         // TODO: Propagate this softly.
@@ -204,7 +204,9 @@ extern "C" int iocba_receive_data(
 {
     Botan::TLS::Channel* channel = (Botan::TLS::Channel*) tls_channel;
     try {
+        //printf("Before taking data=%p \n", channel);
         channel->received_data( (const unsigned char*) data, length);
+        //printf("After taking data=%p \n", channel);
     } catch (...)
     {
         // TODO: control messages
@@ -221,8 +223,15 @@ extern "C" void iocba_cleartext_push(
 {
     // TODO: Check for "can send"!!!!!
     // OTHERWISE THIS WON'T WORK
-    Botan::TLS::Channel* channel = (Botan::TLS::Channel*) tls_channel;
-    channel->send( (const unsigned char*) data, length);
+    try {
+        Botan::TLS::Channel* channel = (Botan::TLS::Channel*) tls_channel;
+        // printf("Before send channel=%p \n", channel);
+        channel->send( (const unsigned char*) data, length);
+        // printf("After send channel=%p \n", channel);
+    } catch (...)
+    {
+        printf("BotanTLS engine raised exception on send\n");
+    }
 }
 
 
@@ -233,7 +242,14 @@ extern "C" void iocba_close(
     // TODO: Check for "can send"!!!!!
     // OTHERWISE THIS WON'T WORK
     Botan::TLS::Channel* channel = (Botan::TLS::Channel*) tls_channel;
-    channel->close();
+    try{
+        //printf("Before close channel=%p \n", channel);
+        channel->close();
+        //printf("After close channel=%p \n", channel);       
+    } catch (...)
+    {
+        printf("BotanTLS engine raised exception on close\n");        
+    }
 }
 
 

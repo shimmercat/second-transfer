@@ -24,6 +24,9 @@ import           SecondTransfer.Socks5.Serializers
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.SocketServer
 
+-- For debugging purposes
+import           SecondTransfer.IOCallbacks.Botcher
+
 
 -- data S5SessionState = SessionState {
 
@@ -97,7 +100,13 @@ negotiateSocksAndForward approver socks_here =
                                 }
                         ps putServerReply_Packet server_reply
                         -- Now that I have the attendant, let's just activate it ...
+
+                        -- CORRECT WAY:
                         return . Just $ socks_here
+                        -- WRONG WAY:
+                        --putStrLn "ATTENTION: BotcherWorking. Bad things SHOULD happen"
+                        --botcher <- insertNoise 2509 "jk5j83489u89p43598//" socks_here
+                        --return . Just $ botcher
                     else do
                         -- Logging? We need to get that real right.
                         return Nothing
