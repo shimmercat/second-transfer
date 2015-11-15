@@ -6,9 +6,9 @@ docker:
 packages:
 - '.'
 - examples/attempt_bust
-resolver: lts-3.7
 flags:
     second-transfer: 
         fastc: true
 ghc-options:
     second-transfer: "-pgmc g++"
+resolver: nightly-2015-10-13
