@@ -131,6 +131,8 @@ library
                   , SecondTransfer.Http2.MakeAttendant
                   , SecondTransfer.Http2.Session
                   , SecondTransfer.Http2.SimpleClient
+                  , SecondTransfer.Http2.TransferTypes
+                  , SecondTransfer.Http2.OutputTray
 
                   , SecondTransfer.Http1.Session
                   , SecondTransfer.IOCallbacks.Botcher
@@ -177,7 +179,9 @@ library
                  pqueue >= 1.3.0,
                  stm >= 2.3,
                  deepseq >= 1.4.1,
-                 time >= 1.5.0 && < 1.8
+                 time >= 1.5.0 && < 1.8,
+                 vector >= 0.10,
+                 vector-algorithms >= 0.7
 
   if flag(monitoring)
      build-depends: hedis >= 0.6

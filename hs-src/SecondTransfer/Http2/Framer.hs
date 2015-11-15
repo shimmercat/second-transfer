@@ -18,28 +18,25 @@ module SecondTransfer.Http2.Framer (
 
 
 import           Control.Concurrent                     hiding (yield)
-import qualified Control.Concurrent                     as CC(yield)
-import qualified Control.Concurrent.MSem                as MS
-import           Control.Concurrent.STM.TMVar
-import qualified Control.Concurrent.STM                 as STM
+
 import           Control.Exception
 import qualified Control.Exception                      as E
 import           Control.Lens                           (view, (^.) )
 import qualified Control.Lens                           as L
-import           Control.Monad                          (unless, when, replicateM_)
+import           Control.Monad                          (unless, when)
 import           Control.Monad.IO.Class                 (liftIO)
-import qualified Control.Monad.Catch                    as C
+--import qualified Control.Monad.Catch                    as C
 import           Control.Monad.Trans.Class              (lift)
-import           Control.DeepSeq                        (($!!))
+-- import           Control.DeepSeq                        (($!!))
 import           Control.Monad.Trans.Reader
 import           Data.Binary                            (decode)
 import qualified Data.ByteString                        as B
-import           Data.ByteString.Char8                  (pack)
+--import           Data.ByteString.Char8                  (pack)
 import qualified Data.ByteString.Lazy                   as LB
 import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Foldable                          (find)
-import qualified Data.PQueue.Min                        as PQ
+--import qualified Data.PQueue.Min                        as PQ
 import           Data.Maybe                             (fromMaybe)
 
 import qualified Network.HTTP2                          as NH2
@@ -60,6 +57,10 @@ import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
+
+import           SecondTransfer.Http2.TransferTypes
+import           SecondTransfer.Http2.OutputTray
+
 #ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging        (logit)
 #endif
@@ -75,48 +76,23 @@ http2PrefixLength = B.length NH2.connectionPreface
 type HashTable k v = H.CuckooHashTable k v
 
 
-type GlobalStreamId = Int
-
-
 data FlowControlCommand =
      AddBytes_FCM Int
-    |Finish_FCM
+--    |Finish_FCM
 
 -- A hashtable from stream id to channel of availabiliy increases
 type Stream2AvailSpace = HashTable GlobalStreamId (MVar FlowControlCommand)
 
 
-data CanOutput = CanOutput
-
-
-data NoHeadersInChannel = NoHeadersInChannel
-
-
--- Maximum number of packets in the priority queue waiting for
--- delivery. More than this, and I will simply block...
-maxPacketsInQueue :: Int
-maxPacketsInQueue = 32
-
-
------In this implementation, this  v- and this  v- member should not change during the lieftime
------ of the stream.
------------------------------------v--priority, v-- stream_id ----|------v-ordinal
-newtype PrioPacket = PrioPacket ( (Int ,        Int,                     Int     ),  LB.ByteString)
-                     deriving Show
-
-instance Eq PrioPacket where
-   (==) (PrioPacket (a,_)) (PrioPacket (b,_)) = a == b
-
-instance Ord PrioPacket where
-    compare (PrioPacket (a,_)) (PrioPacket (b,_)) = compare a b
-
 
 -- Simple thread to prioritize frames in the session
 data PrioritySendState = PrioritySendState {
-     -- We need a semaphore so that this doesn't get stagnated waiting on writes
-     _semToSend :: MS.MSem Int
-     ,_prioQ :: TMVar (PQ.MinQueue PrioPacket)
+     _outputTray_PSS                 :: MVar OutputTray
+   , _dataReady_PSS                  :: MVar ()
+   , _spaceReady_PSS                 :: MVar ()
      }
+
+L.makeLenses ''PrioritySendState
 
 
 data FramerSessionData = FramerSessionData {
@@ -134,15 +110,9 @@ data FramerSessionData = FramerSessionData {
     -- The default flow-control window advertised by the peer (e.g., the browser)
     , _defaultStreamWindow   :: MVar Int
 
-    -- Wait variable to output bytes to the channel. This is needed to avoid output data races.
-    , _canOutput             :: MVar CanOutput
-
     -- Flag that says if the session has been unwound... if such,
     -- threads are adviced to exit as early as possible
     , _outputIsForbidden     :: MVar Bool
-
-    -- Exclusive lock for headers, needed since the specs forbid interleaving header and data
-    , _noHeadersInChannel    :: MVar NoHeadersInChannel
 
     -- The push action
     , _pushAction            :: PushAction
@@ -163,7 +133,7 @@ data FramerSessionData = FramerSessionData {
     , _lastInputStream       :: MVar Int
     -- We update this one as soon as an outgoing frame is seen with such a
     -- high output number.
-    , _lastOutputStream      :: MVar Int
+    --, _lastOutputStream      :: MVar Int
 
     -- For sending data orderly
     , _prioritySendState     :: PrioritySendState
@@ -180,6 +150,7 @@ type FramerSession = ReaderT FramerSessionData IO
 data SessionPayload =
     AwareWorker_SP AwareWorker   -- I'm a server
     |ClientState_SP ClientState  -- I'm a client
+
 
 wrapSession :: SessionPayload -> SessionsContext -> Attendant
 wrapSession session_payload sessions_context io_callbacks = do
@@ -218,34 +189,30 @@ wrapSession session_payload sessions_context io_callbacks = do
     s2o                       <- H.new
     stream2output_bytes_mvar  <- newMVar s2o
     default_stream_size_mvar  <- newMVar 65536
-    can_output                <- newMVar CanOutput
-    no_headers_in_channel     <- newMVar NoHeadersInChannel
     last_stream_id            <- newMVar 0
-    last_output_stream_id     <- newMVar 0
+    -- last_output_stream_id     <- newMVar 0
     output_is_forbidden       <- newMVar False
 
-    prio_mvar                 <- STM.atomically $ newTMVar PQ.empty
-    sem_to_send               <- MS.new maxPacketsInQueue
-
-
+    output_tray_mvar          <- newMVar . newOutputTray . ( ^. sessionsConfig . trayMaxSize ) $ sessions_context
+    data_ready_mvar           <- newEmptyMVar
+    space_ready_mvar          <- newMVar ()
 
     -- We need some shared state
     let framer_session_data = FramerSessionData {
         _stream2flow          = stream2flow_mvar
         ,_stream2outputBytes  = stream2output_bytes_mvar
         ,_defaultStreamWindow = default_stream_size_mvar
-        ,_canOutput           = can_output
-        ,_noHeadersInChannel  = no_headers_in_channel
         ,_pushAction          = push_action
         ,_closeAction         = close_action
         ,_sessionIdAtFramer   = new_session_id
         ,_sessionsContext     = sessions_context
         ,_lastInputStream     = last_stream_id
-        ,_lastOutputStream    = last_output_stream_id
+        --,_lastOutputStream    = last_output_stream_id
         ,_outputIsForbidden   = output_is_forbidden
         ,_prioritySendState   = PrioritySendState {
-                                    _semToSend = sem_to_send,
-                                    _prioQ = prio_mvar
+                                  _outputTray_PSS = output_tray_mvar
+                                , _dataReady_PSS = data_ready_mvar
+                                , _spaceReady_PSS = space_ready_mvar
                                 }
         ,_sessionRole_FSD     = session_role
         }
@@ -279,14 +246,14 @@ wrapSession session_payload sessions_context io_callbacks = do
             -- sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
 
-    forkIO
+    _ <- forkIOExc "inputGathererHttp2"
         $ close_on_error new_session_id sessions_context
         $ runReaderT (inputGatherer pull_action session_input ) framer_session_data
-    forkIO
+    _ <- forkIOExc "outputGathererHttp2"
         $ close_on_error new_session_id sessions_context
         $ runReaderT (outputGatherer session_output ) framer_session_data
     -- Actual data is reordered before being sent
-    forkIO
+    _ <- forkIOExc "sendReorderingHttp2"
         $ close_on_error new_session_id sessions_context
         $ runReaderT sendReordering framer_session_data
 
@@ -311,26 +278,26 @@ addCapacity _         0         =
     -- By the specs, a WINDOW_UPDATE with 0 of credit should be considered a protocol
     -- error
     return False
-addCapacity 0         delta_cap =
+addCapacity 0         _delta_cap =
     -- TODO: Implement session flow control
     return True
 addCapacity stream_id delta_cap =
-    do
-        table_mvar <- view stream2flow
-        val <- liftIO $ withMVar table_mvar $ \ table ->
-            H.lookup table stream_id
-        last_stream_mvar <- view lastInputStream
-        last_stream <- liftIO . readMVar $ last_stream_mvar
-        case val of
-            Nothing | stream_id > last_stream ->
-                      return False
-                    | otherwise -> -- If the stream was seen already, interpret this as a
-                                  -- rogue WINDOW_UPDATE and do nothing
-                      return True
+  do
+    table_mvar <- view stream2flow
+    val <- liftIO $ withMVar table_mvar $ \ table ->
+        H.lookup table stream_id
+    last_stream_mvar <- view lastInputStream
+    last_stream <- liftIO . readMVar $ last_stream_mvar
+    case val of
+        Nothing | stream_id > last_stream ->
+                  return False
+                | otherwise -> -- If the stream was seen already, interpret this as a
+                              -- rogue WINDOW_UPDATE and do nothing
+                  return True
 
-            Just command_chan -> do
-                liftIO $ putMVar command_chan $ AddBytes_FCM delta_cap
-                return True
+        Just command_chan -> do
+            liftIO $ putMVar command_chan $ AddBytes_FCM delta_cap
+            return True
 
 
 finishFlowControlForStream :: GlobalStreamId -> FramerSession ()
@@ -343,7 +310,7 @@ finishFlowControlForStream stream_id =
                 -- Weird
                 Nothing -> return ()
 
-                Just command_chan -> do
+                Just _command_chan -> do
                     liftIO $
                         H.delete table stream_id
                     return ()
@@ -526,14 +493,14 @@ outputGatherer session_output = do
        dataForFrame p1 p2 =
            LB.fromStrict $ NH2.encodeFrame p1 p2
 
-       cont = loopPart session_id frame_sent_report_callback
+       cont = loopPart
 
-       loopPart :: Int -> Maybe DataFrameDeliveryCallback -> FramerSession ()
-       loopPart session_id frame_sent_report_callback = do
+       loopPart ::  FramerSession ()
+       loopPart  = do
            command_or_frame  <- liftIO $ getFrameFromSession session_output
            case command_or_frame of
 
-               Left (CancelSession_SOC error_code) -> do
+               Command_StFB (CancelSession_SOC error_code) -> do
                    -- The session wants to cancel things as harshly as possible, send a GoAway frame with
                    -- the information I have here.
                    sendGoAwayFrame error_code
@@ -542,18 +509,18 @@ outputGatherer session_output = do
                    -- are taken from the session. Correspondingly, an exception is raised in
                    -- the session if it tries to write another frame
 
-               Left (SpecificTerminate_SOC last_stream_id) -> do
+               Command_StFB (SpecificTerminate_SOC last_stream_id error_code) -> do
                    -- This is used when the session wants to finish in a specific way.
-                   sendSpecificTerminateGoAway last_stream_id
+                   sendSpecificTerminateGoAway last_stream_id error_code
                    releaseFramer
 
-               Left (FinishStream_SOC stream_id ) -> do
+               Command_StFB (FinishStream_SOC stream_id ) -> do
                    -- Session knows that we are done with the given stream, and that we can release
                    -- the flow control structures
                    finishFlowControlForStream stream_id
                    cont
 
-               Right ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _), ef ) -> do
+               DataFrame_StFB ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _), ef ) -> do
                    -- This frame is flow-controlled... I may be unable to send this frame in
                    -- some circumstances...
                    let
@@ -591,33 +558,24 @@ outputGatherer session_output = do
                    cont
 
 
-               Right (p1, p2@(NH2.PushPromiseFrame _ _), _effect ) -> do
-                   handleHeadersOfStream p1 p2
+               PriorityTrain_StFB frames -> do
+                   -- Serialize the entire train
+                   let
+                       bs = serializeMany frames
+                   -- Put it in the output tray
+                   withHighPrioritySend bs
+                   -- and continue
                    cont
 
-               Right (p1, p2@(NH2.HeadersFrame _ _), _effect ) -> do
-                   handleHeadersOfStream p1 p2
-                   cont
-
-               Right (p1, p2@(NH2.ContinuationFrame _), _effect ) -> do
-                   handleHeadersOfStream p1 p2
-                   cont
-
-               Right (p1, p2, _effect) -> do
-                   -- Most other frames go right away... as long as no headers are in process...
-                   no_headers <- view noHeadersInChannel
-                   liftIO $ takeMVar no_headers
-                   pushFrame p1 p2
-                   liftIO $ putMVar no_headers NoHeadersInChannel
-                   cont
+               case_ -> error $ "Error: case not spefified " ++ (show case_)
 
     -- We start by sending a settings frame
-    pushFrame
+    pushControlFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
         (NH2.SettingsFrame [])
 
     -- And then we continue...
-    loopPart session_id frame_sent_report_callback
+    loopPart
 
 
 updateLastInputStream :: GlobalStreamId  -> FramerSession ()
@@ -626,10 +584,10 @@ updateLastInputStream stream_id = do
     liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
 
 
-updateLastOutputStream :: GlobalStreamId  -> FramerSession ()
-updateLastOutputStream stream_id = do
-    last_stream_id_mvar <- view lastOutputStream
-    liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
+-- updateLastOutputStream :: GlobalStreamId  -> FramerSession ()
+-- updateLastOutputStream stream_id = do
+--     last_stream_id_mvar <- view lastOutputStream
+--     liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
 
 
 startStreamOutputQueueIfNotExists :: GlobalStreamId -> Int -> FramerSession ()
@@ -638,7 +596,7 @@ startStreamOutputQueueIfNotExists stream_id priority = do
     val <- liftIO . withMVar table_mvar  $ \ table -> H.lookup table stream_id
     case val of
         Nothing | stream_id /= 0 -> do
-            startStreamOutputQueue stream_id priority
+            _ <- startStreamOutputQueue stream_id priority
             return ()
 
         _ ->
@@ -684,77 +642,22 @@ startStreamOutputQueue stream_id priority = do
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
             close_action
 
-
     read_state <- ask
-    liftIO $ forkIOExc
+    _ <- liftIO $ forkIOExc "streamOutputQueue"
            $ ignoreException blockedIndefinitelyOnMVar  ()
-           $ close_on_error session_id' sessions_context  $ runReaderT
-        ({-# SCC forkFlowControlOutput  #-} flowControlOutput stream_id priority initial_cap 0 "" command_chan bytes_chan)
-        read_state
+           $ close_on_error session_id' sessions_context
+           $ runReaderT (flowControlOutput stream_id priority initial_cap 0 "" command_chan bytes_chan)
+             read_state
 
     return (bytes_chan , command_chan)
-
-
--- This works in the output side of the HTTP/2 framing session, and it acts as a
--- semaphore ensuring that headers are output without any interleaved frames.
---
--- There are more synchronization mechanisms in Http2.Session that ensure we
--- only get here frames from one and the same stream.
-handleHeadersOfStream :: NH2.EncodeInfo -> NH2.FramePayload -> FramerSession ()
-handleHeadersOfStream p1@(NH2.EncodeInfo {}) frame_payload
-    | frameIsHeadersAndOpensStream frame_payload && not (frameEndsHeaders p1 frame_payload) = do
-        -- Take it
-        no_headers <- view noHeadersInChannel
-        liftIO $ takeMVar no_headers
-        pushFrame p1 frame_payload
-        -- Don't put the MvAR HERE
-
-    | frameIsHeadersAndOpensStream frame_payload && frameEndsHeaders p1 frame_payload = do
-        no_headers <- view noHeadersInChannel
-        liftIO $ takeMVar no_headers
-        pushFrame p1 frame_payload
-        -- Since we finish....
-        liftIO $ putMVar no_headers NoHeadersInChannel
-
-    | frameEndsHeaders p1 frame_payload = do
-        -- I can only get here for a continuation frame  after something else that is a headers
-        no_headers <- view noHeadersInChannel
-        pushFrame p1 frame_payload
-        liftIO $ putMVar no_headers NoHeadersInChannel
-        return ()
-
-    | otherwise =
-        -- Nothing to do with the mvar, the no_headers should be empty
-        pushFrame p1 frame_payload
-
-
--- Used to know when we need to switch the channel to "exclusive" mode.
-frameIsHeadersAndOpensStream :: NH2.FramePayload -> Bool
-frameIsHeadersAndOpensStream (NH2.HeadersFrame _  _ )      = True
-frameIsHeadersAndOpensStream (NH2.PushPromiseFrame _ _)    = True
-frameIsHeadersAndOpensStream _                             = False
-
-
-frameEndsHeaders  :: NH2.EncodeInfo -> NH2.FramePayload -> Bool
-frameEndsHeaders (NH2.EncodeInfo flags _ _) (NH2.HeadersFrame _ _) = NH2.testEndHeader flags
-frameEndsHeaders (NH2.EncodeInfo flags _ _) (NH2.ContinuationFrame _) = NH2.testEndHeader flags
-frameEndsHeaders (NH2.EncodeInfo flags _ _) (NH2.PushPromiseFrame _ _) = NH2.testEndHeader flags
-frameEndsHeaders _ _ = False
-
-
--- Push a frame into the output channel... this waits for the
--- channel to be free to send.
-pushFrame :: NH2.EncodeInfo
-             -> NH2.FramePayload -> FramerSession ()
-pushFrame p1 p2 = do
-    let bs = LB.fromStrict $ NH2.encodeFrame p1 p2
-    sendBytes bs
 
 
 pushPrefix :: FramerSession ()
 pushPrefix = do
     let bs = LB.fromStrict NH2.connectionPreface
-    sendBytes bs
+    -- We will send the data, mixing as needed, with the incredible priority
+    -- of -2
+    withPrioritySend_ (-20) 0 0 0 bs
 
 
 -- Default sendGoAwayFrame. This one assumes that actions are taken as soon as stream is
@@ -764,30 +667,24 @@ sendGoAwayFrame :: NH2.ErrorCodeId -> FramerSession ()
 sendGoAwayFrame error_code = do
     last_stream_id_mvar <- view lastInputStream
     last_stream_id <- liftIO $ readMVar last_stream_id_mvar
-    pushFrame
+    pushControlFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
         (NH2.GoAwayFrame last_stream_id error_code "")
 
 
-sendSpecificTerminateGoAway :: GlobalStreamId -> FramerSession ()
-sendSpecificTerminateGoAway last_stream =
-    pushFrame
+sendSpecificTerminateGoAway :: GlobalStreamId -> NH2.ErrorCodeId -> FramerSession ()
+sendSpecificTerminateGoAway last_stream error_code =
+    pushControlFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
-        (NH2.GoAwayFrame last_stream NH2.NoError "")
+        (NH2.GoAwayFrame last_stream error_code "")
 
 
--- From this point on data is really serialized,
-sendBytes :: LB.ByteString -> FramerSession ()
-sendBytes bs = do
+-- Only one caller to this: the output tray functionality!!
+sendBytesN :: LB.ByteString -> FramerSession ()
+sendBytesN bs = do
     push_action <- view pushAction
     -- I don't think I need to lock here...
-    can_output <- view canOutput
-    liftIO $
-        bs `seq`
-            C.bracket
-                (takeMVar   can_output)
-                (const $ push_action bs)
-                (putMVar can_output)
+    liftIO $ push_action bs
 
 
 -- A thread in charge of doing flow control transmission....This sends already
@@ -819,7 +716,7 @@ flowControlOutput stream_id priority capacity ordinal leftovers commands_chan by
             -- Is
             -- I can send ... if no headers are in process....
             -- liftIO . logit $ "set-priority (stream_id, prio, ordinal) " `mappend` (pack . show) (__stream_id, priority, ordinal)
-            withPrioritySend priority stream_id ordinal leftovers
+            withNormalPrioritySend priority stream_id ordinal leftovers
             flowControlOutput  stream_id priority (capacity - amount) (ordinal+1 ) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead
@@ -840,50 +737,87 @@ releaseFramer =
 
 -- This prioritizes DATA packets, in some rudimentary way.
 -- This code will be replaced in due time for something compliant.
-withPrioritySend :: Int -> Int -> Int -> LB.ByteString -> FramerSession ()
-withPrioritySend priority stream_id packet_ordinal datum = do
-    PrioritySendState {_semToSend = s, _prioQ = pqm } <- view prioritySendState
+--
+--   System priority:
+--        -20 : the prefix, absolutely most important guy
+--        -1 : All packets except data  packets
+--         0 : data packets.
+withPrioritySend_ :: Int -> Int -> Int -> Int -> LB.ByteString -> FramerSession ()
+withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
+    pss <- view prioritySendState
     let
-        new_record = PrioPacket  ( (priority, stream_id, packet_ordinal), datum)
+        new_entry = TrayEntry {
+            _systemPriority_TyE = system_priority -- Ordinary data packets go after everybody else
+          , _streamPriority_TyE = priority
+          , _streamOrdinal_TyE = packet_ordinal
+          , _payload_TyE =  datum
+          , _streamId_TyE = stream_id
+            }
+        attempt =  do
+            could_add <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
+                _ <- tryTakeMVar (pss ^. spaceReady_PSS)
+                if (ot1 ^. filling_OuT) < (ot1 ^. maxLength_OuT)
+                  then do
+                    let new_ot = addEntry ot1 new_entry
+                    return (new_ot, True)
+                  else do
+                    return (ot1, False)
+            if could_add
+              then do
+                _ <- tryPutMVar (pss ^. dataReady_PSS) ()
+                return ()
+              else do
+                readMVar (pss ^. spaceReady_PSS)
+                attempt
     -- Now, for this to work, I need to have enough capacity to add something to the queue
-    liftIO $ do
-        -- We are using a semaphore to avoid overflowing this place. Notice that the flow
-        -- control output is till using an unbounded queue!!!
-        MS.wait s
-        -- And add it to the queue....
-        STM.atomically $ do
-            pq <- takeTMVar pqm
-            putTMVar pqm $ PQ.insert new_record pq
+    liftIO $ attempt
 
 
--- In charge of actually sending the data frames, in a special thread (create in the caller)
+withNormalPrioritySend ::  Int -> Int -> Int -> LB.ByteString -> FramerSession ()
+withNormalPrioritySend = withPrioritySend_ 0
+
+
+withHighPrioritySend :: LB.ByteString -> FramerSession ()
+withHighPrioritySend  datum = withPrioritySend_ (-1) 0 0 0 datum
+
+
+serializeMany :: [OutputFrame] -> LB.ByteString
+serializeMany frames =
+    Bu.toLazyByteString $ mconcat (map (\ (a,b,_) -> Bu.byteString $ NH2.encodeFrame a b ) frames)
+
+-- Needed here and there
+pushControlFrame :: NH2.EncodeInfo -> NH2.FramePayload -> FramerSession ()
+pushControlFrame frame_encode_info frame_payload =
+  do
+    let datum = LB.fromStrict $ NH2.encodeFrame frame_encode_info frame_payload
+    withHighPrioritySend datum
+
+
+-- In charge of actually sending the  frames, in a special thread (create said thread
+-- in the caller)
 sendReordering :: FramerSession ()
 sendReordering = do
-    PrioritySendState {_semToSend = s, _prioQ = pqm } <- view prioritySendState
-    no_headers <- view noHeadersInChannel
-    -- Get a packet, if possible, or wait for it
-    PrioPacket ( (priority_, stream_id, packed_ordinal_), datum) <- liftIO . STM.atomically $ do
-        pq <- takeTMVar pqm
-        if PQ.null pq
-          then STM.retry
-          else do
-            let
-              (record, thinner) =  PQ.deleteFindMin pq
-            putTMVar pqm thinner
-            return record
-    -- liftIO . logit $ "prio-send (prio,stream_id, ordinal) " `mappend` (pack . show) (priority, stream_id, packed_ordinal_)
-    -- Since I got something to send, I can let one of the guys to put more stuff
-    liftIO $ MS.signal s
-    -- Now we do the tries and locks for headers
-    C.bracket
-        (liftIO $ takeMVar no_headers)
-        (\ _ -> liftIO $ putMVar no_headers NoHeadersInChannel)
-        (\ _ -> sendBytes datum )
-
-    -- Sleep for a little bit, we dont' want too many frames
-    -- here too fast. BIG TODO: We need a better way to handle this
-    --liftIO $ replicateM_ 10 CC.yield
-    --liftIO $ threadDelay 100
-
-    -- And tail-recurse
+    pss <- view prioritySendState
+    use_size <- view (sessionsContext . sessionsConfig . networkChunkSize)
+    -- Get a set of packets (that is, their reprs) to send
+    let
+        get_sendable_data = do
+            maybe_entries <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
+                _ <- tryTakeMVar (pss ^. dataReady_PSS)
+                if (ot1 ^. filling_OuT) <= 0
+                  then
+                    return (ot1 ,Nothing)
+                  else do
+                    let
+                      (ot2, entries) = splitOverSize use_size ot1
+                    return (ot2, Just entries)
+            case maybe_entries of
+                Just entries -> do
+                    _ <- tryPutMVar (pss ^. spaceReady_PSS) ()
+                    return . Bu.toLazyByteString . mconcat . map (Bu.lazyByteString . ( ^. payload_TyE) ) $  entries
+                Nothing -> do
+                    _ <- readMVar (pss ^. dataReady_PSS)
+                    get_sendable_data
+    entries_data <- liftIO get_sendable_data
+    sendBytesN entries_data
     sendReordering

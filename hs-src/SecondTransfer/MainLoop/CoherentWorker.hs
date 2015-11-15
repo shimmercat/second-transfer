@@ -185,6 +185,10 @@ data Effect = Effect {
   ,_interrupt_Ef :: Maybe InterruptEffect
   }
 
+-- Quick instance of show
+instance Show Effect where
+    show _ = "<some-effect>"
+
 makeLenses ''Effect
 
 defaultEffects :: Effect

@@ -305,8 +305,8 @@ keyedReportExceptions key comp =
 
 -- | Just report all unhandled and un-ignored exceptions
 ---  in forked threads
-forkIOExc :: IO () -> IO ThreadId
-forkIOExc comp = forkIO $ reportExceptions comp
+forkIOExc :: String -> IO () -> IO ThreadId
+forkIOExc msg comp = forkIO $ keyedReportExceptions msg  comp
 
 
 blockedIndefinitelyOnMVar :: Proxy BlockedIndefinitelyOnMVar

@@ -50,7 +50,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
     do
         new_session_tag <- acquireNewSessionTag sessions_context
         -- infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
-        _ <- forkIOExc $ go new_session_tag (Just "") 1
+        _ <- forkIOExc "Http1Go" $ go new_session_tag (Just "") 1
         return ()
   where
     push_action = attendant_callbacks ^. pushAction_IOC
