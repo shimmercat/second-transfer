@@ -1609,16 +1609,12 @@ headersOutputThread input_chan session_output_mvar = forever $ do
                 bs_chunks = bytestringChunk use_chunk_length  data_to_send
 
             -- And send the chunks through while locking the output place....
-            liftIO $ bs_chunks `deepseq` E.bracket
-                (takeMVar session_output_mvar)
-                (putMVar session_output_mvar )
-                (\ session_output -> do
+            liftIO $ bs_chunks `deepseq` withMVar session_output_mvar $ \ session_output -> do
                     let
                         header_frames = headerFrames stream_id bs_chunks effect
                     writeChan session_output $ TT.PriorityTrain_StFB header_frames
-                    -- And say that the headers for this thread are out
                     putMVar headers_ready_mvar HeadersSent
-                    )
+
 
         GoAway_HM (stream_id, _effect) -> do
            -- This is in charge of sending an interrupt message to the framer
@@ -1665,28 +1661,28 @@ headersOutputThread input_chan session_output_mvar = forever $ do
         transform_first
         _transform_middle
         (last_chunk:[])
-        True    -- If it is first
+        True    -- If it is first, and last
         =
-        [transform_first NH2.defaultFlags last_chunk]
+        [transform_first (NH2.setEndHeader NH2.defaultFlags) last_chunk]
     chunksToSequence
         _transform_first
         transform_middle
         (last_chunk:[])
-        False    -- It is not first
+        False    -- It is not first, but last
         =
         [transform_middle (NH2.setEndHeader NH2.defaultFlags) last_chunk]
     chunksToSequence
         transform_first
         transform_middle
         (chunk:rest)
-        True    -- If it is first
+        True    -- If it is first, but not last
         =
         (transform_first NH2.defaultFlags chunk):(chunksToSequence transform_first transform_middle rest False)
     chunksToSequence
         transform_first
         transform_middle
         (chunk:rest)
-        False    -- It is not first
+        False    -- It is not first, and not last
         =
         (transform_middle NH2.defaultFlags chunk):(chunksToSequence transform_first transform_middle rest False)
     chunksToSequence _ _ [] _ = error "ChunkingEmptySetOfHeaders!!"
