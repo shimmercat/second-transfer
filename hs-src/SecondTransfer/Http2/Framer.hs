@@ -232,10 +232,10 @@ wrapSession session_payload sessions_context io_callbacks = do
                 )
                 close_action
 
+        -- TODO:  I don't think much is being done here
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True)
-            -- INSTRUMENTATION( errorM "HTTP2.Framer" "Exception went up" )
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
         io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
@@ -245,16 +245,18 @@ wrapSession session_payload sessions_context io_callbacks = do
             -- errorM "HTTP2.Framer" "Exception went up"
             -- sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
-
     _ <- forkIOExc "inputGathererHttp2"
         $ close_on_error new_session_id sessions_context
+        $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (inputGatherer pull_action session_input ) framer_session_data
     _ <- forkIOExc "outputGathererHttp2"
         $ close_on_error new_session_id sessions_context
+        $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (outputGatherer session_output ) framer_session_data
     -- Actual data is reordered before being sent
     _ <- forkIOExc "sendReorderingHttp2"
         $ close_on_error new_session_id sessions_context
+        $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT sendReordering framer_session_data
 
     return ()
