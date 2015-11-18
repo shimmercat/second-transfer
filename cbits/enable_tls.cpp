@@ -245,10 +245,10 @@ extern "C" void iocba_close(
     try{
         //printf("Before close channel=%p \n", channel);
         channel->close();
-        //printf("After close channel=%p \n", channel);       
+        //printf("After close channel=%p \n", channel); 
     } catch (...)
     {
-        printf("BotanTLS engine raised exception on close\n");        
+        printf("BotanTLS engine raised exception on close\n");
     }
 }
 

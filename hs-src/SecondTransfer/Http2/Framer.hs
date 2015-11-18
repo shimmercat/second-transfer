@@ -81,7 +81,7 @@ data FlowControlCommand =
 --    |Finish_FCM
 
 -- A hashtable from stream id to channel of availabiliy increases
-type Stream2AvailSpace = HashTable GlobalStreamId (MVar FlowControlCommand)
+type Stream2AvailSpace = HashTable GlobalStreamId (Chan FlowControlCommand)
 
 
 
@@ -293,12 +293,18 @@ addCapacity stream_id delta_cap =
     case val of
         Nothing | stream_id > last_stream ->
                   return False
-                | otherwise -> -- If the stream was seen already, interpret this as a
-                              -- rogue WINDOW_UPDATE and do nothing
+                | otherwise -> do
+                  -- Maybe we arrive here and the stream is still running :-(
+                  -- it is hard to know during a session what's the state of a stream
+                  -- without "remembering" it :-(
+                  -- TODO: this is actually a bug, think better how to man
+                  command_chan <- startStreamOutputComandQueueIfNeeded stream_id
+                  liftIO $ writeChan command_chan $ AddBytes_FCM delta_cap
                   return True
 
         Just command_chan -> do
-            liftIO $ putMVar command_chan $ AddBytes_FCM delta_cap
+
+            liftIO $ writeChan command_chan $ AddBytes_FCM delta_cap
             return True
 
 
@@ -419,7 +425,6 @@ inputGatherer pull_action session_input = do
 
                     (NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do
                         -- Bookkeep the increase on bytes on that stream
-                        -- liftIO $ putStrLn $ "Extra capacity for stream " ++ (show stream_id)
                         succeeded <- lift $ addCapacity stream_id (fromIntegral credit)
                         if not succeeded then
                             abortSession
@@ -439,7 +444,7 @@ inputGatherer pull_action session_input = do
                                 -- Add capacity to everybody's windows
                                 liftIO . withMVar stream_to_flow $ \ stream_to_flow' ->
                                     H.mapM_ (\ (k,v) ->
-                                                 when (k /=0 ) $ putMVar v (AddBytes_FCM $! general_delta)
+                                                 when (k /=0 ) $ writeChan v (AddBytes_FCM $! general_delta)
                                             )
                                             stream_to_flow'
 
@@ -594,7 +599,7 @@ updateLastInputStream stream_id = do
 
 startStreamOutputQueueIfNotExists :: GlobalStreamId -> Int -> FramerSession ()
 startStreamOutputQueueIfNotExists stream_id priority = do
-    table_mvar <- view stream2flow
+    table_mvar <- view stream2outputBytes
     val <- liftIO . withMVar table_mvar  $ \ table -> H.lookup table stream_id
     case val of
         Nothing | stream_id /= 0 -> do
@@ -604,23 +609,37 @@ startStreamOutputQueueIfNotExists stream_id priority = do
         _ ->
             return ()
 
+-- Sometimes the browser gives capacity before we even have seen the first
+-- data frame going back from here from the server, so the  flow control
+-- command place should be started first...
+startStreamOutputComandQueueIfNeeded :: Int -> FramerSession (Chan FlowControlCommand)
+startStreamOutputComandQueueIfNeeded stream_id =
+  do
+    stream2flow_mvar <- view stream2flow
+    liftIO . withMVar stream2flow_mvar $  \s2c -> do
+        lookup_result <-  H.lookup s2c stream_id
+        case lookup_result of
+            Nothing -> do
+              command_chan <- newChan
+              H.insert s2c stream_id command_chan
+              return command_chan
+
+            Just command_chan ->
+              return command_chan
+
 
 -- Handles only Data frames.
-startStreamOutputQueue :: Int -> Int -> FramerSession (MVar LB.ByteString, MVar FlowControlCommand)
+startStreamOutputQueue :: Int -> Int -> FramerSession (MVar LB.ByteString, Chan FlowControlCommand)
 startStreamOutputQueue stream_id priority = do
     -- New thread for handling outputs of this stream is needed
     bytes_chan   <- liftIO newEmptyMVar
     ordinal_num  <- liftIO $ newMVar 0
-    command_chan <- liftIO newEmptyMVar
 
     s2o_mvar <- view stream2outputBytes
 
     liftIO . withMVar s2o_mvar $ {-# SCC e1  #-}  \ s2o ->  H.insert s2o stream_id (bytes_chan, ordinal_num)
+    command_chan <- startStreamOutputComandQueueIfNeeded stream_id
 
-    stream2flow_mvar <- view stream2flow
-
-
-    liftIO . withMVar stream2flow_mvar  $  {-# SCC e2  #-}  \ s2c ->  H.insert s2c stream_id command_chan
     --
     initial_cap_mvar <- view defaultStreamWindow
     initial_cap <- liftIO $ readMVar initial_cap_mvar
@@ -700,7 +719,7 @@ flowControlOutput :: Int
                      -> Int
                      -> Int
                      ->  LB.ByteString
-                     -> MVar FlowControlCommand
+                     -> Chan FlowControlCommand
                      -> MVar LB.ByteString
                      ->  FramerSession ()
 flowControlOutput stream_id priority capacity ordinal leftovers commands_chan bytes_chan =
@@ -722,10 +741,10 @@ flowControlOutput stream_id priority capacity ordinal leftovers commands_chan by
             flowControlOutput  stream_id priority (capacity - amount) (ordinal+1 ) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead
-            command <- liftIO $ {-# SCC t2 #-} takeMVar commands_chan
+            liftIO $ putStrLn "GoingToBlock"
+            command <- liftIO $ {-# SCC t2 #-} readChan commands_chan
             case  {-# SCC t3 #-} command of
-                AddBytes_FCM delta_cap ->
-                    -- liftIO $ putStrLn $ "Flow control delta_cap stream " ++ (show stream_id)
+                AddBytes_FCM delta_cap -> do
                     flowControlOutput stream_id priority (capacity + delta_cap) ordinal leftovers commands_chan bytes_chan
 
 

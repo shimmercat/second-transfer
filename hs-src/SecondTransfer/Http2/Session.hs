@@ -628,9 +628,8 @@ sessionInputThread  = do
         MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             liftIO $ do
-                -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream reset: " ++ (show _error_code_id) )
+                putStrLn $ "StreamReset " ++ show (_error_code_id)
                 cancelled_streams <- takeMVar cancelled_streams_mvar
-                -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Cancelled stream was: " ++ (show stream_id) )
                 putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
                 maybe_thread_id <- H.lookup stream2workerthread stream_id
                 case maybe_thread_id  of
