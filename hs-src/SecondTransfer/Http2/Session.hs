@@ -286,8 +286,7 @@ instance ClientPetitioner ClientState where
 
     request = handleRequest'
 
--------------- Regarding client state
-
+-------------- end of Regarding client state
 
 -- SessionData is the actual state of the session, including the channels to the framer
 -- outside.
@@ -319,7 +318,7 @@ data SessionData = SessionData {
     -- other words, it contains the stream_id of the last valid client
     -- stream and is updated as soon as the first frame of that stream is
     -- received.
-    ,_lastGoodStream             :: MVar Int
+    ,_lastGoodStream             :: MVar GlobalStreamId
 
     -- Used for decoding the headers
     ,_stream2HeaderBlockFragment :: Stream2HeaderBlockFragment
@@ -631,6 +630,8 @@ sessionInputThread  = do
                 putStrLn $ "StreamReset " ++ show (_error_code_id)
                 cancelled_streams <- takeMVar cancelled_streams_mvar
                 putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
+            closePostDataSource stream_id
+            liftIO $ do
                 maybe_thread_id <- H.lookup stream2workerthread stream_id
                 case maybe_thread_id  of
                     Nothing ->
@@ -641,6 +642,7 @@ sessionInputThread  = do
                     Just thread_id -> do
                         -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
                         throwTo thread_id StreamCancelledException
+                        H.delete stream2workerthread stream_id
 
             continue
 
@@ -652,48 +654,55 @@ sessionInputThread  = do
             -- TODO: Handle the cases where the stream_id doesn't match an already existent
             -- stream. In such cases it is justified to reset the connection with a  protocol_error.
 
-            streamWorkerSendData stream_id somebytes
-            -- After that data has been received and forwarded downstream, we can issue a windows update
-            --
-            -- TODO: We can use wider frames to avoid congestion...
-            -- .... and we can also be more compositional with these short bursts of data....
-            --
-            -- TODO: Consider that the best place to output these frames can be somewhere else...
-            --
-            -- TODO: Use a special, with-quota queue here to do flow control. Don't send meaningless
-            --       WindowUpdateFrame's
-            sendOutPriorityTrainMany [
-                  (
-                    (NH2.EncodeInfo
-                        NH2.defaultFlags
-                        nh2_stream_id
-                        Nothing
-                    ),
-                    (NH2.WindowUpdateFrame
-                        (fromIntegral (B.length somebytes))
-                    )
-                  ),
+            was_ok <- streamWorkerSendData stream_id somebytes
 
-                  (
-                    (NH2.EncodeInfo
-                        NH2.defaultFlags
-                        0
-                        Nothing
-                    ),
-                    (NH2.WindowUpdateFrame
-                        (fromIntegral (B.length somebytes))
-                    )
-                  )
-                ]
-
-            if frameEndsStream frame
+            if was_ok
               then do
-                -- Good place to close the source ...
-                closePostDataSource stream_id
-              else
+                -- After that data has been received and forwarded downstream, we can issue a windows update
+                --
+                --
+                -- TODO: Consider that the best place to output these frames can be somewhere else...
+                --
+                -- TODO: Use a special, with-quota queue here to do flow control. Don't send meaningless
+                --       WindowUpdateFrame's
+                sendOutPriorityTrainMany [
+                      (
+                        (NH2.EncodeInfo
+                            NH2.defaultFlags
+                            nh2_stream_id
+                            Nothing
+                        ),
+                        (NH2.WindowUpdateFrame
+                            (fromIntegral (B.length somebytes))
+                        )
+                      ),
+
+                      (
+                        (NH2.EncodeInfo
+                            NH2.defaultFlags
+                            0
+                            Nothing
+                        ),
+                        (NH2.WindowUpdateFrame
+                            (fromIntegral (B.length somebytes))
+                        )
+                      )
+                    ]
+
+                if frameEndsStream frame
+                  then do
+                    -- Good place to close the source ...
+                    closePostDataSource stream_id
+                  else
+                    return ()
+
+                continue
+              else do
+                -- For some reason there is no PostInput processing mechanism, therefore,
+                -- we were not expecting data at this point
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
-            continue
 
         MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _)) | NH2.testAck flags-> do
             -- Deal with pings: this is an Ack, so do nothing
@@ -805,7 +814,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
     stream2workerthread       <- view stream2WorkerThread
 
     if opens_stream
-      then do
+      then {-# SCC gpAb #-} do
         maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         case maybe_rcv_headers_of of
           Just _ -> do
@@ -827,7 +836,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                 -- We are not golden
                 -- INSTRUMENTATION( errorM "HTTP2.Session" "Protocol error: bad stream id")
                 {-# SCC ccB2 #-} closeConnectionBecauseIsInvalid NH2.ProtocolError
-      else do
+      else {-# SCC gpcb #-} do
         maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         case maybe_rcv_headers_of of
             Just a_stream_id
@@ -839,7 +848,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
 
             Nothing -> error "InternalError, this should be set"
 
-    if frameEndsHeaders frame then
+    if frameEndsHeaders frame then {-# SCC gpNNAk #-}
       do
         -- Ok, let it be known that we are not receiving more headers
         liftIO $ modifyMVar_
@@ -923,13 +932,20 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
         --       handled here by closing the session.
         --
         -- TODO: Log exceptions handled here.
+
         liftIO $ do
+            -- The mvar below: avoid starting until the entry has
+            -- been properly inserted in the table...
+            ready <- newMVar ()
             thread_id <- forkIOExc "s2f7" $ E.catch
-                (runReaderT
-                    (workerThread
-                           request'
-                           coherent_worker)
-                    for_worker_thread
+                ({-# SCC growP1 #-} do
+                    putMVar ready ()
+                    runReaderT
+                        (workerThread
+                               request'
+                               coherent_worker)
+                        for_worker_thread
+                    H.delete stream2workerthread stream_id
                 )
                 (
                     (   \ _ ->  do
@@ -938,12 +954,15 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                         -- handler that doesn't somewhere below. If the exception bubles here,
                         -- it is because the situation is out of control. We may as well
                         -- exit the server, but I'm not being so extreme now.
+                        H.delete stream2workerthread stream_id
                         writeChan session_input InternalAbort_SIC
                     )
                     :: HTTP500PrecursorException -> IO ()
                 )
-
             H.insert stream2workerthread stream_id thread_id
+            takeMVar ready
+
+
 
         return ()
     else
@@ -1267,25 +1286,24 @@ closePostDataSource stream_id = do
                 H.delete  stream2postinputmechanism stream_id
 
         Nothing ->
-            -- TODO: This is a protocol error, handle it properly
-            error "Internal error/closePostDataSource"
+            -- Assume this is ok
+            return ()
 
 
-streamWorkerSendData :: Int -> B.ByteString -> ReaderT SessionData IO ()
+streamWorkerSendData :: Int -> B.ByteString -> ReaderT SessionData IO Bool
 streamWorkerSendData stream_id bytes = do
     s2pim <- view stream2PostInputMechanism
     pim_maybe <- liftIO $ H.lookup s2pim stream_id
 
     case pim_maybe of
 
-        Just pim  ->
+        Just pim  -> do
             sendBytesToPim pim bytes
+            return True
 
         Nothing ->
-            -- This is an internal error, the mechanism should be
-            -- created when the headers end (and if the headers
-            -- do not finish the stream)
-            error "Internal error"
+            -- There is no input mechanism
+            return False
 
 
 sendBytesToPim :: PostInputMechanism -> B.ByteString -> ReaderT SessionData IO ()
