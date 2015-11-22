@@ -527,7 +527,7 @@ outputGatherer session_output = do
                    finishFlowControlForStream stream_id
                    cont
 
-               DataFrame_StFB ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _), ef ) -> do
+               DataFrame_StFB ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _datum), ef ) -> do
                    -- This frame is flow-controlled... I may be unable to send this frame in
                    -- some circumstances...
                    let
@@ -538,6 +538,9 @@ outputGatherer session_output = do
 
                    stream2output_mvar <- view stream2outputBytes
                    lookup_result <- liftIO $ withMVar stream2output_mvar $ \ s2o -> H.lookup s2o stream_id
+                   --
+                   --liftIO . putStrLn $ " fsz " ++ (show $ B.length _datum)
+                   --
                    (stream_bytes_chan, frame_ordinal_mvar) <- case lookup_result of
                        Nothing ->
                            error "It is the end of the world at Framer.hs"
@@ -741,7 +744,7 @@ flowControlOutput stream_id priority capacity ordinal leftovers commands_chan by
             flowControlOutput  stream_id priority (capacity - amount) (ordinal+1 ) "" commands_chan bytes_chan
           else do
             -- I can not send because flow-control is full, wait for a command instead
-            liftIO $ putStrLn "GoingToBlock"
+            -- liftIO $ putStrLn "GoingToBlock"
             command <- liftIO $ {-# SCC t2 #-} readChan commands_chan
             case  {-# SCC t3 #-} command of
                 AddBytes_FCM delta_cap -> do

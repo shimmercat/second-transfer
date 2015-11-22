@@ -158,7 +158,7 @@ defaultSessionsConfig = SessionsConfig {
             _dataDeliveryCallback_SC = Nothing
         }
   , _sessionsEnrichedHeaders = defaultSessionsEnrichedHeaders
-  , _dataFrameSize = 2048
+  , _dataFrameSize = 16*1024
   , _pushEnabled = True
   , _firstPushStream = 8
   , _networkChunkSize = 12*1024

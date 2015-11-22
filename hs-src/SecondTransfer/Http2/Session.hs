@@ -48,6 +48,7 @@ import           Control.DeepSeq                        (
                                                          --($!!),
                                                         deepseq )
 import           Control.Monad.Trans.Reader
+--import           Control.Monad.Trans.Class              (lift)
 import qualified Control.Monad.Catch                    as CMC
 
 import           Control.Concurrent.MVar
@@ -567,6 +568,7 @@ sessionInputThread  = do
 
         FirstFrame_SIC _ -> do
             -- Bad, incorrect id or god knows only what ....
+            -- liftIO $ putStrLn "cc1"
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
@@ -575,6 +577,7 @@ sessionInputThread  = do
             -- to the framer.
             --
             -- This message is normally got from the Framer
+            -- liftIO $ putStrLn "cc2"
             liftIO $ do
                 H.mapM_
                     (\ (_, thread_id) -> do
@@ -589,6 +592,7 @@ sessionInputThread  = do
         InternalAbort_SIC -> do
             -- Message triggered because the worker failed to behave.
             -- When this is sent, the connection is closed
+            -- liftIO $ putStrLn "cc3"
             closeConnectionBecauseIsInvalid NH2.InternalError
             return ()
 
@@ -597,6 +601,7 @@ sessionInputThread  = do
             -- here we believe that it is not necessary to tear down the
             -- entire session and therefore it's enough with a stream
             -- reset
+            -- liftIO $ putStrLn "cc4"
             sendOutPriorityTrain
                 (NH2.EncodeInfo
                     NH2.defaultFlags
@@ -627,7 +632,7 @@ sessionInputThread  = do
         MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             liftIO $ do
-                putStrLn $ "StreamReset " ++ show (_error_code_id)
+                -- putStrLn $ "StreamReset " ++ show (_error_code_id)
                 cancelled_streams <- takeMVar cancelled_streams_mvar
                 putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
             closePostDataSource stream_id
@@ -733,9 +738,10 @@ sessionInputThread  = do
             handleSettingsFrame settings_list
             continue
 
-        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _ _ ))
+        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ err _ ))
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
+                -- liftIO $ putStrLn $ "cc5 "  ++ show err
                 closeConnectionBecauseIsInvalid NH2.NoError
                 return ()
 
@@ -745,9 +751,9 @@ sessionInputThread  = do
                 _ <- closeConnectionForClient NH2.NoError
                 return ()
 
-
         MiddleFrame_SIC _somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
+            -- liftIO $ putStrLn "cc6"
             continue
 
   where
@@ -1546,16 +1552,25 @@ sendDataOfStream stream_id headers_sent effect = do
     --delay = effect ^. middlePauseForDelivery_Ef
     consumer data_output = do
         maybe_bytes <- await
+        use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
+        use_size <- liftIO $ DIO.readIORef use_size_ioref
+        -- liftIO $ putStrLn $ "Usesize: " ++ show use_size
         case maybe_bytes of
             Nothing ->
                 -- This is how we finish sending data
                 liftIO $ putMVar data_output (stream_id, Nothing, effect)
             Just bytes
-                | B.length bytes > 0 -> do
+                | lng <- B.length bytes, lng > 0 && lng < use_size  -> do
                     liftIO $ do
                         putMVar data_output (stream_id, Just bytes, effect)
                     consumer data_output
+                | lng <- B.length bytes, lng >= use_size -> do
+                    let
+                      fragments =  bytestringChunk use_size  bytes
+                    liftIO $ mapM_ (\ fragment -> putMVar data_output (stream_id, Just fragment, effect)) fragments
+                    consumer data_output
                 | otherwise ->
+                    -- Finish sending data, finish in general
                     liftIO $ putMVar data_output (stream_id, Nothing, effect)
 
 
