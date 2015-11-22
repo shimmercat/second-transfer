@@ -81,7 +81,7 @@ public:
         result.push_back("Camellia-256/GCM");
         result.push_back("AES-256/OCB(12)");
         result.push_back("AES-256/CCM");
-        // For use with Safari:
+        // For use with old browsers....
         result.push_back("AES-256");
         return result;
     }
@@ -189,8 +189,10 @@ std::string defaultProtocolSelector(void* botan_pad_ref, std::vector<std::string
             pass_to_haskell += '\0';
         }
         pass_to_haskell += prots[i];
+        //printf("Prot: %s \n", prots[i].c_str());
     }
     int idx = iocba_select_protocol_cb( botan_pad_ref, (void*)pass_to_haskell.c_str(), pass_to_haskell.size());
+    //printf("Prot selected: %d \n", idx);
     if ( idx >= 0 )
         return prots[idx];
     else
