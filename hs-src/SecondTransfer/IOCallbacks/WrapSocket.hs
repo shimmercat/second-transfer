@@ -1,9 +1,12 @@
-{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
+{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving, GADTs  #-}
 module SecondTransfer.IOCallbacks.WrapSocket (
                  socketIOCallbacks
 
                , SocketIOCallbacks
                , socket_SS
+
+               , HasSocketPeer                                     (..)
+               , SomeHasSocketPeer                                 (..)
      ) where
 
 
@@ -36,12 +39,26 @@ makeLenses ''SocketIOCallbacks
 instance IOChannels SocketIOCallbacks where
     handshake s = return ( s ^. callbacks_SS )
 
+
+class HasSocketPeer a where
+    getSocketPeerAddress :: a -> IO NS.SockAddr
+
+data SomeHasSocketPeer where
+  -- = forall a . HasSocketPeer a => SomeHasSocketPeer a
+  SomeHasSocketPeer :: HasSocketPeer a => a -> SomeHasSocketPeer
+
+
+instance HasSocketPeer SocketIOCallbacks where
+    getSocketPeerAddress s = NS.getPeerName $ s ^. socket_SS
+
+
 -- | This function wraps an active socket (e.g., one where it is possible to send and receive data)
 --   in something with a set of active callbacks
 socketIOCallbacks :: NS.Socket -> IO SocketIOCallbacks
 socketIOCallbacks socket = do
     let
-        uhandler = ((\ e -> do
+        uhandler :: E.SomeException -> IO a
+        uhandler = ((\ _e -> do
                                -- Preserve sockets!!
                                close_action
                                E.throwIO NoMoreDataException
@@ -65,7 +82,7 @@ socketIOCallbacks socket = do
 
         -- Exceptions are close are possible
         close_action = E.catch ( do
-            --REPORT_EVENT("socket-close-called")
+            REPORT_EVENT("socket-close-called")
             NS.shutdown socket NS.ShutdownBoth
             REPORT_EVENT("socket-shutdown-executed")
             NS.close socket
