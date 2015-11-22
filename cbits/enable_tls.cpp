@@ -81,6 +81,8 @@ public:
         result.push_back("Camellia-256/GCM");
         result.push_back("AES-256/OCB(12)");
         result.push_back("AES-256/CCM");
+        // For use with Safari:
+        result.push_back("AES-256");
         return result;
     }
 
@@ -207,10 +209,10 @@ extern "C" int iocba_receive_data(
         //printf("Before taking data=%p \n", channel);
         channel->received_data( (const unsigned char*) data, length);
         //printf("After taking data=%p \n", channel);
-    } catch (...)
+    } catch (std::exception const& e)
     {
         // TODO: control messages
-        printf("BotanTLS engine instance crashed (normal if ALPN didn't go well)\n");
+        printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
         return -1;
     }
     return 0;

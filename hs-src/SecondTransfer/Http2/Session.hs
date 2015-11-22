@@ -948,16 +948,17 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                     H.delete stream2workerthread stream_id
                 )
                 (
-                    (   \ _ ->  do
+                    (   \ (E.SomeException e) ->  do
                         -- Actions to take when the thread breaks....
                          -- We cancel the entire session because there is a more specific
                         -- handler that doesn't somewhere below. If the exception bubles here,
                         -- it is because the situation is out of control. We may as well
                         -- exit the server, but I'm not being so extreme now.
                         H.delete stream2workerthread stream_id
+                        putStrLn $ "ERROR: Aborting session after non-handled exception bubled up " ++ E.displayException e
                         writeChan session_input InternalAbort_SIC
                     )
-                    :: HTTP500PrecursorException -> IO ()
+                    :: E.SomeException -> IO ()
                 )
             H.insert stream2workerthread stream_id thread_id
             takeMVar ready

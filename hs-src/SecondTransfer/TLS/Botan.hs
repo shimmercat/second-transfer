@@ -14,7 +14,7 @@ import           Foreign
 import           Foreign.C.Types                                           (CChar, CInt(..))
 import           Foreign.C.String                                          (CString)
 
-import           Data.List                                                 (elemIndex)
+--import           Data.List                                                 (elemIndex)
 import           Data.Tuple                                                (swap)
 import           Data.Typeable                                             (Proxy(..))
 import           Data.Maybe                                                (fromMaybe)
@@ -35,8 +35,7 @@ import           SecondTransfer.Exception                                  (
                                                                            , NoMoreDataException(..)
                                                                            , keyedReportExceptions
                                                                            )
-import           SecondTransfer.TLS.Types                                  ( FinishRequest
-                                                                           , ProtocolSelector
+import           SecondTransfer.TLS.Types                                  ( ProtocolSelector
                                                                            , TLSContext (..) )
 
 #include "instruments.cpphs"
@@ -148,7 +147,7 @@ foreign export ccall iocba_alert_cb :: BotanPadRef -> CInt -> IO ()
 iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
     let
         problem_mvar = botan_pad ^. problem_BP
-    --putStrLn "alert"
+    putStrLn $ "tls alert " ++ (show alert_code)
     if (alert_code < 0)
           then do
              tryPutMVar problem_mvar ()
