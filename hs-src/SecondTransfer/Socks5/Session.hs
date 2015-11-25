@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
 module SecondTransfer.Socks5.Session (
                  tlsSOCKS5Serve
+               , ConnectOrForward                                  (..)
      ) where
 
 ---import           Control.Concurrent
@@ -8,10 +9,11 @@ import qualified Control.Exception                                  as E
 import           Control.Lens                                       ( {-makeLenses,-} (^.))
 
 import qualified Data.ByteString                                    as B
-import           Data.ByteString.Char8                              ( {-unpack, -} pack)
+import           Data.ByteString.Char8                              ( unpack,  pack)
 import qualified Data.Attoparsec.ByteString                         as P
 import qualified Data.Binary                                        as U
 import qualified Data.Binary.Put                                    as U
+import           Data.Word                                          (Word16)
 
 import qualified Network.Socket                                     as NS
 
@@ -23,6 +25,7 @@ import           SecondTransfer.Socks5.Serializers
 
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.SocketServer
+import           SecondTransfer.IOCallbacks.Coupling                (couple)
 
 -- For debugging purposes
 import           SecondTransfer.IOCallbacks.Botcher
@@ -31,6 +34,12 @@ import           SecondTransfer.IOCallbacks.Botcher
 -- data S5SessionState = SessionState {
 
 --     }
+
+data ConnectOrForward =
+      Connect_COF IOCallbacks
+    | Forward_COF
+    | Drop_COF
+
 
 tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
 tryRead iocallbacks leftovers p = do
@@ -63,8 +72,8 @@ pushDatum iocallbacks putthing x = do
 
 -- | Forwards a set of IOCallbacks (actually, it is exactly the same passed in) after the
 --   SOCKS5 negotiation, if the negotiation succeeds and the indicated "host" is approved
---   by the first parameter
-negotiateSocksAndForward ::  (B.ByteString -> Bool) -> IOCallbacks -> IO (Maybe IOCallbacks)
+--   by the first parameter. Quite simple.
+negotiateSocksAndForward ::  (B.ByteString -> Bool) -> IOCallbacks -> IO ConnectOrForward
 negotiateSocksAndForward approver socks_here =
   do
     let
@@ -102,32 +111,164 @@ negotiateSocksAndForward approver socks_here =
                         -- Now that I have the attendant, let's just activate it ...
 
                         -- CORRECT WAY:
-                        return . Just $ socks_here
+                        return . Connect_COF $ socks_here
                         -- WRONG WAY:
                         --putStrLn "ATTENTION: BotcherWorking. Bad things SHOULD happen"
                         --botcher <- insertNoise 2509 "jk5j83489u89p43598//" socks_here
                         --return . Just $ botcher
                     else do
                         -- Logging? We need to get that real right.
-                        return Nothing
+                        return Drop_COF
 
 
             -- Other commands not handled for now
             _             -> do
                 putStrLn "SOCKS5 HAS NEGLECTED TO REJECT A CONNECTION"
-                return Nothing
+                return Drop_COF
 
     case ei of
-        Left SOCKS5ProtocolException -> return Nothing
+        Left SOCKS5ProtocolException -> return Drop_COF
         Right result -> return result
 
 
--- | Simple alias to SocketIOCallbacks where we expect
---   encrypted contents over a SOCKS5 Socket
+ -- | Forwards a set of IOCallbacks (actually, it is exactly the same passed in) after the
+ --   SOCKS5 negotiation, if the negotiation succeeds and the indicated "host" is approved
+ --   by the first parameter. If the approver returns false, this function will try to
+ --   actually connect to the host and let the software act as a true proxy.
+negotiateSocksForwardOrConnect ::  (B.ByteString -> Bool) -> IOCallbacks -> IO ConnectOrForward
+negotiateSocksForwardOrConnect approver socks_here =
+  do
+    let
+        tr = tryRead socks_here
+        ps = pushDatum socks_here
+    -- Start by reading the standard socks5 header
+    ei <- E.try $ do
+        (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
+        -- I will ignore the auth methods for now
+        let
+            server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
+        ps putServerSelectsMethod_Packet server_selects
+        (req_packet, _next2) <- tr next1 parseClientRequest_Packet
+        case req_packet ^. cmd_SP3 of
+
+            Connect_S5PC  -> do
+                -- Can accept a connect, to what?
+                let
+                    address = req_packet ^. address_SP3
+                    port_number = req_packet ^. port_SP3
+                    externalConnectProcessing  =
+                      do
+                        maybe_forwarding_callbacks <- connectOnBehalfOfClient address port_number
+                        case maybe_forwarding_callbacks of
+                            Just (indicated_address, io_callbacks) -> do
+                                let
+                                    server_reply =  ServerReply_Packet {
+                                        _version_SP4    = ProtocolVersion
+                                      , _replyField_SP4 = Succeeded_S5RF
+                                      , _reservedField_SP4 = 0
+                                      , _address_SP4 = IPv4_IA 0x7f000001
+                                         -- Wrong port, but...
+                                      , _port_SP4 = 10001
+                                        }
+                                ps putServerReply_Packet server_reply
+                                -- Now couple the two streams ...
+                                couple socks_here io_callbacks
+                                return Forward_COF
+                            _ ->
+                                return Drop_COF
+
+
+                -- /let
+                case address of
+                    DomainName_IA named_host ->
+                        if  approver named_host
+                          then do
+                            -- First I need to answer to the client that we are happy and ready
+                            let
+                                server_reply = ServerReply_Packet {
+                                    _version_SP4    = ProtocolVersion
+                                  , _replyField_SP4 = Succeeded_S5RF
+                                  , _reservedField_SP4 = 0
+                                  , _address_SP4 = IPv4_IA 0x7f000001
+                                  , _port_SP4 = 10001
+                                    }
+                            ps putServerReply_Packet server_reply
+                            -- Now that I have the attendant, let's just activate it ...
+                            return . Connect_COF $ socks_here
+                          else do
+                            -- Forward to an external host
+                            externalConnectProcessing
+                    IPv4_IA _ -> do
+                        -- TODO: Some address sanitization
+                        externalConnectProcessing
+
+
+            -- Other commands not handled for now
+            _             -> do
+                putStrLn "SOCKS5 HAS NEGLECTED TO REJECT A CONNECTION"
+                return Drop_COF
+
+    case ei of
+        Left SOCKS5ProtocolException -> return Drop_COF
+        Right result -> return result
+
+
+connectOnBehalfOfClient :: IndicatedAddress -> Word16 -> IO (Maybe (IndicatedAddress , IOCallbacks))
+connectOnBehalfOfClient address port_number =
+   do
+     maybe_sock_addr <- case address of
+         IPv4_IA addr ->
+             return . Just $  NS.SockAddrInet (fromIntegral port_number) addr
+
+         DomainName_IA dn -> do
+             -- Let's try to connect on behalf of the client...
+             let
+                 hints = NS.defaultHints {
+                     NS.addrFlags = [NS.AI_ADDRCONFIG]
+                   }
+             addrs <- E.catch
+                ( NS.getAddrInfo (Just hints) (Just . unpack $ dn) Nothing )
+                ((\_ -> return [])::E.IOException -> IO [NS.AddrInfo])
+             case addrs of
+                 ( first : _) -> do
+                     return . Just $ NS.addrAddress first
+                 _ ->
+                     return Nothing
+
+     case maybe_sock_addr of
+         Just sock_addr@(NS.SockAddrInet _ ha) -> do
+             E.catch
+                 (do
+                     client_socket <-  NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
+                     let
+                         translated_address =  (NS.SockAddrInet (fromIntegral port_number) ha)
+                     NS.connect client_socket translated_address
+                     is_connected <- NS.isConnected client_socket
+                     peer_name <- NS.getPeerName client_socket
+                     socket_io_callbacks <- socketIOCallbacks client_socket
+                     io_callbacks <- handshake socket_io_callbacks
+                     return . Just $ (toSocks5Addr translated_address , io_callbacks)
+                 )
+                 ((\_ -> do
+                     return Nothing)::E.IOException -> IO (Maybe (IndicatedAddress , IOCallbacks) ) )
+
+         _ -> do
+             -- Temporary message
+             putStrLn "SOCKS5 could not be forwarded/address not resolved, or resolved to strange format"
+             return Nothing
+
+
+toSocks5Addr:: NS.SockAddr -> IndicatedAddress
+toSocks5Addr (NS.SockAddrInet _ ha) = IPv4_IA ha
+toSocks5Addr _                      = error "toSocks5Addr not fully implemented"
+
+
+ -- | Simple alias to SocketIOCallbacks where we expect
+ --   encrypted contents over a SOCKS5 Socket
 newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks IOCallbacks
 
 instance IOChannels TLSServerSOCKS5Callbacks where
-    handshake (TLSServerSOCKS5Callbacks cb) = return cb
+     handshake (TLSServerSOCKS5Callbacks cb) = return cb
 
 instance TLSEncryptedIO TLSServerSOCKS5Callbacks
 instance TLSServerIO TLSServerSOCKS5Callbacks
@@ -139,20 +280,26 @@ instance TLSServerIO TLSServerSOCKS5Callbacks
 -- Pass a bound and listening TCP socket where you expect a SOCKS5 exchange to have to tke place.
 -- And pass an action that can do something with the callbacks. The passed-in action is expected to fork a thread and return
 -- inmediately.
-tlsSOCKS5Serve :: (B.ByteString -> Bool)  -> NS.Socket -> ( TLSServerSOCKS5Callbacks -> IO () ) -> IO ()
-tlsSOCKS5Serve approver listen_socket onsocks5_action =
+tlsSOCKS5Serve :: (B.ByteString -> Bool) -> Bool   -> NS.Socket -> ( TLSServerSOCKS5Callbacks -> IO () ) -> IO ()
+tlsSOCKS5Serve approver forward_connections listen_socket onsocks5_action =
      tcpServe listen_socket socks_action
   where
      socks_action active_socket = do
          socket_io_callbacks <- socketIOCallbacks active_socket
          io_callbacks <- handshake socket_io_callbacks
-         maybe_negotiated_io <- negotiateSocksAndForward approver io_callbacks
+         maybe_negotiated_io <-
+           if forward_connections
+               then negotiateSocksForwardOrConnect approver io_callbacks
+               else negotiateSocksAndForward       approver io_callbacks
          case maybe_negotiated_io of
-             Just negotiated_io ->
+             Connect_COF negotiated_io ->
                  let
                      tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks negotiated_io
                  in  onsocks5_action tls_server_socks5_callbacks
-
-             Nothing -> do
+             Drop_COF -> do
                  (io_callbacks ^. closeAction_IOC)
+                 return ()
+             Forward_COF -> do
+                 -- TODO: More data needs to come here
+                 -- Do not close
                  return ()

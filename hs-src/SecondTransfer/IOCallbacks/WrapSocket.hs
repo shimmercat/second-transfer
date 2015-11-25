@@ -57,12 +57,13 @@ instance HasSocketPeer SocketIOCallbacks where
 socketIOCallbacks :: NS.Socket -> IO SocketIOCallbacks
 socketIOCallbacks socket = do
     let
-        uhandler :: E.SomeException -> IO a
+        uhandler :: E.IOException -> IO a
         uhandler = ((\ _e -> do
                                -- Preserve sockets!!
+                               -- putStrLn $ E.displayException _e
                                close_action
                                E.throwIO NoMoreDataException
-                    ) :: E.SomeException -> IO a )
+                    ) :: E.IOException -> IO a )
 
         push_action lazy_bs = keyedReportExceptions "pushAtSocket" $
             E.catch

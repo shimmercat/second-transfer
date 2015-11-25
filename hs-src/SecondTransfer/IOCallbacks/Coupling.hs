@@ -26,7 +26,7 @@ import qualified Data.ByteString.Builder                      as Bu
 
 
 import           SecondTransfer.IOCallbacks.Types
-import           SecondTransfer.Exception                     (IOProblem, NoMoreDataException(..))
+import           SecondTransfer.Exception                     (IOProblem, NoMoreDataException(..), forkIOExc)
 
 
 -- | A coupling between two IOCallbacks. It is breakable...
@@ -39,8 +39,8 @@ makeLenses ''Coupling
 -- TODO: Consider if we must report errors! how do we do that? Right now I'll re-throw exceptions,
 --       but since this runs in its own thread, nobody will notice. A better coping strategy would
 --       be to perhaps store the exception somewhere.
-pump :: MVar () -> BestEffortPullAction -> PushAction -> IO ()
-pump break_now pull push = do
+pump :: String -> MVar () -> BestEffortPullAction -> PushAction -> IO ()
+pump tag break_now pull push = do
     let
         go = do
             must_finish <- tryTakeMVar break_now
@@ -55,16 +55,16 @@ pump break_now pull push = do
                             case either_ok of
                                 Right _ ->  go
 
-                                Left e -> do
+                                Left _e -> do
                                     _succeeded <- tryPutMVar break_now ()
-                                    E.throwIO e
+                                    return ()
 
                         (Just (), _) ->
                             return ()
 
-                        (Nothing, Left e ) -> do
+                        (Nothing, Left _e ) -> do
                             _succeeded <- tryPutMVar break_now ()
-                            E.throwIO e
+                            return ()
 
                 Just _ ->
                     return ()
@@ -78,8 +78,8 @@ couple a b =
   do
     break_now_mvar <- newEmptyMVar
 
-    _pump_thread1 <- forkIO $ pump break_now_mvar ( a ^. bestEffortPullAction_IOC ) ( b ^. pushAction_IOC)
-    _pump_thread2 <- forkIO $ pump break_now_mvar ( b ^. bestEffortPullAction_IOC ) ( a ^. pushAction_IOC)
+    _pump_thread1 <- forkIOExc "pump1" $ pump "1to2" break_now_mvar ( a ^. bestEffortPullAction_IOC ) ( b ^. pushAction_IOC)
+    _pump_thread2 <- forkIOExc "pump2 "$ pump "2to1" break_now_mvar ( b ^. bestEffortPullAction_IOC ) ( a ^. pushAction_IOC)
 
     return Coupling {
         _breakNow_Cou = break_now_mvar

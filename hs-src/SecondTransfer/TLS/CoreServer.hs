@@ -6,7 +6,7 @@ module SecondTransfer.TLS.CoreServer (
                  tlsServeWithALPN
                , tlsServeWithALPNNSSockAddr
                , tlsSessionHandler
-               , tlsServeWithALPNUnderSOCKS5
+               -- , tlsServeWithALPNUnderSOCKS5
                , tlsServeWithALPNUnderSOCKS5SockAddr
                , coreListen
 
@@ -77,22 +77,22 @@ tlsServeWithALPNNSSockAddr proxy  cert_filename key_filename sock_addr attendant
     coreListen proxy cert_filename key_filename listen_socket tlsServe attendants
 
 
-tlsServeWithALPNUnderSOCKS5 ::   forall ctx session  . (TLSContext ctx session)
-                 => Proxy ctx             -- ^ This is a simple proxy type from Typeable that is used to select the type
-                                          --   of TLS backend to use during the invocation
-                 -> FilePath              -- ^ Path to certificate chain
-                 -> FilePath              -- ^ Path to PKCS #8 key
-                 -> String                -- ^ Name of the network interface
-                 -> [(String, Attendant)] -- ^ List of attendants and their handlers
-                 -> Int                   -- ^ Port to listen for connections
-                 -> [B.ByteString]        -- ^ Names of "internal" hosts.
-                 -> IO ()
-tlsServeWithALPNUnderSOCKS5 proxy  cert_filename key_filename interface_name attendants interface_port internal_hosts = do
-    let
-        approver :: B.ByteString -> Bool
-        approver name = isJust $ elemIndex name internal_hosts
-    listen_socket <- createAndBindListeningSocket interface_name interface_port
-    coreListen proxy cert_filename key_filename listen_socket (tlsSOCKS5Serve approver) attendants
+-- tlsServeWithALPNUnderSOCKS5 ::   forall ctx session  . (TLSContext ctx session)
+--                  => Proxy ctx             -- ^ This is a simple proxy type from Typeable that is used to select the type
+--                                           --   of TLS backend to use during the invocation
+--                  -> FilePath              -- ^ Path to certificate chain
+--                  -> FilePath              -- ^ Path to PKCS #8 key
+--                  -> String                -- ^ Name of the network interface
+--                  -> [(String, Attendant)] -- ^ List of attendants and their handlers
+--                  -> Int                   -- ^ Port to listen for connections
+--                  -> [B.ByteString]        -- ^ Names of "internal" hosts.
+--                  -> IO ()
+-- tlsServeWithALPNUnderSOCKS5 proxy  cert_filename key_filename interface_name attendants interface_port internal_hosts = do
+--     let
+--         approver :: B.ByteString -> Bool
+--         approver name = isJust $ elemIndex name internal_hosts
+--     listen_socket <- createAndBindListeningSocket interface_name interface_port
+--     coreListen proxy cert_filename key_filename listen_socket (tlsSOCKS5Serve approver) attendants
 
 
 tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx session)
@@ -102,14 +102,15 @@ tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx s
                  -> FilePath              -- ^ Path to PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
                  -> [(String, Attendant)] -- ^ List of attendants and their handlers
-                 -> [B.ByteString]        -- ^ Names of "internal" hosts.
+                 -> [B.ByteString]        -- ^ Names of "internal" hosts
+                 -> Bool                  -- ^ Should I forward connection requests?
                  -> IO ()
-tlsServeWithALPNUnderSOCKS5SockAddr proxy  cert_filename key_filename host_addr attendants  internal_hosts = do
+tlsServeWithALPNUnderSOCKS5SockAddr proxy  cert_filename key_filename host_addr attendants internal_hosts forward_no_internal = do
     let
         approver :: B.ByteString -> Bool
         approver name = isJust $ elemIndex name internal_hosts
     listen_socket <- createAndBindListeningSocketNSSockAddr host_addr
-    coreListen proxy cert_filename key_filename listen_socket (tlsSOCKS5Serve approver) attendants
+    coreListen proxy cert_filename key_filename listen_socket (tlsSOCKS5Serve approver forward_no_internal) attendants
 
 
 tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, Attendant)]  ->  ctx ->  encrypted_io -> IO ()
