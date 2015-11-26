@@ -54,9 +54,9 @@ newtype S5ConnectionId = S5ConnectionId Int64
 -- | SOCKS5 Connections, and where are they handled
 data Socks5ConnectEvent =
     Established_S5Ev NS.SockAddr S5ConnectionId
-  | HandlingHere_S5Ev S5ConnectionId
-  | ToExternal_S5Ev   S5ConnectionId
-  | Dropped_S5Ev      S5ConnectionId
+  | HandlingHere_S5Ev B.ByteString S5ConnectionId
+  | ToExternal_S5Ev B.ByteString Word16  S5ConnectionId
+  | Dropped_S5Ev B.ByteString  S5ConnectionId
 
 type Socks5LogCallback =  Socks5ConnectEvent -> IO ()
 

@@ -44,9 +44,9 @@ initSocks5ServerState :: Socks5ServerState
 initSocks5ServerState = Socks5ServerState 0
 
 data ConnectOrForward =
-    Connect_COF IOCallbacks
-  | Forward_COF
-  | Drop_COF
+    Connect_COF B.ByteString IOCallbacks
+  | Forward_COF B.ByteString Word16
+  | Drop_COF B.ByteString
 
 
 tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
@@ -119,23 +119,19 @@ negotiateSocksAndForward approver socks_here =
                         -- Now that I have the attendant, let's just activate it ...
 
                         -- CORRECT WAY:
-                        return . Connect_COF $ socks_here
-                        -- WRONG WAY:
-                        --putStrLn "ATTENTION: BotcherWorking. Bad things SHOULD happen"
-                        --botcher <- insertNoise 2509 "jk5j83489u89p43598//" socks_here
-                        --return . Just $ botcher
+                        return $ Connect_COF named_host socks_here
+
                     else do
                         -- Logging? We need to get that real right.
-                        return Drop_COF
+                        return $ Drop_COF named_host
 
 
             -- Other commands not handled for now
             _             -> do
-                putStrLn "SOCKS5 HAS NEGLECTED TO REJECT A CONNECTION"
-                return Drop_COF
+                return $ Drop_COF "<socks5-unimplemented>"
 
     case ei of
-        Left SOCKS5ProtocolException -> return Drop_COF
+        Left SOCKS5ProtocolException -> return $ Drop_COF "<protocol exception>"
         Right result -> return result
 
 
@@ -181,9 +177,9 @@ negotiateSocksForwardOrConnect approver socks_here =
                                 ps putServerReply_Packet server_reply
                                 -- Now couple the two streams ...
                                 couple socks_here io_callbacks
-                                return Forward_COF
+                                return $ Forward_COF (pack . show $ address) (fromIntegral port_number)
                             _ ->
-                                return Drop_COF
+                                return $ Drop_COF (pack . show $ address)
 
 
                 -- /let
@@ -202,7 +198,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                                     }
                             ps putServerReply_Packet server_reply
                             -- Now that I have the attendant, let's just activate it ...
-                            return . Connect_COF $ socks_here
+                            return $ Connect_COF named_host socks_here
                           else do
                             -- Forward to an external host
                             externalConnectProcessing
@@ -213,11 +209,11 @@ negotiateSocksForwardOrConnect approver socks_here =
 
             -- Other commands not handled for now
             _             -> do
-                putStrLn "SOCKS5 HAS NEGLECTED TO REJECT A CONNECTION"
-                return Drop_COF
+                --putStrLn "SOCKS5 HAS NEGLECTED TO REJECT A CONNECTION"
+                return $ Drop_COF "<socks5-unimplemented>"
 
     case ei of
-        Left SOCKS5ProtocolException -> return Drop_COF
+        Left SOCKS5ProtocolException -> return $ Drop_COF "<socks5-protocol-exception>"
         Right result -> return result
 
 
@@ -325,18 +321,18 @@ tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_soc
                    then negotiateSocksForwardOrConnect approver io_callbacks
                    else negotiateSocksAndForward       approver io_callbacks
              case maybe_negotiated_io of
-                 Connect_COF negotiated_io -> do
+                 Connect_COF fate negotiated_io -> do
                      let
                          tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
-                     log_event $ HandlingHere_S5Ev wconn_id
+                     log_event $ HandlingHere_S5Ev fate wconn_id
                      onsocks5_action tls_server_socks5_callbacks
-                 Drop_COF -> do
-                     log_event $ Dropped_S5Ev wconn_id
+                 Drop_COF fate -> do
+                     log_event $ Dropped_S5Ev fate wconn_id
                      (io_callbacks ^. closeAction_IOC)
                      return ()
-                 Forward_COF -> do
+                 Forward_COF fate port -> do
                      -- TODO: More data needs to come here
                      -- Do not close
-                     log_event $ ToExternal_S5Ev wconn_id
+                     log_event $ ToExternal_S5Ev fate port wconn_id
                      return ()
          return ()
