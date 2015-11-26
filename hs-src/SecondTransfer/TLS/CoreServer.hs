@@ -77,24 +77,6 @@ tlsServeWithALPNNSSockAddr proxy  cert_filename key_filename sock_addr attendant
     coreListen proxy cert_filename key_filename listen_socket tlsServe attendants
 
 
--- tlsServeWithALPNUnderSOCKS5 ::   forall ctx session  . (TLSContext ctx session)
---                  => Proxy ctx             -- ^ This is a simple proxy type from Typeable that is used to select the type
---                                           --   of TLS backend to use during the invocation
---                  -> FilePath              -- ^ Path to certificate chain
---                  -> FilePath              -- ^ Path to PKCS #8 key
---                  -> String                -- ^ Name of the network interface
---                  -> [(String, Attendant)] -- ^ List of attendants and their handlers
---                  -> Int                   -- ^ Port to listen for connections
---                  -> [B.ByteString]        -- ^ Names of "internal" hosts.
---                  -> IO ()
--- tlsServeWithALPNUnderSOCKS5 proxy  cert_filename key_filename interface_name attendants interface_port internal_hosts = do
---     let
---         approver :: B.ByteString -> Bool
---         approver name = isJust $ elemIndex name internal_hosts
---     listen_socket <- createAndBindListeningSocket interface_name interface_port
---     coreListen proxy cert_filename key_filename listen_socket (tlsSOCKS5Serve approver) attendants
-
-
 tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx session)
                  => Proxy ctx             -- ^ This is a simple proxy type from Typeable that is used to select the type
                                           --   of TLS backend to use during the invocation
