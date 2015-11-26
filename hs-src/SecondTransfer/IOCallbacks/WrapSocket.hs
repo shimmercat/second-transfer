@@ -44,8 +44,8 @@ class HasSocketPeer a where
     getSocketPeerAddress :: a -> IO NS.SockAddr
 
 data SomeHasSocketPeer where
-  -- = forall a . HasSocketPeer a => SomeHasSocketPeer a
-  SomeHasSocketPeer :: HasSocketPeer a => a -> SomeHasSocketPeer
+    -- = forall a . HasSocketPeer a => SomeHasSocketPeer a
+    SomeHasSocketPeer :: HasSocketPeer a => a -> SomeHasSocketPeer
 
 
 instance HasSocketPeer SocketIOCallbacks where
