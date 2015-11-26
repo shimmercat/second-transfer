@@ -2,11 +2,13 @@
 module SecondTransfer.Socks5.Session (
                  tlsSOCKS5Serve
                , ConnectOrForward                                  (..)
+               , Socks5ServerState
+               , initSocks5ServerState
      ) where
 
----import           Control.Concurrent
+import           Control.Concurrent
 import qualified Control.Exception                                  as E
-import           Control.Lens                                       ( {-makeLenses,-} (^.))
+import           Control.Lens                                       ( makeLenses, (^.), set)
 
 import qualified Data.ByteString                                    as B
 import           Data.ByteString.Char8                              ( unpack,  pack)
@@ -14,10 +16,11 @@ import qualified Data.Attoparsec.ByteString                         as P
 import qualified Data.Binary                                        as U
 import qualified Data.Binary.Put                                    as U
 import           Data.Word                                          (Word16)
+import           Data.Int                                           (Int64)
 
 import qualified Network.Socket                                     as NS
 
-import           SecondTransfer.Exception                           (SOCKS5ProtocolException (..) )
+import           SecondTransfer.Exception                           (SOCKS5ProtocolException (..), forkIOExc )
 
 import           SecondTransfer.Socks5.Types
 import           SecondTransfer.Socks5.Parsers
@@ -26,19 +29,24 @@ import           SecondTransfer.Socks5.Serializers
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.SocketServer
 import           SecondTransfer.IOCallbacks.Coupling                (couple)
+import           SecondTransfer.IOCallbacks.WrapSocket              (HasSocketPeer(..))
 
 -- For debugging purposes
-import           SecondTransfer.IOCallbacks.Botcher
+--import           SecondTransfer.IOCallbacks.Botcher
 
 
--- data S5SessionState = SessionState {
+data Socks5ServerState = Socks5ServerState {
+    _nextConnection_S5S       :: Int64
+    }
+makeLenses ''Socks5ServerState
 
---     }
+initSocks5ServerState :: Socks5ServerState
+initSocks5ServerState = Socks5ServerState 0
 
 data ConnectOrForward =
-      Connect_COF IOCallbacks
-    | Forward_COF
-    | Drop_COF
+    Connect_COF IOCallbacks
+  | Forward_COF
+  | Drop_COF
 
 
 tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
@@ -215,47 +223,47 @@ negotiateSocksForwardOrConnect approver socks_here =
 
 connectOnBehalfOfClient :: IndicatedAddress -> Word16 -> IO (Maybe (IndicatedAddress , IOCallbacks))
 connectOnBehalfOfClient address port_number =
-   do
-     maybe_sock_addr <- case address of
-         IPv4_IA addr ->
-             return . Just $  NS.SockAddrInet (fromIntegral port_number) addr
+  do
+    maybe_sock_addr <- case address of
+        IPv4_IA addr ->
+            return . Just $  NS.SockAddrInet (fromIntegral port_number) addr
 
-         DomainName_IA dn -> do
-             -- Let's try to connect on behalf of the client...
-             let
-                 hints = NS.defaultHints {
-                     NS.addrFlags = [NS.AI_ADDRCONFIG]
-                   }
-             addrs <- E.catch
-                ( NS.getAddrInfo (Just hints) (Just . unpack $ dn) Nothing )
-                ((\_ -> return [])::E.IOException -> IO [NS.AddrInfo])
-             case addrs of
-                 ( first : _) -> do
-                     return . Just $ NS.addrAddress first
-                 _ ->
-                     return Nothing
+        DomainName_IA dn -> do
+            -- Let's try to connect on behalf of the client...
+            let
+                hints = NS.defaultHints {
+                    NS.addrFlags = [NS.AI_ADDRCONFIG]
+                  }
+            addrs <- E.catch
+               ( NS.getAddrInfo (Just hints) (Just . unpack $ dn) Nothing )
+               ((\_ -> return [])::E.IOException -> IO [NS.AddrInfo])
+            case addrs of
+                ( first : _) -> do
+                    return . Just $ NS.addrAddress first
+                _ ->
+                    return Nothing
 
-     case maybe_sock_addr of
-         Just sock_addr@(NS.SockAddrInet _ ha) -> do
-             E.catch
-                 (do
-                     client_socket <-  NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
-                     let
-                         translated_address =  (NS.SockAddrInet (fromIntegral port_number) ha)
-                     NS.connect client_socket translated_address
-                     is_connected <- NS.isConnected client_socket
-                     peer_name <- NS.getPeerName client_socket
-                     socket_io_callbacks <- socketIOCallbacks client_socket
-                     io_callbacks <- handshake socket_io_callbacks
-                     return . Just $ (toSocks5Addr translated_address , io_callbacks)
-                 )
-                 ((\_ -> do
-                     return Nothing)::E.IOException -> IO (Maybe (IndicatedAddress , IOCallbacks) ) )
+    case maybe_sock_addr of
+        Just sock_addr@(NS.SockAddrInet _ ha) -> do
+            E.catch
+                (do
+                    client_socket <-  NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
+                    let
+                        translated_address =  (NS.SockAddrInet (fromIntegral port_number) ha)
+                    NS.connect client_socket translated_address
+                    is_connected <- NS.isConnected client_socket
+                    peer_name <- NS.getPeerName client_socket
+                    socket_io_callbacks <- socketIOCallbacks client_socket
+                    io_callbacks <- handshake socket_io_callbacks
+                    return . Just $ (toSocks5Addr translated_address , io_callbacks)
+                )
+                ((\_ -> do
+                    return Nothing)::E.IOException -> IO (Maybe (IndicatedAddress , IOCallbacks) ) )
 
-         _ -> do
-             -- Temporary message
-             putStrLn "SOCKS5 could not be forwarded/address not resolved, or resolved to strange format"
-             return Nothing
+        _ -> do
+            -- Temporary message
+            putStrLn "SOCKS5 could not be forwarded/address not resolved, or resolved to strange format"
+            return Nothing
 
 
 toSocks5Addr:: NS.SockAddr -> IndicatedAddress
@@ -265,13 +273,15 @@ toSocks5Addr _                      = error "toSocks5Addr not fully implemented"
 
  -- | Simple alias to SocketIOCallbacks where we expect
  --   encrypted contents over a SOCKS5 Socket
-newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks IOCallbacks
+newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks SocketIOCallbacks
 
 instance IOChannels TLSServerSOCKS5Callbacks where
-     handshake (TLSServerSOCKS5Callbacks cb) = return cb
+    handshake (TLSServerSOCKS5Callbacks cb) = handshake cb
 
 instance TLSEncryptedIO TLSServerSOCKS5Callbacks
 instance TLSServerIO TLSServerSOCKS5Callbacks
+instance HasSocketPeer TLSServerSOCKS5Callbacks where
+    getSocketPeerAddress (TLSServerSOCKS5Callbacks s) = getSocketPeerAddress s
 
 
 -- | tlsSOCKS5Serve approver listening_socket onsocks5_action
@@ -280,26 +290,53 @@ instance TLSServerIO TLSServerSOCKS5Callbacks
 -- Pass a bound and listening TCP socket where you expect a SOCKS5 exchange to have to tke place.
 -- And pass an action that can do something with the callbacks. The passed-in action is expected to fork a thread and return
 -- inmediately.
-tlsSOCKS5Serve :: (B.ByteString -> Bool) -> Bool   -> NS.Socket -> ( TLSServerSOCKS5Callbacks -> IO () ) -> IO ()
-tlsSOCKS5Serve approver forward_connections listen_socket onsocks5_action =
+tlsSOCKS5Serve ::
+    MVar Socks5ServerState
+ -> Socks5ConnectionCallbacks
+ -> (B.ByteString -> Bool)
+ -> Bool
+ -> NS.Socket
+ -> ( TLSServerSOCKS5Callbacks -> IO () )
+ -> IO ()
+tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_socket onsocks5_action =
      tcpServe listen_socket socks_action
   where
      socks_action active_socket = do
-         socket_io_callbacks <- socketIOCallbacks active_socket
-         io_callbacks <- handshake socket_io_callbacks
-         maybe_negotiated_io <-
-           if forward_connections
-               then negotiateSocksForwardOrConnect approver io_callbacks
-               else negotiateSocksAndForward       approver io_callbacks
-         case maybe_negotiated_io of
-             Connect_COF negotiated_io ->
+         forkIOExc "tlsSOCKS5Serve/negotiation" $ do
+             conn_id <- modifyMVar s5s_mvar $ \ s5s -> do
                  let
-                     tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks negotiated_io
-                 in  onsocks5_action tls_server_socks5_callbacks
-             Drop_COF -> do
-                 (io_callbacks ^. closeAction_IOC)
-                 return ()
-             Forward_COF -> do
-                 -- TODO: More data needs to come here
-                 -- Do not close
-                 return ()
+                     conn_id = s5s ^. nextConnection_S5S
+                     new_s5s  = set nextConnection_S5S (conn_id + 1) s5s
+                 return (new_s5s, conn_id)
+             let
+                 log_events_maybe = socks5_callbacks ^. logEvents_S5CC
+                 log_event :: Socks5ConnectEvent -> IO ()
+                 log_event ev = case log_events_maybe of
+                     Nothing -> return ()
+                     Just c -> c ev
+                 wconn_id = S5ConnectionId conn_id
+             peer_address <- NS.getPeerName active_socket
+             log_event $ Established_S5Ev peer_address wconn_id
+
+             socket_io_callbacks <- socketIOCallbacks active_socket
+             io_callbacks <- handshake socket_io_callbacks
+             maybe_negotiated_io <-
+               if forward_connections
+                   then negotiateSocksForwardOrConnect approver io_callbacks
+                   else negotiateSocksAndForward       approver io_callbacks
+             case maybe_negotiated_io of
+                 Connect_COF negotiated_io -> do
+                     let
+                         tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
+                     log_event $ HandlingHere_S5Ev wconn_id
+                     onsocks5_action tls_server_socks5_callbacks
+                 Drop_COF -> do
+                     log_event $ Dropped_S5Ev wconn_id
+                     (io_callbacks ^. closeAction_IOC)
+                     return ()
+                 Forward_COF -> do
+                     -- TODO: More data needs to come here
+                     -- Do not close
+                     log_event $ ToExternal_S5Ev wconn_id
+                     return ()
+         return ()

@@ -38,7 +38,7 @@ import qualified Network.Socket                                     as NS
 
 
 import           SecondTransfer.IOCallbacks.Types
-import           SecondTransfer.IOCallbacks.WrapSocket              (socketIOCallbacks, SocketIOCallbacks)
+import           SecondTransfer.IOCallbacks.WrapSocket              (socketIOCallbacks, SocketIOCallbacks, HasSocketPeer(..))
 --import           SecondTransfer.Exception                           (NoMoreDataException(..))
 #include "instruments.cpphs"
 
@@ -50,6 +50,9 @@ newtype TLSServerSocketIOCallbacks = TLSServerSocketIOCallbacks SocketIOCallback
 
 instance TLSEncryptedIO TLSServerSocketIOCallbacks
 instance TLSServerIO TLSServerSocketIOCallbacks
+
+instance HasSocketPeer TLSServerSocketIOCallbacks where
+    getSocketPeerAddress (TLSServerSocketIOCallbacks s) = getSocketPeerAddress s
 
 -- | Creates a listening socket at the provided network address (potentially a local interface)
 --   and the given port number. It returns the socket. This result can be used by the function

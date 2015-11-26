@@ -18,11 +18,18 @@ module SecondTransfer.Socks5.Types (
                , ReplyField                                         (..)
                -- *** Helpers for serialization, de-serialization
                , iaToAddressType
+
+               -- *** Logging types
+               , S5ConnectionId                                     (..)
+               , Socks5ConnectEvent                                 (..)
+               , Socks5LogCallback
+               , Socks5ConnectionCallbacks                          (..)
+               , logEvents_S5CC
      ) where
 
 ---import           Control.Concurrent
 -- import qualified Control.Exception                                  as E
-import           Control.Lens                                       (makeLenses, (^.))
+import           Control.Lens                                       (makeLenses)
 
 import qualified Data.ByteString                                    as B
 -- import qualified Data.ByteString.Lazy                               as LB
@@ -30,8 +37,38 @@ import qualified Data.ByteString                                    as B
 --import           Data.List                                          (find)
 
 import           Data.Word
+import           Data.Int                                           (Int64)
 
+import qualified Network.Socket                                     as NS(SockAddr)
 
+-------------------------------------------------------------------------------------------------------
+--
+-- Connection callbacks, used to report Connect behavior
+--
+------------------------------------------------------------------------------------------------------
+
+-- | Connection ID for SOCKS5 Connections
+newtype S5ConnectionId = S5ConnectionId Int64
+    deriving (Eq, Ord, Show, Enum)
+
+-- | SOCKS5 Connections, and where are they handled
+data Socks5ConnectEvent =
+    Established_S5Ev NS.SockAddr S5ConnectionId
+  | HandlingHere_S5Ev S5ConnectionId
+  | ToExternal_S5Ev   S5ConnectionId
+  | Dropped_S5Ev      S5ConnectionId
+
+type Socks5LogCallback =  Socks5ConnectEvent -> IO ()
+
+-- | Callbacks used by  client applications to get notified about interesting
+--   events happening at a connection level, or to get asked about things
+--   (e.g, about if it is proper to accept a connection). These are used from CoreServer
+data Socks5ConnectionCallbacks = Socks5ConnectionCallbacks {
+    -- | Invoked after the connection is accepted, and after it is finished.
+    _logEvents_S5CC            :: Maybe Socks5LogCallback
+    }
+
+makeLenses ''Socks5ConnectionCallbacks
 -------------------------------------------------------------------------------------------------------
 --
 --  Serialization types
