@@ -340,7 +340,8 @@ unencryptChannelData botan_ctx tls_data  = do
                 (Just <$> tls_pull_data_action True)
                 pump_exc_handler
             case maybe_new_data of
-                Just new_data -> do
+                Just new_data
+                  | B.length new_data > 0 -> do
                     can_continue <- withMVar write_lock_mvar $ \_ -> do
                         maybe_problem <- tryReadMVar problem_mvar
                         case maybe_problem of
@@ -362,6 +363,11 @@ unencryptChannelData botan_ctx tls_data  = do
                         pump
                       else
                         return ()
+                  | otherwise -> do
+                    -- This is actually an error
+                    putStrLn "Pulled zero-length data, ignoring"
+                    pump
+
                 Nothing -> do
                     -- On exceptions, finish this thread
                     return ()
