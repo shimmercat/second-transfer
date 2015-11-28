@@ -961,7 +961,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                         -- it is because the situation is out of control. We may as well
                         -- exit the server, but I'm not being so extreme now.
                         H.delete stream2workerthread stream_id
-                        putStrLn $ "ERROR: Aborting session after non-handled exception bubled up " ++ E.displayException e
+                        putStrLn $ "ERROR: Aborting session after non-handled exception bubbled up " ++ E.displayException e
                         writeChan session_input InternalAbort_SIC
                     )
                     :: E.SomeException -> IO ()
