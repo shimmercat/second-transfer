@@ -53,7 +53,7 @@ import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 import qualified SecondTransfer.ConstantsAndLimits      as Constant
 
-import           Debug.Trace
+-- import           Debug.Trace
 
 
 data IncrementalHttp1Parser = IncrementalHttp1Parser {
@@ -186,7 +186,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
             )
             crlf_positions
 
-    no_cont_positions = reverse . tail $ no_cont_positions_reverse
+    no_cont_positions = reverse no_cont_positions_reverse
 
     -- Now get the headers as slices from the original string.
     headers_pre :: [B.ByteString]
@@ -199,7 +199,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
                 0
                 (map
                     ( + 2 )
-                    no_cont_positions
+                    (init no_cont_positions)
                 )
             )
             no_cont_positions
@@ -208,7 +208,9 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     no_empty_headers ::[B.ByteString]
     no_empty_headers = filter (\x -> B.length x > 0)  headers_pre
 
-    headers_0 =  map splitByColon $ tail no_empty_headers
+    -- We remove the first "header" because it is actually the
+    -- initial HTTP request/response line
+    headers_0 =  map splitByColon $ tail  no_empty_headers
 
     -- The first line is not actually a header, but contains the method, the version
     -- and the URI
@@ -249,7 +251,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     content_stop :: BodyStopCondition
     content_stop =
       let
-        cnt_length_header = find (\ x -> (fst x) == "content-length" ) headers_3
+        cnt_length_header = find (\ x -> (fst x) == "content-length" )  headers_3
       in case cnt_length_header of
         Just (_, hv) -> case readEither . unpack $ hv of
            Left _ -> throw ContentLengthMissingException
