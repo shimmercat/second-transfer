@@ -47,7 +47,6 @@ import           Data.Typeable
 import           Control.Concurrent               (forkIO, ThreadId)
 
 
-
 -- | Abstract exception. All HTTP/2 exceptions derive from here
 data HTTP2SessionException = forall e . Exception e => HTTP2SessionException e
     deriving Typeable
