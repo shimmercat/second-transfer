@@ -48,8 +48,8 @@ import           SecondTransfer.Exception                                  (fork
 
 
 data SessionHandlerState = SessionHandlerState {
-    _liveSessions_S    ::  Int64
-  , _nextConnId_S      ::  Int64
+    _liveSessions_S    ::  !Int64
+  , _nextConnId_S      ::  !Int64
   , _connCallbacks_S   ::  ConnectionCallbacks
     }
 
@@ -129,7 +129,7 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
               live_now_ = (s ^. liveSessions_S) + 1
               new_s = over nextConnId_S ( + 1 ) s
               new_new_s = set liveSessions_S live_now_ s
-          return (new_new_s, (new_conn_id, live_now_) )
+          return $  new_new_s `seq` (new_new_s, (new_conn_id, live_now_) )
 
       connection_callbacks <- withMVar session_handler_state_mvar $ \ s -> do
           return $ s ^. connCallbacks_S
@@ -199,14 +199,14 @@ chooseProtocol attendants proposed_protocols =
         i_want_protocols = map (pack . fst) attendants
         chosen =
             foldl
-                  ( \ selected want_protocol ->
-                         case (selected, elemIndex want_protocol proposed_protocols) of
-                             ( Just a, _) -> Just a
-                             (_,   Just idx) -> Just idx
-                             (_,   _ ) -> Nothing
-                  )
-                  Nothing
-                  i_want_protocols
+                ( \ selected want_protocol ->
+                    case (selected, elemIndex want_protocol proposed_protocols) of
+                        ( Just a, _) -> Just a
+                        (_,   Just idx) -> Just idx
+                        (_,   _ ) -> Nothing
+                )
+                Nothing
+                i_want_protocols
     in return chosen
 
 

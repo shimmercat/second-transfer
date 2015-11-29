@@ -36,7 +36,7 @@ import           SecondTransfer.IOCallbacks.WrapSocket              (HasSocketPe
 
 
 data Socks5ServerState = Socks5ServerState {
-    _nextConnection_S5S       :: Int64
+    _nextConnection_S5S       :: !Int64
     }
 makeLenses ''Socks5ServerState
 
@@ -303,7 +303,7 @@ tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_soc
                  let
                      conn_id = s5s ^. nextConnection_S5S
                      new_s5s  = set nextConnection_S5S (conn_id + 1) s5s
-                 return (new_s5s, conn_id)
+                 return $ new_s5s `seq` (new_s5s, conn_id)
              let
                  log_events_maybe = socks5_callbacks ^. logEvents_S5CC
                  log_event :: Socks5ConnectEvent -> IO ()
