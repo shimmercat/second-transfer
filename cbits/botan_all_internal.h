@@ -678,6 +678,167 @@ class Zlib_Style_Stream : public Compression_Stream
 }
 
 
+#if defined(BOTAN_USE_CTGRIND)
+
+// These are external symbols from libctgrind.so
+extern "C" void ct_poison(const void* address, size_t length);
+extern "C" void ct_unpoison(const void* address, size_t length);
+
+#endif
+
+namespace Botan {
+
+namespace CT {
+
+template<typename T>
+inline void poison(T* p, size_t n)
+   {
+#if defined(BOTAN_USE_CTGRIND)
+   ct_poison(p, sizeof(T)*n);
+#else
+   BOTAN_UNUSED(p);
+   BOTAN_UNUSED(n);
+#endif
+   }
+
+template<typename T>
+inline void unpoison(T* p, size_t n)
+   {
+#if defined(BOTAN_USE_CTGRIND)
+   ct_unpoison(p, sizeof(T)*n);
+#else
+   BOTAN_UNUSED(p);
+   BOTAN_UNUSED(n);
+#endif
+   }
+
+template<typename T>
+inline void unpoison(T& p)
+   {
+   unpoison(&p, 1);
+   }
+
+/*
+* T should be an unsigned machine integer type
+* Expand to a mask used for other operations
+* @param in an integer
+* @return If n is zero, returns zero. Otherwise
+* returns a T with all bits set for use as a mask with
+* select.
+*/
+template<typename T>
+inline T expand_mask(T x)
+   {
+   T r = x;
+   // First fold r down to a single bit
+   for(size_t i = 1; i != sizeof(T)*8; i *= 2)
+      r |= r >> i;
+   r &= 1;
+   r = ~(r - 1);
+   return r;
+   }
+
+template<typename T>
+inline T select(T mask, T from0, T from1)
+   {
+   return (from0 & mask) | (from1 & ~mask);
+   }
+
+template<typename T>
+inline T is_zero(T x)
+   {
+   return ~expand_mask(x);
+   }
+
+template<typename T>
+inline T is_equal(T x, T y)
+   {
+   return is_zero(x ^ y);
+   }
+
+template<typename T>
+inline T is_less(T x, T y)
+   {
+   /*
+   This expands to a constant time sequence with GCC 5.2.0 on x86-64
+   but something more complicated may be needed for portable const time.
+   */
+   return expand_mask<T>(x < y);
+   }
+
+template<typename T>
+inline void conditional_copy_mem(T value,
+                                 T* to,
+                                 const T* from0,
+                                 const T* from1,
+                                 size_t bytes)
+   {
+   const T mask = CT::expand_mask(value);
+
+   for(size_t i = 0; i != bytes; ++i)
+      to[i] = CT::select(mask, from0[i], from1[i]);
+   }
+
+template<typename T>
+inline T expand_top_bit(T a)
+   {
+   return expand_mask<T>(a >> (sizeof(T)*8-1));
+   }
+
+template<typename T>
+inline T max(T a, T b)
+   {
+   const T a_larger = b - a; // negative if a is larger
+   return select(expand_top_bit(a), a, b);
+   }
+
+template<typename T>
+inline T min(T a, T b)
+   {
+   const T a_larger = b - a; // negative if a is larger
+   return select(expand_top_bit(b), b, a);
+   }
+
+template<typename T, typename Alloc>
+std::vector<T, Alloc> strip_leading_zeros(const std::vector<T, Alloc>& input)
+   {
+   size_t leading_zeros = 0;
+
+   uint8_t only_zeros = 0xFF;
+
+   for(size_t i = 0; i != input.size(); ++i)
+      {
+      only_zeros &= CT::is_zero(input[i]);
+      leading_zeros += CT::select<uint8_t>(only_zeros, 1, 0);
+      }
+
+   return secure_vector<byte>(input.begin() + leading_zeros, input.end());
+   }
+
+}
+
+}
+
+
+namespace Botan {
+
+/**
+* Entropy source using SecRandomCopyBytes from Darwin's Security.framework
+*/
+class Darwin_SecRandom : public EntropySource
+   {
+   public:
+      std::string name() const override { return "Darwin SecRandomCopyBytes"; }
+
+      void poll(Entropy_Accumulator& accum) override;
+
+   private:
+      secure_vector<byte> m_buf;
+   };
+
+}
+
+
 namespace Botan {
 
 /**
@@ -2467,51 +2628,6 @@ void map_remove_if(Pred pred, T& assoc)
 
 namespace Botan {
 
-namespace TA_CM {
-
-/**
-* Function used in timing attack countermeasures
-* See Wagner, Molnar, et al "The Program Counter Security Model"
-*
-* @param in an integer
-* @return 0 if in == 0 else 0xFFFFFFFF
-*/
-u32bit expand_mask_u32bit(u32bit in);
-
-
-/**
- * Expand an input to a bit mask depending on it being being zero or
- * non-zero
- * @ param in the input
- * @return the mask 0xFFFF if tst is non-zero and 0 otherwise
- */
-u16bit expand_mask_u16bit(u16bit in);
-
-/**
-* Branch-free maximum
-* Note: assumes twos-complement signed representation
-* @param a an integer
-* @param b an integer
-* @return max(a,b)
-*/
-u32bit max_32(u32bit a, u32bit b);
-
-/**
-* Branch-free minimum
-* Note: assumes twos-complement signed representation
-* @param a an integer
-* @param b an integer
-* @return min(a,b)
-*/
-u32bit min_32(u32bit a, u32bit b);
-
-}
-
-}
-
-
-namespace Botan {
-
 namespace TLS {
 
 class TLS_Data_Reader;
@@ -3035,8 +3151,14 @@ class Datagram_Handshake_IO : public Handshake_IO
 
       Datagram_Handshake_IO(writer_fn writer,
                             class Connection_Sequence_Numbers& seq,
-                            u16bit mtu) :
-         m_seqs(seq), m_flights(1), m_send_hs(writer), m_mtu(mtu) {}
+                            u16bit mtu, u64bit initial_timeout_ms, u64bit max_timeout_ms) :
+         m_seqs(seq),
+         m_flights(1),
+         m_initial_timeout(initial_timeout_ms),
+         m_max_timeout(max_timeout_ms),
+         m_send_hs(writer),
+         m_mtu(mtu)
+         {}
 
       Protocol_Version initial_record_version() const override;
 
@@ -3055,6 +3177,9 @@ class Datagram_Handshake_IO : public Handshake_IO
       std::pair<Handshake_Type, std::vector<byte>>
          get_next_record(bool expecting_ccs) override;
    private:
+      void retransmit_flight(size_t flight);
+      void retransmit_last_flight();
+
       std::vector<byte> format_fragment(
          const byte fragment[],
          size_t fragment_len,
@@ -3117,6 +3242,9 @@ class Datagram_Handshake_IO : public Handshake_IO
       std::set<u16bit> m_ccs_epochs;
       std::vector<std::vector<u16bit>> m_flights;
       std::map<u16bit, Message_Info> m_flight_data;
+
+      u64bit m_initial_timeout = 0;
+      u64bit m_max_timeout = 0;
 
       u64bit m_last_write = 0;
       u64bit m_next_timeout = 0;
@@ -3198,9 +3326,9 @@ class Finished;
 class Handshake_State
    {
    public:
-      typedef std::function<void (const Handshake_Message&)> hs_msg_cb;
+      typedef std::function<void (const Handshake_Message&)> handshake_msg_cb;
 
-      Handshake_State(Handshake_IO* io, hs_msg_cb cb);
+      Handshake_State(Handshake_IO* io, handshake_msg_cb cb);
 
       virtual ~Handshake_State();
 
@@ -3323,7 +3451,7 @@ class Handshake_State
 
    private:
 
-      hs_msg_cb m_msg_callback;
+      handshake_msg_cb m_msg_callback;
 
       std::unique_ptr<Handshake_IO> m_handshake_io;
 
