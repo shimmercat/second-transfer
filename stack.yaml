@@ -5,7 +5,6 @@ docker:
     enable: false
 packages:
 - '.'
-- examples/attempt_bust
 flags:
     second-transfer: 
         fastc: true

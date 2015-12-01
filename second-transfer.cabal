@@ -204,34 +204,42 @@ library
       cc-options: -O0 -g3 -std=c++11
       ld-options: -g3
   else
-      cc-options: -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
-
-  ghc-options: -pgmPcpphs "-pgmc g++"  -optP--cpp
+      cc-options: -g -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
+  if os(linux)
+      ghc-options: -pgmPcpphs "-pgmc g++"  -optP--cpp 
+  if os(darwin)
+      ghc-options: -pgmPcpphs "-pgmc g++-5" "-pgml g++-5" -optP--cpp  
 
   --               v------ remove this
-  if flag(fastc)
+  if os(linux)
+      if flag(fastc)
         c-sources:       cbits/enable_tls.cpp
-  else
+      else
         c-sources:       cbits/enable_tls.cpp
-                       , cbits/botan_all.cpp
-                       , cbits/botan_all_avx2.cpp
-                       , cbits/botan_all_aesni.cpp
-                       , cbits/botan_all_ssse3.cpp
-                       , cbits/botan_all_rdrand.cpp
+                   , cbits/botan_all.cpp
+                   , cbits/botan_all_avx2.cpp
+                   , cbits/botan_all_aesni.cpp
+                   , cbits/botan_all_ssse3.cpp
+                   , cbits/botan_all_rdrand.cpp
 
-  -- TODO: Refactor
-  if flag(fastc)
-      extra-libraries: stdc++ botan-1.11
-  else
+  if os(darwin)
+      extra-libraries: stdc++.6 gcc_s.1 enable_tls
+      extra-lib-dirs: /usr/local/opt/gcc/lib/gcc/5 
+      ld-options: -framework Security
+  if os(linux)
       extra-libraries: stdc++
+  if flag(fastc)
+      extra-libraries: botan-1.11
+
+  extra-lib-dirs: /usr/local/lib
+
+
 
   -- NOTE: Please fill-in with an-up-to date library path here.
   -- It should point to openssl 1.0.2 or greater. See note for
   -- include-dirs above.
-  extra-lib-dirs: /usr/local/lib
 
   include-dirs: macros/
-
 
 
   -- Test-Suite compiling-ok

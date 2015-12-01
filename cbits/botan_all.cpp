@@ -1,5 +1,5 @@
 /*
-* Botan 1.11.21 Amalgamation
+* Botan 1.11.24 Amalgamation
 * (C) 1999-2013,2014,2015 Jack Lloyd and others
 *
 * Botan is released under the Simplified BSD License (see license.txt)
@@ -1819,7 +1819,6 @@ void ASN1_String::decode_from(BER_Decoder& source)
 * Botan is released under the Simplified BSD License (see license.txt)
 */
 
-#include <sstream>
 #include <iomanip>
 
 namespace Botan {
@@ -10672,6 +10671,10 @@ crecip(felem out, const felem z) {
 
 int
 curve25519_donna(u8 *mypublic, const u8 *secret, const u8 *basepoint) {
+
+  CT::poison(secret, 32);
+  CT::poison(basepoint, 32);
+
   limb bp[5], x[5], z[5], zmone[5];
   uint8_t e[32];
   int i;
@@ -10686,8 +10689,39 @@ curve25519_donna(u8 *mypublic, const u8 *secret, const u8 *basepoint) {
   crecip(zmone, z);
   fmul(z, x, zmone);
   fcontract(mypublic, z);
+
+  CT::unpoison(secret, 32);
+  CT::unpoison(basepoint, 32);
+  CT::unpoison(mypublic, 32);
   return 0;
 }
+
+}
+/*
+* Darwin SecRandomCopyBytes EntropySource
+* (C) 2015 Daniel Seither (Kullo GmbH)
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+#include <Security/Security.h>
+
+namespace Botan {
+
+/**
+* Gather entropy from SecRandomCopyBytes
+*/
+void Darwin_SecRandom::poll(Entropy_Accumulator& accum)
+   {
+   const size_t ENTROPY_BITS_PER_BYTE = 8;
+   const size_t BUF_SIZE = 256;
+
+   m_buf.resize(BUF_SIZE);
+   if (0 == SecRandomCopyBytes(kSecRandomDefault, m_buf.size(), m_buf.data()))
+      {
+      accum.add(m_buf.data(), m_buf.size(), ENTROPY_BITS_PER_BYTE);
+      }
+   }
 
 }
 /*
@@ -12149,7 +12183,7 @@ bool DL_Scheme_PrivateKey::check_key(RandomNumberGenerator& rng,
 }
 /*
 * Discrete Logarithm Parameters
-* (C) 1999-2008 Jack Lloyd
+* (C) 1999-2008,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -12184,7 +12218,7 @@ DL_Group::DL_Group(const std::string& name)
 DL_Group::DL_Group(RandomNumberGenerator& rng,
                    PrimeType type, size_t pbits, size_t qbits)
    {
-   if(pbits < 512)
+   if(pbits < 1024)
       throw Invalid_Argument("DL_Group: prime size " + std::to_string(pbits) +
                              " is too small");
 
@@ -15749,6 +15783,212 @@ BOTAN_REGISTER_PK_VERIFY_OP("ECDSA", ECDSA_Verification_Operation);
 
 }
 /*
+* ECDSA via OpenSSL
+* (C) 2015 Jack Lloyd
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+
+#if defined(BOTAN_HAS_OPENSSL)
+
+#include <openssl/x509.h>
+
+#if !defined(OPENSSL_NO_ECDSA)
+
+
+#include <openssl/ecdsa.h>
+#include <openssl/ec.h>
+#include <openssl/objects.h>
+
+namespace Botan {
+
+namespace {
+
+secure_vector<byte> PKCS8_for_openssl(const EC_PrivateKey& ec)
+   {
+   const PointGFp& pub_key = ec.public_point();
+   const BigInt& priv_key = ec.private_value();
+
+   return DER_Encoder()
+     .start_cons(SEQUENCE)
+        .encode(static_cast<size_t>(1))
+        .encode(BigInt::encode_1363(priv_key, priv_key.bytes()), OCTET_STRING)
+      .start_cons(ASN1_Tag(0), PRIVATE)
+      .raw_bytes(ec.domain().DER_encode(EC_DOMPAR_ENC_OID))
+      .end_cons()
+      .start_cons(ASN1_Tag(1), PRIVATE)
+      .encode(EC2OSP(pub_key, PointGFp::UNCOMPRESSED), BIT_STRING)
+      .end_cons()
+      .end_cons()
+      .get_contents();
+   }
+
+int OpenSSL_EC_nid_for(const OID& oid)
+   {
+   if(oid.empty())
+      return -1;
+
+   static const std::map<std::string, int> nid_map = {
+      //{ "secp160r1", NID_secp160r1 },
+      //{ "secp160r2", NID_secp160r2 },
+      { "secp192r1", NID_X9_62_prime192v1  },
+      { "secp224r1", NID_secp224r1 },
+      { "secp256r1", NID_X9_62_prime256v1 },
+      { "secp384r1", NID_secp384r1 },
+      { "secp521r1", NID_secp521r1 }
+      // TODO: OpenSSL 1.0.2 added brainpool curves
+   };
+
+   const std::string name = OIDS::lookup(oid);
+   auto i = nid_map.find(name);
+   if(i != nid_map.end())
+      return i->second;
+
+   return -1;
+   }
+
+class OpenSSL_ECDSA_Verification_Operation : public PK_Ops::Verification_with_EMSA
+   {
+   public:
+      typedef ECDSA_PublicKey Key_Type;
+
+      static OpenSSL_ECDSA_Verification_Operation* make(const Spec& spec)
+         {
+         if(const ECDSA_PublicKey* ecdsa = dynamic_cast<const ECDSA_PublicKey*>(&spec.key()))
+            {
+            const int nid = OpenSSL_EC_nid_for(ecdsa->domain().get_oid());
+            if(nid > 0)
+               return new OpenSSL_ECDSA_Verification_Operation(*ecdsa, spec.padding(), nid);
+            }
+
+         return nullptr;
+         }
+
+      OpenSSL_ECDSA_Verification_Operation(const ECDSA_PublicKey& ecdsa, const std::string& emsa, int nid) :
+         PK_Ops::Verification_with_EMSA(emsa), m_ossl_ec(::EC_KEY_new(), ::EC_KEY_free)
+         {
+         std::unique_ptr<::EC_GROUP, std::function<void (::EC_GROUP*)>> grp(::EC_GROUP_new_by_curve_name(nid),
+                                                                            ::EC_GROUP_free);
+
+         if(!grp)
+            throw OpenSSL_Error("EC_GROUP_new_by_curve_name");
+
+         ::EC_KEY_set_group(m_ossl_ec.get(), grp.get());
+
+         const secure_vector<byte> enc = EC2OSP(ecdsa.public_point(), PointGFp::UNCOMPRESSED);
+         const byte* enc_ptr = enc.data();
+         EC_KEY* key_ptr = m_ossl_ec.get();
+         if(!::o2i_ECPublicKey(&key_ptr, &enc_ptr, enc.size()))
+            throw OpenSSL_Error("o2i_ECPublicKey");
+
+         const EC_GROUP* group = ::EC_KEY_get0_group(m_ossl_ec.get());
+         m_order_bits = ::EC_GROUP_get_degree(group);
+         }
+
+      size_t message_parts() const override { return 2; }
+      size_t message_part_size() const override { return (m_order_bits + 7) / 8; }
+      size_t max_input_bits() const override { return m_order_bits; }
+
+      bool with_recovery() const override { return false; }
+
+      bool verify(const byte msg[], size_t msg_len,
+                  const byte sig_bytes[], size_t sig_len) override
+         {
+         if(sig_len != message_part_size() * message_parts())
+            return false;
+
+         std::unique_ptr<ECDSA_SIG, std::function<void (ECDSA_SIG*)>> sig(nullptr, ECDSA_SIG_free);
+         sig.reset(::ECDSA_SIG_new());
+
+         sig->r = BN_bin2bn(sig_bytes              , sig_len / 2, nullptr);
+         sig->s = BN_bin2bn(sig_bytes + sig_len / 2, sig_len / 2, nullptr);
+
+         const int res = ECDSA_do_verify(msg, msg_len, sig.get(), m_ossl_ec.get());
+         if(res < 0)
+            throw OpenSSL_Error("ECDSA_do_verify");
+         return (res == 1);
+         }
+
+   private:
+      std::unique_ptr<EC_KEY, std::function<void (EC_KEY*)>> m_ossl_ec;
+      size_t m_order_bits = 0;
+   };
+
+class OpenSSL_ECDSA_Signing_Operation : public PK_Ops::Signature_with_EMSA
+   {
+   public:
+      typedef ECDSA_PrivateKey Key_Type;
+
+      static OpenSSL_ECDSA_Signing_Operation* make(const Spec& spec)
+         {
+         if(const ECDSA_PrivateKey* ecdsa = dynamic_cast<const ECDSA_PrivateKey*>(&spec.key()))
+            {
+            const int nid = OpenSSL_EC_nid_for(ecdsa->domain().get_oid());
+            if(nid > 0)
+               return new OpenSSL_ECDSA_Signing_Operation(*ecdsa, spec.padding());
+            }
+
+         return nullptr;
+         }
+
+      OpenSSL_ECDSA_Signing_Operation(const ECDSA_PrivateKey& ecdsa, const std::string& emsa) :
+         PK_Ops::Signature_with_EMSA(emsa),
+         m_ossl_ec(nullptr, ::EC_KEY_free)
+         {
+         const secure_vector<byte> der = PKCS8_for_openssl(ecdsa);
+         const byte* der_ptr = der.data();
+         m_ossl_ec.reset(d2i_ECPrivateKey(nullptr, &der_ptr, der.size()));
+         if(!m_ossl_ec)
+            throw OpenSSL_Error("d2i_ECPrivateKey");
+
+         const EC_GROUP* group = ::EC_KEY_get0_group(m_ossl_ec.get());
+         m_order_bits = ::EC_GROUP_get_degree(group);
+         }
+
+      secure_vector<byte> raw_sign(const byte msg[], size_t msg_len,
+                                   RandomNumberGenerator&) override
+         {
+         std::unique_ptr<ECDSA_SIG, std::function<void (ECDSA_SIG*)>> sig(nullptr, ECDSA_SIG_free);
+         sig.reset(::ECDSA_do_sign(msg, msg_len, m_ossl_ec.get()));
+
+         if(!sig)
+            throw OpenSSL_Error("ECDSA_do_sign");
+
+         const size_t order_bytes = message_part_size();
+         const size_t r_bytes = BN_num_bytes(sig->r);
+         const size_t s_bytes = BN_num_bytes(sig->s);
+         secure_vector<byte> sigval(2*order_bytes);
+         BN_bn2bin(sig->r, &sigval[order_bytes - r_bytes]);
+         BN_bn2bin(sig->s, &sigval[2*order_bytes - s_bytes]);
+         return sigval;
+         }
+
+      size_t message_parts() const override { return 2; }
+      size_t message_part_size() const override { return (m_order_bits + 7) / 8; }
+      size_t max_input_bits() const override { return m_order_bits; }
+
+   private:
+      std::unique_ptr<EC_KEY, std::function<void (EC_KEY*)>> m_ossl_ec;
+      size_t m_order_bits = 0;
+   };
+
+BOTAN_REGISTER_TYPE(PK_Ops::Verification, OpenSSL_ECDSA_Verification_Operation, "ECDSA",
+                    OpenSSL_ECDSA_Verification_Operation::make,
+                    "openssl", BOTAN_OPENSSL_ECDSA_PRIO);
+
+BOTAN_REGISTER_TYPE(PK_Ops::Signature, OpenSSL_ECDSA_Signing_Operation, "ECDSA",
+                    OpenSSL_ECDSA_Signing_Operation::make,
+                    "openssl", BOTAN_OPENSSL_ECDSA_PRIO);
+
+}
+
+}
+
+#endif
+
+#endif
+/*
 * EGD EntropySource
 * (C) 1999-2009 Jack Lloyd
 *
@@ -16038,16 +16278,13 @@ class ElGamal_Decryption_Operation : public PK_Ops::Decryption_with_EME
 
 ElGamal_Decryption_Operation::ElGamal_Decryption_Operation(const ElGamal_PrivateKey& key,
                                                            const std::string& eme) :
-   PK_Ops::Decryption_with_EME(eme)
+   PK_Ops::Decryption_with_EME(eme),
+   powermod_x_p(Fixed_Exponent_Power_Mod(key.get_x(), key.group_p())),
+   mod_p(Modular_Reducer(key.group_p())),
+   blinder(key.group_p(),
+           [](const BigInt& k) { return k; },
+           [this](const BigInt& k) { return powermod_x_p(k); })
    {
-   const BigInt& p = key.group_p();
-
-   powermod_x_p = Fixed_Exponent_Power_Mod(key.get_x(), p);
-   mod_p = Modular_Reducer(p);
-
-   blinder = Blinder(p,
-                     [](const BigInt& k) { return k; },
-                     [this](const BigInt& k) { return powermod_x_p(k); });
    }
 
 secure_vector<byte>
@@ -16081,7 +16318,7 @@ BOTAN_REGISTER_PK_DECRYPTION_OP("ElGamal", ElGamal_Decryption_Operation);
 }
 /*
 * OAEP
-* (C) 1999-2010 Jack Lloyd
+* (C) 1999-2010,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -16139,7 +16376,7 @@ secure_vector<byte> OAEP::pad(const byte in[], size_t in_length,
 * OAEP Unpad Operation
 */
 secure_vector<byte> OAEP::unpad(const byte in[], size_t in_length,
-                               size_t key_length) const
+                                size_t key_length) const
    {
    /*
    Must be careful about error messages here; if an attacker can
@@ -16162,41 +16399,43 @@ secure_vector<byte> OAEP::unpad(const byte in[], size_t in_length,
    secure_vector<byte> input(key_length);
    buffer_insert(input, key_length - in_length, in, in_length);
 
-   mgf1_mask(*m_hash,
-             &input[m_Phash.size()], input.size() - m_Phash.size(),
-             input.data(), m_Phash.size());
+   CT::poison(input.data(), input.size());
+
+   const size_t hlen = m_Phash.size();
 
    mgf1_mask(*m_hash,
-             input.data(), m_Phash.size(),
-             &input[m_Phash.size()], input.size() - m_Phash.size());
+             &input[hlen], input.size() - hlen,
+             input.data(), hlen);
 
-   bool waiting_for_delim = true;
-   bool bad_input = false;
-   size_t delim_idx = 2 * m_Phash.size();
+   mgf1_mask(*m_hash,
+             input.data(), hlen,
+             &input[hlen], input.size() - hlen);
 
-   /*
-   * GCC 4.5 on x86-64 compiles this in a way that is still vunerable
-   * to timing analysis. Other compilers, or GCC on other platforms,
-   * may or may not.
-   */
+   size_t delim_idx = 2 * hlen;
+   byte waiting_for_delim = 0xFF;
+   byte bad_input = 0;
+
    for(size_t i = delim_idx; i < input.size(); ++i)
       {
-      const bool zero_p = !input[i];
-      const bool one_p = input[i] == 0x01;
+      const byte zero_m = CT::is_zero<byte>(input[i]);
+      const byte one_m = CT::is_equal<byte>(input[i], 1);
 
-      const bool add_1 = waiting_for_delim && zero_p;
+      const byte add_m = waiting_for_delim & zero_m;
 
-      bad_input |= waiting_for_delim && !(zero_p || one_p);
+      bad_input |= waiting_for_delim & ~(zero_m | one_m);
 
-      delim_idx += add_1;
+      delim_idx += CT::select<byte>(add_m, 1, 0);
 
-      waiting_for_delim &= zero_p;
+      waiting_for_delim &= zero_m;
       }
 
    // If we never saw any non-zero byte, then it's not valid input
    bad_input |= waiting_for_delim;
+   bad_input |= CT::expand_mask<byte>(!same_mem(&input[hlen], m_Phash.data(), hlen));
 
-   bad_input |= !same_mem(&input[m_Phash.size()], m_Phash.data(), m_Phash.size());
+   CT::unpoison(input.data(), input.size());
+   CT::unpoison(&bad_input, 1);
+   CT::unpoison(&delim_idx, 1);
 
    if(bad_input)
       throw Decoding_Error("Invalid OAEP encoding");
@@ -16225,8 +16464,8 @@ OAEP::OAEP(HashFunction* hash, const std::string& P) : m_hash(hash)
 
 }
 /*
-* PKCS1 EME
-* (C) 1999-2007 Jack Lloyd
+* PKCS #1 v1.5 Type 2 (encryption) padding
+* (C) 1999-2007,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -16252,8 +16491,7 @@ secure_vector<byte> EME_PKCS1v15::pad(const byte in[], size_t inlen,
 
    out[0] = 0x02;
    for(size_t j = 1; j != olen - inlen - 1; ++j)
-      while(out[j] == 0)
-         out[j] = rng.next_byte();
+      out[j] = rng.next_nonzero_byte();
    buffer_insert(out, olen - inlen, in, inlen);
 
    return out;
@@ -16263,22 +16501,39 @@ secure_vector<byte> EME_PKCS1v15::pad(const byte in[], size_t inlen,
 * PKCS1 Unpad Operation
 */
 secure_vector<byte> EME_PKCS1v15::unpad(const byte in[], size_t inlen,
-                                       size_t key_len) const
+                                        size_t key_len) const
    {
-   if(inlen != key_len / 8 || inlen < 10 || in[0] != 0x02)
+   if(inlen != key_len / 8 || inlen < 10)
       throw Decoding_Error("PKCS1::unpad");
 
-   size_t separator = 0;
-   for(size_t j = 0; j != inlen; ++j)
-      if(in[j] == 0)
-         {
-         separator = j;
-         break;
-         }
-   if(separator < 9)
-      throw Decoding_Error("PKCS1::unpad");
+   CT::poison(in, inlen);
 
-   return secure_vector<byte>(&in[separator + 1], &in[inlen]);
+   byte bad_input_m = 0;
+   byte seen_zero_m = 0;
+   size_t delim_idx = 0;
+
+   bad_input_m |= ~CT::is_equal<byte>(in[0], 2);
+
+   for(size_t i = 1; i != inlen; ++i)
+      {
+      const byte is_zero_m = CT::is_zero<byte>(in[i]);
+
+      delim_idx += CT::select<byte>(~seen_zero_m, 1, 0);
+
+      bad_input_m |= is_zero_m & CT::expand_mask<byte>(i < 9);
+      seen_zero_m |= is_zero_m;
+      }
+
+   bad_input_m |= ~seen_zero_m;
+
+   CT::unpoison(in, inlen);
+   CT::unpoison(&bad_input_m, 1);
+   CT::unpoison(&delim_idx, 1);
+
+   if(bad_input_m)
+      throw Decoding_Error("Invalid PKCS #1 v1.5 encryption padding");
+
+   return secure_vector<byte>(&in[delim_idx + 1], &in[inlen]);
    }
 
 /*
@@ -17074,8 +17329,10 @@ int operator>>(int fd, Pipe& pipe)
 #if defined(BOTAN_HAS_MCEIES)
 #endif
 
-
 #if defined(BOTAN_HAS_BCRYPT)
+#endif
+
+#if defined(BOTAN_HAS_TLS)
 #endif
 
 namespace {
@@ -17209,7 +17466,10 @@ BOTAN_FFI_DECLARE_STRUCT(botan_pk_op_verify_struct, Botan::PK_Verifier, 0x2B91F9
 BOTAN_FFI_DECLARE_STRUCT(botan_pk_op_ka_struct, Botan::PK_Key_Agreement, 0x2939CAB1);
 
 BOTAN_FFI_DECLARE_STRUCT(botan_x509_cert_struct, Botan::X509_Certificate, 0x8F628937);
+
+#if defined(BOTAN_HAS_TLS)
 BOTAN_FFI_DECLARE_STRUCT(botan_tls_channel_struct, Botan::TLS::Channel, 0x0212FE99);
+#endif
 
 /*
 * Versioning
@@ -17252,21 +17512,6 @@ int botan_hex_encode(const uint8_t* in, size_t len, char* out, uint32_t flags)
 
 int botan_rng_init(botan_rng_t* rng_out, const char* rng_type)
    {
-   // Just gives unique_ptr something to delete, really
-   class RNG_Wrapper : public Botan::RandomNumberGenerator
-      {
-      public:
-         RNG_Wrapper(Botan::RandomNumberGenerator& rng) : m_rng(rng) {}
-         void randomize(Botan::byte out[], size_t len) override { m_rng.randomize(out, len); }
-         bool is_seeded() const override { return m_rng.is_seeded(); }
-         void clear() override { m_rng.clear(); }
-         std::string name() const override { return m_rng.name(); }
-         void reseed(size_t poll_bits = 256) override { m_rng.reseed(poll_bits); }
-         void add_entropy(const Botan::byte in[], size_t len) override { m_rng.add_entropy(in, len); }
-      private:
-         Botan::RandomNumberGenerator& m_rng;
-      };
-
    try
       {
       BOTAN_ASSERT_ARG_NON_NULL(rng_out);
@@ -17279,7 +17524,7 @@ int botan_rng_init(botan_rng_t* rng_out, const char* rng_type)
       std::unique_ptr<Botan::RandomNumberGenerator> rng;
 
       if(rng_type_s == "system")
-         rng.reset(new RNG_Wrapper(Botan::system_rng()));
+         rng.reset(new Botan::System_RNG);
       else if(rng_type_s == "user")
          rng.reset(new Botan::AutoSeeded_RNG);
 
@@ -17461,6 +17706,16 @@ int botan_cipher_destroy(botan_cipher_t cipher)
 int botan_cipher_clear(botan_cipher_t cipher)
    {
    return BOTAN_FFI_DO(Botan::Cipher_Mode, cipher, { cipher.clear(); });
+   }
+
+int botan_cipher_query_keylen(botan_cipher_t cipher,
+                              size_t* out_minimum_keylength,
+                              size_t* out_maximum_keylength)
+   {
+   return BOTAN_FFI_DO(Botan::Cipher_Mode, cipher, {
+      *out_minimum_keylength = cipher.key_spec().minimum_keylength();
+      *out_maximum_keylength = cipher.key_spec().maximum_keylength();
+      });
    }
 
 int botan_cipher_set_key(botan_cipher_t cipher,
@@ -18818,214 +19073,6 @@ DataSink_Stream::DataSink_Stream(const std::string& path,
 DataSink_Stream::~DataSink_Stream()
    {
    delete sink_p;
-   }
-
-}
-/*
-* DataSource
-* (C) 1999-2007 Jack Lloyd
-*     2005 Matthew Gregan
-*
-* Botan is released under the Simplified BSD License (see license.txt)
-*/
-
-
-namespace Botan {
-
-/*
-* Read a single byte from the DataSource
-*/
-size_t DataSource::read_byte(byte& out)
-   {
-   return read(&out, 1);
-   }
-
-/*
-* Peek a single byte from the DataSource
-*/
-size_t DataSource::peek_byte(byte& out) const
-   {
-   return peek(&out, 1, 0);
-   }
-
-/*
-* Discard the next N bytes of the data
-*/
-size_t DataSource::discard_next(size_t n)
-   {
-   byte buf[64] = { 0 };
-   size_t discarded = 0;
-
-   while(n)
-      {
-      const size_t got = this->read(buf, std::min(n, sizeof(buf)));
-      discarded += got;
-
-      if(got == 0)
-         break;
-      }
-
-   return discarded;
-   }
-
-/*
-* Read from a memory buffer
-*/
-size_t DataSource_Memory::read(byte out[], size_t length)
-   {
-   size_t got = std::min<size_t>(source.size() - offset, length);
-   copy_mem(out, source.data() + offset, got);
-   offset += got;
-   return got;
-   }
-
-bool DataSource_Memory::check_available(size_t n)
-   {
-   return (n <= (source.size() - offset));
-   }
-
-/*
-* Peek into a memory buffer
-*/
-size_t DataSource_Memory::peek(byte out[], size_t length,
-                               size_t peek_offset) const
-   {
-   const size_t bytes_left = source.size() - offset;
-   if(peek_offset >= bytes_left) return 0;
-
-   size_t got = std::min(bytes_left - peek_offset, length);
-   copy_mem(out, &source[offset + peek_offset], got);
-   return got;
-   }
-
-/*
-* Check if the memory buffer is empty
-*/
-bool DataSource_Memory::end_of_data() const
-   {
-   return (offset == source.size());
-   }
-
-/*
-* DataSource_Memory Constructor
-*/
-DataSource_Memory::DataSource_Memory(const std::string& in) :
-   source(reinterpret_cast<const byte*>(in.data()),
-          reinterpret_cast<const byte*>(in.data()) + in.length()),
-   offset(0)
-   {
-   offset = 0;
-   }
-
-/*
-* Read from a stream
-*/
-size_t DataSource_Stream::read(byte out[], size_t length)
-   {
-   source.read(reinterpret_cast<char*>(out), length);
-   if(source.bad())
-      throw Stream_IO_Error("DataSource_Stream::read: Source failure");
-
-   size_t got = source.gcount();
-   total_read += got;
-   return got;
-   }
-
-bool DataSource_Stream::check_available(size_t n)
-   {
-   const std::streampos orig_pos = source.tellg();
-   source.seekg(0, std::ios::end);
-   const size_t avail = source.tellg() - orig_pos;
-   source.seekg(orig_pos);
-   return (avail >= n);
-   }
-
-/*
-* Peek into a stream
-*/
-size_t DataSource_Stream::peek(byte out[], size_t length, size_t offset) const
-   {
-   if(end_of_data())
-      throw Invalid_State("DataSource_Stream: Cannot peek when out of data");
-
-   size_t got = 0;
-
-   if(offset)
-      {
-      secure_vector<byte> buf(offset);
-      source.read(reinterpret_cast<char*>(buf.data()), buf.size());
-      if(source.bad())
-         throw Stream_IO_Error("DataSource_Stream::peek: Source failure");
-      got = source.gcount();
-      }
-
-   if(got == offset)
-      {
-      source.read(reinterpret_cast<char*>(out), length);
-      if(source.bad())
-         throw Stream_IO_Error("DataSource_Stream::peek: Source failure");
-      got = source.gcount();
-      }
-
-   if(source.eof())
-      source.clear();
-   source.seekg(total_read, std::ios::beg);
-
-   return got;
-   }
-
-/*
-* Check if the stream is empty or in error
-*/
-bool DataSource_Stream::end_of_data() const
-   {
-   return (!source.good());
-   }
-
-/*
-* Return a human-readable ID for this stream
-*/
-std::string DataSource_Stream::id() const
-   {
-   return identifier;
-   }
-
-/*
-* DataSource_Stream Constructor
-*/
-DataSource_Stream::DataSource_Stream(const std::string& path,
-                                     bool use_binary) :
-   identifier(path),
-   source_p(new std::ifstream(path,
-                              use_binary ? std::ios::binary : std::ios::in)),
-   source(*source_p),
-   total_read(0)
-   {
-   if(!source.good())
-      {
-      delete source_p;
-      throw Stream_IO_Error("DataSource: Failure opening file " + path);
-      }
-   }
-
-/*
-* DataSource_Stream Constructor
-*/
-DataSource_Stream::DataSource_Stream(std::istream& in,
-                                     const std::string& name) :
-   identifier(name),
-   source_p(nullptr),
-   source(in),
-   total_read(0)
-   {
-   }
-
-/*
-* DataSource_Stream Destructor
-*/
-DataSource_Stream::~DataSource_Stream()
-   {
-   delete source_p;
    }
 
 }
@@ -22912,7 +22959,7 @@ std::future<Response> GET_async(const std::string& url, size_t allowable_redirec
 }
 /*
 * IDEA
-* (C) 1999-2010 Jack Lloyd
+* (C) 1999-2010,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -22929,8 +22976,7 @@ inline u16bit mul(u16bit x, u16bit y)
    {
    const u32bit P = static_cast<u32bit>(x) * y;
 
-   // P ? 0xFFFF : 0
-   const u16bit P_mask = !P - 1;
+   const u16bit Z_mask = static_cast<u16bit>(CT::expand_mask(P) & 0xFFFF);
 
    const u32bit P_hi = P >> 16;
    const u32bit P_lo = P & 0xFFFF;
@@ -22938,7 +22984,7 @@ inline u16bit mul(u16bit x, u16bit y)
    const u16bit r_1 = (P_lo - P_hi) + (P_lo < P_hi);
    const u16bit r_2 = 1 - x - y;
 
-   return (r_1 & P_mask) | (r_2 & ~P_mask);
+   return CT::select(Z_mask, r_1, r_2);
    }
 
 /*
@@ -22972,12 +23018,16 @@ void idea_op(const byte in[], byte out[], size_t blocks, const u16bit K[52])
    {
    const size_t BLOCK_SIZE = 8;
 
+   CT::poison(in, blocks * 8);
+   CT::poison(out, blocks * 8);
+   CT::poison(K, 52);
+
    for(size_t i = 0; i != blocks; ++i)
       {
-      u16bit X1 = load_be<u16bit>(in, 0);
-      u16bit X2 = load_be<u16bit>(in, 1);
-      u16bit X3 = load_be<u16bit>(in, 2);
-      u16bit X4 = load_be<u16bit>(in, 3);
+      u16bit X1 = load_be<u16bit>(in + BLOCK_SIZE*i, 0);
+      u16bit X2 = load_be<u16bit>(in + BLOCK_SIZE*i, 1);
+      u16bit X3 = load_be<u16bit>(in + BLOCK_SIZE*i, 2);
+      u16bit X4 = load_be<u16bit>(in + BLOCK_SIZE*i, 3);
 
       for(size_t j = 0; j != 8; ++j)
          {
@@ -23004,11 +23054,12 @@ void idea_op(const byte in[], byte out[], size_t blocks, const u16bit K[52])
       X3 += K[49];
       X4  = mul(X4, K[51]);
 
-      store_be(out, X1, X3, X2, X4);
-
-      in += BLOCK_SIZE;
-      out += BLOCK_SIZE;
+      store_be(out + BLOCK_SIZE*i, X1, X3, X2, X4);
       }
+
+   CT::unpoison(in, blocks * 8);
+   CT::unpoison(out, blocks * 8);
+   CT::unpoison(K, 52);
    }
 
 }
@@ -23036,6 +23087,10 @@ void IDEA::key_schedule(const byte key[], size_t)
    {
    EK.resize(52);
    DK.resize(52);
+
+   CT::poison(key, 16);
+   CT::poison(EK.data(), 52);
+   CT::poison(DK.data(), 52);
 
    for(size_t i = 0; i != 8; ++i)
       EK[i] = load_be<u16bit>(key, i);
@@ -23068,6 +23123,10 @@ void IDEA::key_schedule(const byte key[], size_t)
    DK[2] = -EK[50];
    DK[1] = -EK[49];
    DK[0] = mul_inv(EK[48]);
+
+   CT::unpoison(key, 16);
+   CT::unpoison(EK.data(), 52);
+   CT::unpoison(DK.data(), 52);
    }
 
 void IDEA::clear()
@@ -23207,6 +23266,10 @@ void transpose_out(__m128i& B0, __m128i& B1, __m128i& B2, __m128i& B3)
 */
 void idea_op_8(const byte in[64], byte out[64], const u16bit EK[52])
    {
+   CT::poison(in, 64);
+   CT::poison(out, 64);
+   CT::poison(EK, 52);
+
    const __m128i* in_mm = reinterpret_cast<const __m128i*>(in);
 
    __m128i B0 = _mm_loadu_si128(in_mm + 0);
@@ -23230,7 +23293,6 @@ void idea_op_8(const byte in[64], byte out[64], const u16bit EK[52])
       B3 = mul(B3, EK[6*i+3]);
 
       __m128i T0 = B2;
-
       B2 = _mm_xor_si128(B2, B0);
       B2 = mul(B2, EK[6*i+4]);
 
@@ -23267,6 +23329,10 @@ void idea_op_8(const byte in[64], byte out[64], const u16bit EK[52])
    _mm_storeu_si128(out_mm + 1, B2);
    _mm_storeu_si128(out_mm + 2, B1);
    _mm_storeu_si128(out_mm + 3, B3);
+
+   CT::unpoison(in, 64);
+   CT::unpoison(out, 64);
+   CT::unpoison(EK, 52);
    }
 
 }
@@ -24247,305 +24313,6 @@ Lion::Lion(HashFunction* hash, StreamCipher* cipher, size_t block_size) :
 
 }
 /*
-* Mlock Allocator
-* (C) 2012,2014 Jack Lloyd
-*
-* Botan is released under the Simplified BSD License (see license.txt)
-*/
-
-
-#include <sys/mman.h>
-#include <sys/resource.h>
-
-namespace Botan {
-
-namespace {
-
-size_t reset_mlock_limit(size_t max_req)
-   {
-#if defined(RLIMIT_MEMLOCK)
-   struct rlimit limits;
-
-   ::getrlimit(RLIMIT_MEMLOCK, &limits);
-
-   if(limits.rlim_cur < limits.rlim_max)
-      {
-      limits.rlim_cur = limits.rlim_max;
-      ::setrlimit(RLIMIT_MEMLOCK, &limits);
-      ::getrlimit(RLIMIT_MEMLOCK, &limits);
-      }
-
-   return std::min<size_t>(limits.rlim_cur, max_req);
-#endif
-
-   return 0;
-   }
-
-size_t mlock_limit()
-   {
-   /*
-   * Linux defaults to only 64 KiB of mlockable memory per process
-   * (too small) but BSDs offer a small fraction of total RAM (more
-   * than we need). Bound the total mlock size to 512 KiB which is
-   * enough to run the entire test suite without spilling to non-mlock
-   * memory (and thus presumably also enough for many useful
-   * programs), but small enough that we should not cause problems
-   * even if many processes are mlocking on the same machine.
-   */
-   size_t mlock_requested = 512;
-
-   /*
-   * Allow override via env variable
-   */
-   if(const char* env = ::getenv("BOTAN_MLOCK_POOL_SIZE"))
-      {
-      try
-         {
-         const size_t user_req = std::stoul(env, nullptr);
-         mlock_requested = std::min(user_req, mlock_requested);
-         }
-      catch(std::exception&) { /* ignore it */ }
-      }
-
-   return reset_mlock_limit(mlock_requested*1024);
-   }
-
-bool ptr_in_pool(const void* pool_ptr, size_t poolsize,
-                 const void* buf_ptr, size_t bufsize)
-   {
-   const uintptr_t pool = reinterpret_cast<uintptr_t>(pool_ptr);
-   const uintptr_t buf = reinterpret_cast<uintptr_t>(buf_ptr);
-
-   if(buf < pool || buf >= pool + poolsize)
-      return false;
-
-   BOTAN_ASSERT(buf + bufsize <= pool + poolsize,
-                "Pointer does not partially overlap pool");
-
-   return true;
-   }
-
-size_t padding_for_alignment(size_t offset, size_t desired_alignment)
-   {
-   size_t mod = offset % desired_alignment;
-   if(mod == 0)
-      return 0; // already right on
-   return desired_alignment - mod;
-   }
-
-}
-
-void* mlock_allocator::allocate(size_t num_elems, size_t elem_size)
-   {
-   if(!m_pool)
-      return nullptr;
-
-   const size_t n = num_elems * elem_size;
-   const size_t alignment = 16;
-
-   if(n / elem_size != num_elems)
-      return nullptr; // overflow!
-
-   if(n > m_poolsize)
-      return nullptr;
-   if(n < BOTAN_MLOCK_ALLOCATOR_MIN_ALLOCATION || n > BOTAN_MLOCK_ALLOCATOR_MAX_ALLOCATION)
-      return nullptr;
-
-   std::lock_guard<std::mutex> lock(m_mutex);
-
-   auto best_fit = m_freelist.end();
-
-   for(auto i = m_freelist.begin(); i != m_freelist.end(); ++i)
-      {
-      // If we have a perfect fit, use it immediately
-      if(i->second == n && (i->first % alignment) == 0)
-         {
-         const size_t offset = i->first;
-         m_freelist.erase(i);
-         clear_mem(m_pool + offset, n);
-
-         BOTAN_ASSERT((reinterpret_cast<size_t>(m_pool) + offset) % alignment == 0,
-                      "Returning correctly aligned pointer");
-
-         return m_pool + offset;
-         }
-
-      if((i->second >= (n + padding_for_alignment(i->first, alignment)) &&
-          ((best_fit == m_freelist.end()) || (best_fit->second > i->second))))
-         {
-         best_fit = i;
-         }
-      }
-
-   if(best_fit != m_freelist.end())
-      {
-      const size_t offset = best_fit->first;
-
-      const size_t alignment_padding = padding_for_alignment(offset, alignment);
-
-      best_fit->first += n + alignment_padding;
-      best_fit->second -= n + alignment_padding;
-
-      // Need to realign, split the block
-      if(alignment_padding)
-         {
-         /*
-         If we used the entire block except for small piece used for
-         alignment at the beginning, so just update the entry already
-         in place (as it is in the correct location), rather than
-         deleting the empty range and inserting the new one in the
-         same location.
-         */
-         if(best_fit->second == 0)
-            {
-            best_fit->first = offset;
-            best_fit->second = alignment_padding;
-            }
-         else
-            m_freelist.insert(best_fit, std::make_pair(offset, alignment_padding));
-         }
-
-      clear_mem(m_pool + offset + alignment_padding, n);
-
-      BOTAN_ASSERT((reinterpret_cast<size_t>(m_pool) + offset + alignment_padding) % alignment == 0,
-                   "Returning correctly aligned pointer");
-
-      return m_pool + offset + alignment_padding;
-      }
-
-   return nullptr;
-   }
-
-bool mlock_allocator::deallocate(void* p, size_t num_elems, size_t elem_size)
-   {
-   if(!m_pool)
-      return false;
-
-   /*
-   We do not have to zero the memory here, as
-   secure_allocator::deallocate does that for all arguments before
-   invoking the deallocator (us or delete[])
-   */
-
-   size_t n = num_elems * elem_size;
-
-   /*
-   We return nullptr in allocate if there was an overflow, so we
-   should never ever see an overflow in a deallocation.
-   */
-   BOTAN_ASSERT(n / elem_size == num_elems,
-                "No overflow in deallocation");
-
-   if(!ptr_in_pool(m_pool, m_poolsize, p, n))
-      return false;
-
-   std::lock_guard<std::mutex> lock(m_mutex);
-
-   const size_t start = static_cast<byte*>(p) - m_pool;
-
-   auto comp = [](std::pair<size_t, size_t> x, std::pair<size_t, size_t> y){ return x.first < y.first; };
-
-   auto i = std::lower_bound(m_freelist.begin(), m_freelist.end(),
-                             std::make_pair(start, 0), comp);
-
-   // try to merge with later block
-   if(i != m_freelist.end() && start + n == i->first)
-      {
-      i->first = start;
-      i->second += n;
-      n = 0;
-      }
-
-   // try to merge with previous block
-   if(i != m_freelist.begin())
-      {
-      auto prev = std::prev(i);
-
-      if(prev->first + prev->second == start)
-         {
-         if(n)
-            {
-            prev->second += n;
-            n = 0;
-            }
-         else
-            {
-            // merge adjoining
-            prev->second += i->second;
-            m_freelist.erase(i);
-            }
-         }
-      }
-
-   if(n != 0) // no merge possible?
-      m_freelist.insert(i, std::make_pair(start, n));
-
-   return true;
-   }
-
-mlock_allocator::mlock_allocator() :
-   m_poolsize(mlock_limit()),
-   m_pool(nullptr)
-   {
-#if !defined(MAP_NOCORE)
-   #define MAP_NOCORE 0
-#endif
-
-#if !defined(MAP_ANONYMOUS)
-   #define MAP_ANONYMOUS MAP_ANON
-#endif
-
-   if(m_poolsize)
-      {
-      m_pool = static_cast<byte*>(
-         ::mmap(
-            nullptr, m_poolsize,
-            PROT_READ | PROT_WRITE,
-            MAP_ANONYMOUS | MAP_SHARED | MAP_NOCORE,
-            -1, 0));
-
-      if(m_pool == static_cast<byte*>(MAP_FAILED))
-         {
-         m_pool = nullptr;
-         throw std::runtime_error("Failed to mmap locking_allocator pool");
-         }
-
-      clear_mem(m_pool, m_poolsize);
-
-      if(::mlock(m_pool, m_poolsize) != 0)
-         {
-         ::munmap(m_pool, m_poolsize);
-         m_pool = nullptr;
-         throw std::runtime_error("Could not mlock " + std::to_string(m_poolsize) + " bytes");
-         }
-
-#if defined(MADV_DONTDUMP)
-      ::madvise(m_pool, m_poolsize, MADV_DONTDUMP);
-#endif
-
-      m_freelist.push_back(std::make_pair(0, m_poolsize));
-      }
-   }
-
-mlock_allocator::~mlock_allocator()
-   {
-   if(m_pool)
-      {
-      clear_mem(m_pool, m_poolsize);
-      ::munlock(m_pool, m_poolsize);
-      ::munmap(m_pool, m_poolsize);
-      m_pool = nullptr;
-      }
-   }
-
-mlock_allocator& mlock_allocator::instance()
-   {
-   static mlock_allocator mlock;
-   return mlock;
-   }
-
-}
-/*
 * Message Authentication Code base class
 * (C) 1999-2008 Jack Lloyd
 *
@@ -25020,6 +24787,7 @@ void MARS::clear()
  *
  * (C) 2014 cryptosource GmbH
  * (C) 2014 Falko Strenzke fstrenzke@cryptosource.de
+ * (C) 2015 Jack Lloyd
  *
  * Botan is released under the Simplified BSD License (see license.txt)
  *
@@ -25146,21 +24914,14 @@ secure_vector<int> binary_matrix::row_reduced_echelon_form()
    return perm;
    }
 
-void randomize_support(u32bit n, std::vector<gf2m> & L, RandomNumberGenerator & rng)
+void randomize_support(std::vector<gf2m>& L, RandomNumberGenerator& rng)
    {
-   unsigned int i, j;
-   gf2m tmp;
-
-   for (i = 0; i < n; ++i)
+   for(u32bit i = 0; i != L.size(); ++i)
       {
+      gf2m rnd = random_gf2m(rng);
 
-      gf2m rnd;
-      rng.randomize(reinterpret_cast<byte*>(&rnd), sizeof(rnd));
-      j = rnd % n; // no rejection sampling, but for useful code-based parameters with n <= 13 this seem tolerable
-
-      tmp = L[j];
-      L[j] = L[i];
-      L[i] = tmp;
+       // no rejection sampling, but for useful code-based parameters with n <= 13 this seem tolerable
+      std::swap(L[i], L[rnd % L.size()]);
       }
    }
 
@@ -25247,7 +25008,7 @@ McEliece_PrivateKey generate_mceliece_key( RandomNumberGenerator & rng, u32bit e
       {
       L[i]=i;
       }
-   randomize_support(code_length,L,rng);
+   randomize_support(L, rng);
    polyn_gf2m g(sp_field); // create as zero
    bool success = false;
    do
@@ -26464,6 +26225,7 @@ bool McEliece_PublicKey::operator==(const McEliece_PublicKey& other) const
  *
  * (C) 2014 cryptosource GmbH
  * (C) 2014 Falko Strenzke fstrenzke@cryptosource.de
+ * (C) 2015 Jack Lloyd
  *
  * Botan is released under the Simplified BSD License (see license.txt)
  *
@@ -26480,6 +26242,9 @@ gf2m generate_gf2m_mask(gf2m a)
    return ~(result - 1);
    }
 
+/**
+* number of leading zeros
+*/
 unsigned nlz_16bit(u16bit x)
    {
    unsigned n;
@@ -26510,24 +26275,31 @@ int polyn_gf2m::calc_degree_secure() const
    const_cast<polyn_gf2m*>(this)->m_deg = result;
    return result;
    }
-/**
-* number of leading zeros
-*/
 
-gf2m random_code_element(unsigned code_length, Botan::RandomNumberGenerator& rng)
+gf2m random_gf2m(RandomNumberGenerator& rng)
+   {
+   byte b[2];
+   rng.randomize(b, sizeof(b));
+   return make_u16bit(b[1], b[0]);
+   }
+
+gf2m random_code_element(unsigned code_length, RandomNumberGenerator& rng)
    {
    if(code_length == 0)
       {
       throw Invalid_Argument("random_code_element() was supplied a code length of zero");
       }
-   unsigned nlz = nlz_16bit(code_length-1);
-   gf2m mask = (1 << (16-nlz)) -1;
+   const unsigned nlz = nlz_16bit(code_length-1);
+   const gf2m mask = (1 << (16-nlz)) -1;
+
    gf2m result;
+
    do
       {
-      rng.randomize(reinterpret_cast<byte*>(&result), sizeof(result));
+      result = random_gf2m(rng);
       result &= mask;
       } while(result >= code_length); // rejection sampling
+
    return result;
    }
 
@@ -30183,6 +29955,10 @@ void bigint_monty_redc(word z[],
    {
    const size_t z_size = 2*(p_size+1);
 
+   CT::poison(z, z_size);
+   CT::poison(p, p_size);
+   CT::poison(ws, 2*(p_size+1));
+
    const size_t blocks_of_8 = p_size - (p_size % 8);
 
    for(size_t i = 0; i != p_size; ++i)
@@ -30208,10 +29984,10 @@ void bigint_monty_redc(word z[],
       carry = (z_sum < z_i[p_size]);
       z_i[p_size] = z_sum;
 
-      for(size_t j = p_size + 1; carry && j != z_size - i; ++j)
+      for(size_t j = p_size + 1; j < z_size - i; ++j)
          {
-         ++z_i[j];
-         carry = !z_i[j];
+         z_i[j] += carry;
+         carry = carry & !z_i[j];
          }
       }
 
@@ -30234,12 +30010,18 @@ void bigint_monty_redc(word z[],
 
    ws[p_size] = word_sub(z[p_size+p_size], 0, &borrow);
 
-   BOTAN_ASSERT(borrow == 0 || borrow == 1, "Expected borrow");
-
    copy_mem(ws + p_size + 1, z + p_size, p_size + 1);
 
-   copy_mem(z, ws + borrow*(p_size+1), p_size + 1);
+   CT::conditional_copy_mem(borrow, z, ws + (p_size + 1), ws, (p_size + 1));
    clear_mem(z + p_size + 1, z_size - p_size - 1);
+
+   CT::unpoison(z, z_size);
+   CT::unpoison(p, p_size);
+   CT::unpoison(ws, 2*(p_size+1));
+
+   // This check comes after we've used it but that's ok here
+   CT::unpoison(&borrow, 1);
+   BOTAN_ASSERT(borrow == 0 || borrow == 1, "Expected borrow");
    }
 
 void bigint_monty_mul(word z[], size_t z_size,
@@ -31242,22 +31024,37 @@ BigInt random_prime(RandomNumberGenerator& rng,
                     size_t bits, const BigInt& coprime,
                     size_t equiv, size_t modulo)
    {
+   if(coprime <= 0)
+      {
+      throw Invalid_Argument("random_prime: coprime must be > 0");
+      }
+   if(modulo % 2 == 1 || modulo == 0)
+      {
+      throw Invalid_Argument("random_prime: Invalid modulo value");
+      }
+   if(equiv >= modulo || equiv % 2 == 0)
+      {
+      throw Invalid_Argument("random_prime: equiv must be < modulo, and odd");
+      }
+
+   // Handle small values:
    if(bits <= 1)
+      {
       throw Invalid_Argument("random_prime: Can't make a prime of " +
                              std::to_string(bits) + " bits");
+      }
    else if(bits == 2)
+      {
       return ((rng.next_byte() % 2) ? 2 : 3);
+      }
    else if(bits == 3)
+      {
       return ((rng.next_byte() % 2) ? 5 : 7);
+      }
    else if(bits == 4)
+      {
       return ((rng.next_byte() % 2) ? 11 : 13);
-
-   if(coprime <= 0)
-      throw Invalid_Argument("random_prime: coprime must be > 0");
-   if(modulo % 2 == 1 || modulo == 0)
-      throw Invalid_Argument("random_prime: Invalid modulo value");
-   if(equiv >= modulo || equiv % 2 == 0)
-      throw Invalid_Argument("random_prime: equiv must be < modulo, and odd");
+      }
 
    while(true)
       {
@@ -31280,27 +31077,39 @@ BigInt random_prime(RandomNumberGenerator& rng,
       size_t counter = 0;
       while(true)
          {
-         if(counter == 4096 || p.bits() > bits)
-            break;
-
-         bool passes_sieve = true;
          ++counter;
+
+         if(counter >= 4096)
+            {
+            break; // don't try forever, choose a new starting point
+            }
+
          p += modulo;
 
          if(p.bits() > bits)
             break;
 
+         bool passes_sieve = true;
          for(size_t j = 0; j != sieve.size(); ++j)
             {
             sieve[j] = (sieve[j] + modulo) % PRIMES[j];
             if(sieve[j] == 0)
+               {
                passes_sieve = false;
+               break;
+               }
             }
 
-         if(!passes_sieve || gcd(p - 1, coprime) != 1)
+         if(!passes_sieve)
             continue;
-         if(is_prime(p, rng, 64, true))
+
+         if(gcd(p - 1, coprime) != 1)
+            continue;
+
+         if(is_prime(p, rng, 128, true))
+            {
             return p;
+            }
          }
       }
    }
@@ -31317,7 +31126,8 @@ BigInt random_safe_prime(RandomNumberGenerator& rng, size_t bits)
    BigInt p;
    do
       p = (random_prime(rng, bits - 1) << 1) + 1;
-   while(!is_prime(p, rng, 64, true));
+   while(!is_prime(p, rng, 128, true));
+
    return p;
    }
 
@@ -34272,6 +34082,9 @@ pbes2_encrypt(const secure_vector<byte>& key_bits,
 
    std::unique_ptr<Cipher_Mode> enc(get_cipher_mode(cipher, ENCRYPTION));
 
+   if(!enc)
+      throw Decoding_Error("PBE-PKCS5 cannot encrypt no cipher " + cipher);
+
    std::unique_ptr<PBKDF> pbkdf(get_pbkdf("PBKDF2(" + prf + ")"));
 
    const size_t key_length = enc->key_spec().maximum_keylength();
@@ -34345,6 +34158,8 @@ pbes2_decrypt(const secure_vector<byte>& key_bits,
    std::unique_ptr<PBKDF> pbkdf(get_pbkdf("PBKDF2(" + prf + ")"));
 
    std::unique_ptr<Cipher_Mode> dec(get_cipher_mode(cipher, DECRYPTION));
+   if(!dec)
+      throw Decoding_Error("PBE-PKCS5 cannot decrypt no cipher " + cipher);
 
    if(key_length == 0)
       key_length = dec->key_spec().maximum_keylength();
@@ -34635,18 +34450,38 @@ namespace Botan {
 
 namespace PEM_Code {
 
+namespace {
+
+std::string linewrap(size_t width, const std::string& in)
+   {
+   std::string out;
+   for(size_t i = 0; i != in.size(); ++i)
+      {
+      if(i > 0 && i % width == 0)
+         {
+         out.push_back('\n');
+         }
+      out.push_back(in[i]);
+      }
+   if(out.size() > 0 && out[out.size()-1] != '\n')
+      {
+      out.push_back('\n');
+      }
+
+   return out;
+   }
+
+}
+
 /*
 * PEM encode BER/DER-encoded objects
 */
-std::string encode(const byte der[], size_t length, const std::string& label,
-                   size_t width)
+std::string encode(const byte der[], size_t length, const std::string& label, size_t width)
    {
    const std::string PEM_HEADER = "-----BEGIN " + label + "-----\n";
    const std::string PEM_TRAILER = "-----END " + label + "-----\n";
 
-   Pipe pipe(new Base64_Encoder(true, width));
-   pipe.process_msg(der, length);
-   return (PEM_HEADER + pipe.read_all_as_string() + PEM_TRAILER);
+   return (PEM_HEADER + linewrap(width, base64_encode(der, length)) + PEM_TRAILER);
    }
 
 /*
@@ -34701,8 +34536,7 @@ secure_vector<byte> decode(DataSource& source, std::string& label)
          label += static_cast<char>(b);
       }
 
-   Pipe base64(new Base64_Decoder);
-   base64.start_msg();
+   std::vector<char> b64;
 
    const std::string PEM_TRAILER = "-----END " + label + "-----";
    position = 0;
@@ -34717,10 +34551,10 @@ secure_vector<byte> decode(DataSource& source, std::string& label)
          throw Decoding_Error("PEM: Malformed PEM trailer");
 
       if(position == 0)
-         base64.write(b);
+         b64.push_back(b);
       }
-   base64.end_msg();
-   return base64.read_all();
+
+   return base64_decode(b64.data(), b64.size());
    }
 
 secure_vector<byte> decode_check_label(const std::string& pem,
@@ -35451,7 +35285,7 @@ void ProcWalking_EntropySource::poll(Entropy_Accumulator& accum)
 }
 /*
 * Blinding for public key operations
-* (C) 1999-2010 Jack Lloyd
+* (C) 1999-2010,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -35463,24 +35297,28 @@ void ProcWalking_EntropySource::poll(Entropy_Accumulator& accum)
 
 namespace Botan {
 
-// TODO: use Montgomery
-
 Blinder::Blinder(const BigInt& modulus,
-                 std::function<BigInt (const BigInt&)> fwd_func,
-                 std::function<BigInt (const BigInt&)> inv_func)
+                 std::function<BigInt (const BigInt&)> fwd,
+                 std::function<BigInt (const BigInt&)> inv) :
+   m_fwd_fn(fwd), m_inv_fn(inv)
    {
    m_reducer = Modular_Reducer(modulus);
+   m_modulus_bits = modulus.bits();
 
 #if defined(BOTAN_HAS_SYSTEM_RNG)
-   auto& rng = system_rng();
+   m_rng.reset(new System_RNG);
 #else
-   AutoSeeded_RNG rng;
+   m_rng.reset(new AutoSeeded_RNG);
 #endif
 
-   const BigInt k(rng, modulus.bits() - 1);
+   const BigInt k = blinding_nonce();
+   m_e = m_fwd_fn(k);
+   m_d = m_inv_fn(k);
+   }
 
-   m_e = fwd_func(k);
-   m_d = inv_func(k);
+BigInt Blinder::blinding_nonce() const
+   {
+   return BigInt(*m_rng, m_modulus_bits - 1);
    }
 
 BigInt Blinder::blind(const BigInt& i) const
@@ -35488,8 +35326,20 @@ BigInt Blinder::blind(const BigInt& i) const
    if(!m_reducer.initialized())
       throw std::runtime_error("Blinder not initialized, cannot blind");
 
-   m_e = m_reducer.square(m_e);
-   m_d = m_reducer.square(m_d);
+   ++m_counter;
+
+   if(BOTAN_BLINDING_REINIT_INTERVAL > 0 && (m_counter % BOTAN_BLINDING_REINIT_INTERVAL == 0))
+      {
+      const BigInt k = blinding_nonce();
+      m_e = m_fwd_fn(k);
+      m_d = m_inv_fn(k);
+      }
+   else
+      {
+      m_e = m_reducer.square(m_e);
+      m_d = m_reducer.square(m_d);
+      }
+
    return m_reducer.multiply(i, m_e);
    }
 
@@ -35707,7 +35557,7 @@ OID Public_Key::get_oid() const
 void Public_Key::load_check(RandomNumberGenerator& rng) const
    {
    if(!check_key(rng, BOTAN_PUBLIC_KEY_STRONG_CHECKS_ON_LOAD))
-      throw Invalid_Argument(algo_name() + ": Invalid public key");
+      throw Invalid_Argument("Invalid public key");
    }
 
 /*
@@ -35716,7 +35566,7 @@ void Public_Key::load_check(RandomNumberGenerator& rng) const
 void Private_Key::load_check(RandomNumberGenerator& rng) const
    {
    if(!check_key(rng, BOTAN_PRIVATE_KEY_STRONG_CHECKS_ON_LOAD))
-      throw Invalid_Argument(algo_name() + ": Invalid private key");
+      throw Invalid_Argument("Invalid private key");
    }
 
 /*
@@ -35725,7 +35575,7 @@ void Private_Key::load_check(RandomNumberGenerator& rng) const
 void Private_Key::gen_check(RandomNumberGenerator& rng) const
    {
    if(!check_key(rng, BOTAN_PRIVATE_KEY_STRONG_CHECKS_ON_GENERATE))
-      throw Self_Test_Failure(algo_name() + " private key generation failed");
+      throw Self_Test_Failure("Private key generation failed");
    }
 
 }
@@ -36112,19 +35962,26 @@ namespace Botan {
 namespace {
 
 template<typename T, typename Key>
-T* get_pk_op(const std::string& what, const Key& key, const std::string& pad)
+T* get_pk_op(const std::string& what, const Key& key, const std::string& pad,
+             const std::string& provider = "")
    {
-   T* p = Algo_Registry<T>::global_registry().make(typename T::Spec(key, pad));
-   if(!p)
-      throw Lookup_Error(what + " with " + key.algo_name() + "/" + pad + " not supported");
-   return p;
+   if(T* p = Algo_Registry<T>::global_registry().make(typename T::Spec(key, pad), provider))
+      return p;
+
+   const std::string err = what + " with " + key.algo_name() + "/" + pad + " not supported";
+   if(provider != "")
+      throw Lookup_Error(err + " with provider " + provider);
+   else
+      throw Lookup_Error(err);
    }
 
 }
 
-PK_Encryptor_EME::PK_Encryptor_EME(const Public_Key& key, const std::string& eme)
+PK_Encryptor_EME::PK_Encryptor_EME(const Public_Key& key,
+                                   const std::string& padding,
+                                   const std::string& provider)
    {
-   m_op.reset(get_pk_op<PK_Ops::Encryption>("Encryption", key, eme));
+   m_op.reset(get_pk_op<PK_Ops::Encryption>("Encryption", key, padding, provider));
    }
 
 std::vector<byte>
@@ -36138,9 +35995,10 @@ size_t PK_Encryptor_EME::maximum_input_size() const
    return m_op->max_input_bits() / 8;
    }
 
-PK_Decryptor_EME::PK_Decryptor_EME(const Private_Key& key, const std::string& eme)
+PK_Decryptor_EME::PK_Decryptor_EME(const Private_Key& key, const std::string& padding,
+                                   const std::string& provider)
    {
-   m_op.reset(get_pk_op<PK_Ops::Decryption>("Decryption", key, eme));
+   m_op.reset(get_pk_op<PK_Ops::Decryption>("Decryption", key, padding, provider));
    }
 
 secure_vector<byte> PK_Decryptor_EME::dec(const byte msg[], size_t length) const
@@ -36205,9 +36063,10 @@ std::vector<byte> der_decode_signature(const byte sig[], size_t len,
 
 PK_Signer::PK_Signer(const Private_Key& key,
                      const std::string& emsa,
-                     Signature_Format format)
+                     Signature_Format format,
+                     const std::string& provider)
    {
-   m_op.reset(get_pk_op<PK_Ops::Signature>("Signing", key, emsa));
+   m_op.reset(get_pk_op<PK_Ops::Signature>("Signing", key, emsa, provider));
    m_sig_format = format;
    }
 
@@ -36232,9 +36091,10 @@ std::vector<byte> PK_Signer::signature(RandomNumberGenerator& rng)
 
 PK_Verifier::PK_Verifier(const Public_Key& key,
                          const std::string& emsa_name,
-                         Signature_Format format)
+                         Signature_Format format,
+                         const std::string& provider)
    {
-   m_op.reset(get_pk_op<PK_Ops::Verification>("Verification", key, emsa_name));
+   m_op.reset(get_pk_op<PK_Ops::Verification>("Verification", key, emsa_name, provider));
    m_sig_format = format;
    }
 
@@ -36615,6 +36475,63 @@ byte RC2::EKB_code(size_t ekb)
    }
 
 }
+/*
+* OpenSSL RC4
+* (C) 1999-2007,2015 Jack Lloyd
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+
+#if defined(BOTAN_HAS_OPENSSL)
+
+#include <openssl/rc4.h>
+
+namespace Botan {
+
+namespace {
+
+class OpenSSL_RC4 : public StreamCipher
+   {
+   public:
+      void clear() { clear_mem(&m_rc4, 1); }
+
+      std::string name() const { return "RC4"; }
+      StreamCipher* clone() const { return new OpenSSL_RC4; }
+
+      Key_Length_Specification key_spec() const
+         {
+         return Key_Length_Specification(1, 32);
+         }
+
+      OpenSSL_RC4(size_t skip = 0) : m_skip(skip) { clear(); }
+      ~OpenSSL_RC4() { clear(); }
+   private:
+      void cipher(const byte in[], byte out[], size_t length)
+         {
+         ::RC4(&m_rc4, length, in, out);
+         }
+
+      void key_schedule(const byte key[], size_t length)
+         {
+         ::RC4_set_key(&m_rc4, length, key);
+         byte d = 0;
+         for(size_t i = 0; i != m_skip; ++i)
+            ::RC4(&m_rc4, 1, &d, &d);
+         }
+
+      size_t m_skip;
+      RC4_KEY m_rc4;
+   };
+
+}
+
+BOTAN_REGISTER_TYPE(StreamCipher, OpenSSL_RC4, "RC4", (make_new_T_1len<OpenSSL_RC4,0>),
+                    "openssl", BOTAN_OPENSSL_RC4_PRIO);
+
+}
+
+#endif
 /*
 * RC4
 * (C) 1999-2007 Jack Lloyd
@@ -37576,6 +37493,282 @@ RandomNumberGenerator* RandomNumberGenerator::make_rng()
    }
 
 }
+/*
+* RSA operations provided by OpenSSL
+* (C) 2015 Jack Lloyd
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+
+#if defined(BOTAN_HAS_OPENSSL)
+
+
+#include <openssl/rsa.h>
+#include <openssl/err.h>
+
+namespace Botan {
+
+namespace {
+
+std::pair<int, size_t> get_openssl_enc_pad(const std::string& eme)
+   {
+   ERR_load_crypto_strings();
+   if(eme == "Raw")
+      return std::make_pair(RSA_NO_PADDING, 0);
+   else if(eme == "EME-PKCS1-v1_5")
+      return std::make_pair(RSA_PKCS1_PADDING, 11);
+   else if(eme == "OAEP(SHA-1)")
+      return std::make_pair(RSA_PKCS1_OAEP_PADDING, 41);
+   else
+      throw Lookup_Error("OpenSSL RSA does not support EME " + eme);
+   }
+
+class OpenSSL_RSA_Encryption_Operation : public PK_Ops::Encryption
+   {
+   public:
+      typedef RSA_PublicKey Key_Type;
+
+      static OpenSSL_RSA_Encryption_Operation* make(const Spec& spec)
+         {
+         try
+            {
+            if(auto* key = dynamic_cast<const RSA_PublicKey*>(&spec.key()))
+               {
+               auto pad_info = get_openssl_enc_pad(spec.padding());
+               return new OpenSSL_RSA_Encryption_Operation(*key, pad_info.first, pad_info.second);
+               }
+            }
+         catch(...) {}
+
+         return nullptr;
+         }
+
+      OpenSSL_RSA_Encryption_Operation(const RSA_PublicKey& rsa, int pad, size_t pad_overhead) :
+         m_openssl_rsa(nullptr, ::RSA_free), m_padding(pad)
+         {
+         const std::vector<byte> der = rsa.x509_subject_public_key();
+         const byte* der_ptr = der.data();
+         m_openssl_rsa.reset(::d2i_RSAPublicKey(nullptr, &der_ptr, der.size()));
+         if(!m_openssl_rsa)
+            throw OpenSSL_Error("d2i_RSAPublicKey");
+
+         m_bits = 8 * (n_size() - pad_overhead) - 1;
+         }
+
+      size_t max_input_bits() const override { return m_bits; };
+
+      secure_vector<byte> encrypt(const byte msg[], size_t msg_len,
+                                  RandomNumberGenerator&) override
+         {
+         const size_t mod_sz = n_size();
+
+         if(msg_len > mod_sz)
+            throw Invalid_Argument("Input too large for RSA key");
+
+         secure_vector<byte> outbuf(mod_sz);
+
+         secure_vector<byte> inbuf;
+
+         if(m_padding == RSA_NO_PADDING)
+            {
+            inbuf.resize(mod_sz);
+            copy_mem(&inbuf[mod_sz - msg_len], msg, msg_len);
+            }
+         else
+            {
+            inbuf.assign(msg, msg + msg_len);
+            }
+
+         int rc = ::RSA_public_encrypt(inbuf.size(), inbuf.data(), outbuf.data(),
+                                       m_openssl_rsa.get(), m_padding);
+         if(rc < 0)
+            throw OpenSSL_Error("RSA_public_encrypt");
+
+         return outbuf;
+         }
+
+   private:
+      size_t n_size() const { return ::RSA_size(m_openssl_rsa.get()); }
+      std::unique_ptr<RSA, std::function<void (RSA*)>> m_openssl_rsa;
+      size_t m_bits = 0;
+      int m_padding = 0;
+   };
+
+class OpenSSL_RSA_Decryption_Operation : public PK_Ops::Decryption
+   {
+   public:
+      typedef RSA_PrivateKey Key_Type;
+
+      static OpenSSL_RSA_Decryption_Operation* make(const Spec& spec)
+         {
+         try
+            {
+            if(auto* key = dynamic_cast<const RSA_PrivateKey*>(&spec.key()))
+               {
+               auto pad_info = get_openssl_enc_pad(spec.padding());
+               return new OpenSSL_RSA_Decryption_Operation(*key, pad_info.first);
+               }
+            }
+         catch(...) {}
+
+         return nullptr;
+         }
+
+      OpenSSL_RSA_Decryption_Operation(const RSA_PrivateKey& rsa, int pad) :
+         m_openssl_rsa(nullptr, ::RSA_free), m_padding(pad)
+         {
+         const secure_vector<byte> der = rsa.pkcs8_private_key();
+         const byte* der_ptr = der.data();
+         m_openssl_rsa.reset(d2i_RSAPrivateKey(nullptr, &der_ptr, der.size()));
+         if(!m_openssl_rsa)
+            throw OpenSSL_Error("d2i_RSAPrivateKey");
+         }
+
+      size_t max_input_bits() const override { return ::BN_num_bits(m_openssl_rsa->n) - 1; }
+
+      secure_vector<byte> decrypt(const byte msg[], size_t msg_len) override
+         {
+         secure_vector<byte> buf(::RSA_size(m_openssl_rsa.get()));
+         int rc = ::RSA_private_decrypt(msg_len, msg, buf.data(), m_openssl_rsa.get(), m_padding);
+         if(rc < 0 || static_cast<size_t>(rc) > buf.size())
+            throw OpenSSL_Error("RSA_private_decrypt");
+         buf.resize(rc);
+
+         if(m_padding == RSA_NO_PADDING)
+            {
+            return CT::strip_leading_zeros(buf);
+            }
+
+         return buf;
+         }
+
+   private:
+      std::unique_ptr<RSA, std::function<void (RSA*)>> m_openssl_rsa;
+      int m_padding = 0;
+   };
+
+class OpenSSL_RSA_Verification_Operation : public PK_Ops::Verification_with_EMSA
+   {
+   public:
+      typedef RSA_PublicKey Key_Type;
+
+      static OpenSSL_RSA_Verification_Operation* make(const Spec& spec)
+         {
+         if(const RSA_PublicKey* rsa = dynamic_cast<const RSA_PublicKey*>(&spec.key()))
+            {
+            return new OpenSSL_RSA_Verification_Operation(*rsa, spec.padding());
+            }
+
+         return nullptr;
+         }
+
+      OpenSSL_RSA_Verification_Operation(const RSA_PublicKey& rsa, const std::string& emsa) :
+         PK_Ops::Verification_with_EMSA(emsa),
+         m_openssl_rsa(nullptr, ::RSA_free)
+         {
+         const std::vector<byte> der = rsa.x509_subject_public_key();
+         const byte* der_ptr = der.data();
+         m_openssl_rsa.reset(::d2i_RSAPublicKey(nullptr, &der_ptr, der.size()));
+         }
+
+      size_t max_input_bits() const override { return ::BN_num_bits(m_openssl_rsa->n) - 1; }
+
+      bool with_recovery() const override { return true; }
+
+      secure_vector<byte> verify_mr(const byte msg[], size_t msg_len) override
+         {
+         const size_t mod_sz = ::RSA_size(m_openssl_rsa.get());
+
+         if(msg_len > mod_sz)
+            throw Invalid_Argument("OpenSSL RSA verify input too large");
+
+         secure_vector<byte> inbuf(mod_sz);
+         copy_mem(&inbuf[mod_sz - msg_len], msg, msg_len);
+
+         secure_vector<byte> outbuf(mod_sz);
+
+         int rc = ::RSA_public_decrypt(inbuf.size(), inbuf.data(), outbuf.data(),
+                                       m_openssl_rsa.get(), RSA_NO_PADDING);
+         if(rc < 0)
+            throw Invalid_Argument("RSA_public_decrypt");
+
+         return CT::strip_leading_zeros(outbuf);
+         }
+   private:
+      std::unique_ptr<RSA, std::function<void (RSA*)>> m_openssl_rsa;
+   };
+
+class OpenSSL_RSA_Signing_Operation : public PK_Ops::Signature_with_EMSA
+   {
+   public:
+      typedef RSA_PrivateKey Key_Type;
+
+      static OpenSSL_RSA_Signing_Operation* make(const Spec& spec)
+         {
+         if(const RSA_PrivateKey* rsa = dynamic_cast<const RSA_PrivateKey*>(&spec.key()))
+            {
+            return new OpenSSL_RSA_Signing_Operation(*rsa, spec.padding());
+            }
+
+         return nullptr;
+         }
+
+      OpenSSL_RSA_Signing_Operation(const RSA_PrivateKey& rsa, const std::string& emsa) :
+         PK_Ops::Signature_with_EMSA(emsa),
+         m_openssl_rsa(nullptr, ::RSA_free)
+         {
+         const secure_vector<byte> der = rsa.pkcs8_private_key();
+         const byte* der_ptr = der.data();
+         m_openssl_rsa.reset(d2i_RSAPrivateKey(nullptr, &der_ptr, der.size()));
+         if(!m_openssl_rsa)
+            throw OpenSSL_Error("d2i_RSAPrivateKey");
+         }
+
+      secure_vector<byte> raw_sign(const byte msg[], size_t msg_len,
+                                   RandomNumberGenerator&) override
+         {
+         const size_t mod_sz = ::RSA_size(m_openssl_rsa.get());
+
+         if(msg_len > mod_sz)
+            throw Invalid_Argument("OpenSSL RSA sign input too large");
+
+         secure_vector<byte> inbuf(mod_sz);
+         copy_mem(&inbuf[mod_sz - msg_len], msg, msg_len);
+
+         secure_vector<byte> outbuf(mod_sz);
+
+         int rc = ::RSA_private_encrypt(inbuf.size(), inbuf.data(), outbuf.data(),
+                                        m_openssl_rsa.get(), RSA_NO_PADDING);
+         if(rc < 0)
+            throw OpenSSL_Error("RSA_private_encrypt");
+
+         return outbuf;
+         }
+
+      size_t max_input_bits() const override { return ::BN_num_bits(m_openssl_rsa->n) - 1; }
+
+   private:
+      std::unique_ptr<RSA, std::function<void (RSA*)>> m_openssl_rsa;
+   };
+
+BOTAN_REGISTER_TYPE(PK_Ops::Verification, OpenSSL_RSA_Verification_Operation, "RSA",
+                    OpenSSL_RSA_Verification_Operation::make, "openssl", BOTAN_OPENSSL_RSA_PRIO);
+
+BOTAN_REGISTER_TYPE(PK_Ops::Signature, OpenSSL_RSA_Signing_Operation, "RSA",
+                    OpenSSL_RSA_Signing_Operation::make, "openssl", BOTAN_OPENSSL_RSA_PRIO);
+
+BOTAN_REGISTER_TYPE(PK_Ops::Encryption, OpenSSL_RSA_Encryption_Operation, "RSA",
+                    OpenSSL_RSA_Encryption_Operation::make, "openssl", BOTAN_OPENSSL_RSA_PRIO);
+
+BOTAN_REGISTER_TYPE(PK_Ops::Decryption, OpenSSL_RSA_Decryption_Operation, "RSA",
+                    OpenSSL_RSA_Decryption_Operation::make, "openssl", BOTAN_OPENSSL_RSA_PRIO);
+
+}
+
+}
+
+#endif // BOTAN_HAS_OPENSSL
 /*
 * RSA
 * (C) 1999-2010 Jack Lloyd
@@ -41123,7 +41316,7 @@ BOTAN_REGISTER_NAMED_T(StreamCipher, "RC4", RC4, RC4::make);
 }
 /*
 * System RNG
-* (C) 2014 Jack Lloyd
+* (C) 2014,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -41145,11 +41338,11 @@ namespace Botan {
 
 namespace {
 
-class System_RNG : public RandomNumberGenerator
+class System_RNG_Impl : public RandomNumberGenerator
    {
    public:
-      System_RNG();
-      ~System_RNG();
+      System_RNG_Impl();
+      ~System_RNG_Impl();
 
       void randomize(byte buf[], size_t len) override;
 
@@ -41168,7 +41361,7 @@ class System_RNG : public RandomNumberGenerator
 #endif
    };
 
-System_RNG::System_RNG()
+System_RNG_Impl::System_RNG_Impl()
    {
 #if defined(BOTAN_TARGET_OS_HAS_CRYPTGENRANDOM)
 
@@ -41183,7 +41376,7 @@ System_RNG::System_RNG()
 #endif
    }
 
-System_RNG::~System_RNG()
+System_RNG_Impl::~System_RNG_Impl()
    {
 #if defined(BOTAN_TARGET_OS_HAS_CRYPTGENRANDOM)
    ::CryptReleaseContext(m_prov, 0);
@@ -41193,7 +41386,7 @@ System_RNG::~System_RNG()
 #endif
    }
 
-void System_RNG::randomize(byte buf[], size_t len)
+void System_RNG_Impl::randomize(byte buf[], size_t len)
    {
 #if defined(BOTAN_TARGET_OS_HAS_CRYPTGENRANDOM)
    ::CryptGenRandom(m_prov, static_cast<DWORD>(len), buf);
@@ -41221,7 +41414,7 @@ void System_RNG::randomize(byte buf[], size_t len)
 
 RandomNumberGenerator& system_rng()
    {
-   static System_RNG g_system_rng;
+   static System_RNG_Impl g_system_rng;
    return g_system_rng;
    }
 
@@ -42202,6 +42395,17 @@ bool cert_in_some_store(const std::vector<Certificate_Store*>& trusted_CAs,
    return false;
    }
 
+Usage_Type choose_leaf_usage(const std::string& ctx)
+   {
+   // These are reversed because ctx is denoting the current perspective
+   if(ctx == "tls-client")
+      return Usage_Type::TLS_SERVER_AUTH;
+   else if(ctx == "tls-server")
+      return Usage_Type::TLS_CLIENT_AUTH;
+   else
+      return Usage_Type::UNSPECIFIED;
+   }
+
 }
 
 void Credentials_Manager::verify_certificate_chain(
@@ -42216,18 +42420,17 @@ void Credentials_Manager::verify_certificate_chain(
 
    Path_Validation_Restrictions restrictions;
 
-   auto result = x509_path_validate(cert_chain,
-                                    restrictions,
-                                    trusted_CAs);
+   Path_Validation_Result result = x509_path_validate(cert_chain,
+                                                      restrictions,
+                                                      trusted_CAs,
+                                                      purported_hostname,
+                                                      choose_leaf_usage(type));
 
    if(!result.successful_validation())
       throw std::runtime_error("Certificate validation failure: " + result.result_string());
 
    if(!cert_in_some_store(trusted_CAs, result.trust_root()))
       throw std::runtime_error("Certificate chain roots in unknown/untrusted CA");
-
-   if(purported_hostname != "" && !cert_chain[0].matches_dns_name(purported_hostname))
-      throw std::runtime_error("Certificate did not match hostname");
    }
 
 }
@@ -42560,7 +42763,7 @@ std::vector<byte> Certificate::serialize() const
 }
 /*
 * TLS Hello Request and Client Hello Messages
-* (C) 2004-2011 Jack Lloyd
+* (C) 2004-2011,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -42764,10 +42967,10 @@ Client_Hello::Client_Hello(const std::vector<byte>& buf)
 
    m_random = reader.get_fixed<byte>(32);
 
+   m_session_id = reader.get_range<byte>(1, 0, 32);
+
    if(m_version.is_datagram_protocol())
       m_hello_cookie = reader.get_range<byte>(1, 0, 255);
-
-   m_session_id = reader.get_range<byte>(1, 0, 32);
 
    m_suites = reader.get_range_vector<u16bit>(2, 1, 32767);
 
@@ -42821,26 +43024,6 @@ bool Client_Hello::offered_suite(u16bit ciphersuite) const
 namespace Botan {
 
 namespace TLS {
-
-namespace {
-
-secure_vector<byte> strip_leading_zeros(const secure_vector<byte>& input)
-   {
-   size_t leading_zeros = 0;
-
-   for(size_t i = 0; i != input.size(); ++i)
-      {
-      if(input[i] != 0)
-         break;
-      ++leading_zeros;
-      }
-
-   secure_vector<byte> output(&input[leading_zeros],
-                              &input[input.size()]);
-   return output;
-   }
-
-}
 
 /*
 * Create a new Client Key Exchange message
@@ -42934,7 +43117,7 @@ Client_Key_Exchange::Client_Key_Exchange(Handshake_IO& io,
 
          PK_Key_Agreement ka(priv_key, "Raw");
 
-         secure_vector<byte> dh_secret = strip_leading_zeros(
+         secure_vector<byte> dh_secret = CT::strip_leading_zeros(
             ka.derive_key(0, counterparty_key.public_value()).bits_of());
 
          if(kex_algo == "DH")
@@ -43173,7 +43356,7 @@ Client_Key_Exchange::Client_Key_Exchange(const std::vector<byte>& contents,
             secure_vector<byte> shared_secret = ka.derive_key(0, client_pubkey).bits_of();
 
             if(ka_key->algo_name() == "DH")
-               shared_secret = strip_leading_zeros(shared_secret);
+               shared_secret = CT::strip_leading_zeros(shared_secret);
 
             if(kex_algo == "DHE_PSK" || kex_algo == "ECDHE_PSK")
                {
@@ -44084,17 +44267,21 @@ Channel::Channel(output_fn output_fn,
                  data_cb data_cb,
                  alert_cb alert_cb,
                  handshake_cb handshake_cb,
+                 handshake_msg_cb handshake_msg_cb,
                  Session_Manager& session_manager,
                  RandomNumberGenerator& rng,
+                 const Policy& policy,
                  bool is_datagram,
                  size_t reserved_io_buffer_size) :
    m_is_datagram(is_datagram),
-   m_handshake_cb(handshake_cb),
    m_data_cb(data_cb),
    m_alert_cb(alert_cb),
    m_output_fn(output_fn),
-   m_rng(rng),
-   m_session_manager(session_manager)
+   m_handshake_cb(handshake_cb),
+   m_handshake_msg_cb(handshake_msg_cb),
+   m_session_manager(session_manager),
+   m_policy(policy),
+   m_rng(rng)
    {
    /* epoch 0 is plaintext, thus null cipher state */
    m_write_cipher_states[0] = nullptr;
@@ -44127,20 +44314,16 @@ Connection_Sequence_Numbers& Channel::sequence_numbers() const
 std::shared_ptr<Connection_Cipher_State> Channel::read_cipher_state_epoch(u16bit epoch) const
    {
    auto i = m_read_cipher_states.find(epoch);
-
-   BOTAN_ASSERT(i != m_read_cipher_states.end(),
-                "Have a cipher state for the specified epoch");
-
+   if(i == m_read_cipher_states.end())
+      throw Internal_Error("TLS::Channel No read cipherstate for epoch " + std::to_string(epoch));
    return i->second;
    }
 
 std::shared_ptr<Connection_Cipher_State> Channel::write_cipher_state_epoch(u16bit epoch) const
    {
    auto i = m_write_cipher_states.find(epoch);
-
-   BOTAN_ASSERT(i != m_write_cipher_states.end(),
-                "Have a cipher state for the specified epoch");
-
+   if(i == m_write_cipher_states.end())
+      throw Internal_Error("TLS::Channel No write cipherstate for epoch " + std::to_string(epoch));
    return i->second;
    }
 
@@ -44181,17 +44364,17 @@ Handshake_State& Channel::create_handshake_state(Protocol_Version version)
    std::unique_ptr<Handshake_IO> io;
    if(version.is_datagram_protocol())
       {
-      // default MTU is IPv6 min MTU minus UDP/IP headers (TODO: make configurable)
-      const u16bit mtu = 1280 - 40 - 8;
-
       io.reset(new Datagram_Handshake_IO(
                   std::bind(&Channel::send_record_under_epoch, this, _1, _2, _3),
                   sequence_numbers(),
-                  mtu));
+                  m_policy.dtls_default_mtu(),
+                  m_policy.dtls_initial_timeout(),
+                  m_policy.dtls_maximum_timeout()));
       }
    else
-      io.reset(new Stream_Handshake_IO(
-                  std::bind(&Channel::send_record, this, _1, _2)));
+      {
+      io.reset(new Stream_Handshake_IO(std::bind(&Channel::send_record, this, _1, _2)));
+      }
 
    m_pending_state.reset(new_handshake_state(io.release()));
 
@@ -44394,12 +44577,13 @@ size_t Channel::received_data(const byte input[], size_t input_size)
 
          if(record.size() > max_fragment_size)
             throw TLS_Exception(Alert::RECORD_OVERFLOW,
-                                "Plaintext record is too large");
+                                "TLS input record is larger than allowed maximum");
 
          if(record_type == HANDSHAKE || record_type == CHANGE_CIPHER_SPEC)
             {
             if(!m_pending_state)
                {
+               // No pending handshake, possibly new:
                if(record_version.is_datagram_protocol())
                   {
                   if(m_sequence_numbers)
@@ -44435,6 +44619,7 @@ size_t Channel::received_data(const byte input[], size_t input_size)
                   }
                }
 
+            // May have been created in above conditional
             if(m_pending_state)
                {
                m_pending_state->handshake_io().add_record(unlock(record),
@@ -45048,7 +45233,7 @@ std::string Ciphersuite::to_string() const
 
 /*
 * TLS Client
-* (C) 2004-2011,2012 Jack Lloyd
+* (C) 2004-2011,2012,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -45066,8 +45251,7 @@ class Client_Handshake_State : public Handshake_State
    public:
       // using Handshake_State::Handshake_State;
 
-      Client_Handshake_State(Handshake_IO* io, hs_msg_cb cb = hs_msg_cb()) :
-         Handshake_State(io, cb) {}
+      Client_Handshake_State(Handshake_IO* io, handshake_msg_cb cb) : Handshake_State(io, cb) {}
 
       const Public_Key& get_server_public_Key() const
          {
@@ -45098,9 +45282,31 @@ Client::Client(output_fn output_fn,
                const Protocol_Version offer_version,
                const std::vector<std::string>& next_protos,
                size_t io_buf_sz) :
-   Channel(output_fn, proc_cb, alert_cb, handshake_cb, session_manager, rng,
-           offer_version.is_datagram_protocol(), io_buf_sz),
-   m_policy(policy),
+   Channel(output_fn, proc_cb, alert_cb, handshake_cb, Channel::handshake_msg_cb(),
+           session_manager, rng, policy, offer_version.is_datagram_protocol(), io_buf_sz),
+   m_creds(creds),
+   m_info(info)
+   {
+   const std::string srp_identifier = m_creds.srp_identifier("tls-client", m_info.hostname());
+
+   Handshake_State& state = create_handshake_state(offer_version);
+   send_client_hello(state, false, offer_version, srp_identifier, next_protos);
+   }
+
+Client::Client(output_fn output_fn,
+               data_cb proc_cb,
+               alert_cb alert_cb,
+               handshake_cb handshake_cb,
+               handshake_msg_cb hs_msg_cb,
+               Session_Manager& session_manager,
+               Credentials_Manager& creds,
+               const Policy& policy,
+               RandomNumberGenerator& rng,
+               const Server_Information& info,
+               const Protocol_Version offer_version,
+               const std::vector<std::string>& next_protos) :
+   Channel(output_fn, proc_cb, alert_cb, handshake_cb, hs_msg_cb,
+           session_manager, rng, policy, offer_version.is_datagram_protocol()),
    m_creds(creds),
    m_info(info)
    {
@@ -45112,7 +45318,7 @@ Client::Client(output_fn output_fn,
 
 Handshake_State* Client::new_handshake_state(Handshake_IO* io)
    {
-   return new Client_Handshake_State(io); // , m_hs_msg_cb);
+   return new Client_Handshake_State(io, get_handshake_msg_cb());
    }
 
 std::vector<X509_Certificate>
@@ -45154,7 +45360,7 @@ void Client::send_client_hello(Handshake_State& state_base,
             state.client_hello(new Client_Hello(
                state.handshake_io(),
                state.hash(),
-               m_policy,
+               policy(),
                rng(),
                secure_renegotiation_data_for_client_hello(),
                session_info,
@@ -45171,7 +45377,7 @@ void Client::send_client_hello(Handshake_State& state_base,
          state.handshake_io(),
          state.hash(),
          version,
-         m_policy,
+         policy(),
          rng(),
          secure_renegotiation_data_for_client_hello(),
          next_protocols,
@@ -45200,9 +45406,9 @@ void Client::process_handshake_msg(const Handshake_State* active_state,
       if(state.client_hello())
          return;
 
-      if(m_policy.allow_server_initiated_renegotiation())
+      if(policy().allow_server_initiated_renegotiation())
          {
-         if(!secure_renegotiation_supported() && m_policy.allow_insecure_renegotiation() == false)
+         if(!secure_renegotiation_supported() && policy().allow_insecure_renegotiation() == false)
             send_warning_alert(Alert::NO_RENEGOTIATION);
          else
             this->initiate_handshake(state, false);
@@ -45306,7 +45512,9 @@ void Client::process_handshake_msg(const Handshake_State* active_state,
          if(state.server_hello()->supports_session_ticket())
             state.set_expected_next(NEW_SESSION_TICKET);
          else
+            {
             state.set_expected_next(HANDSHAKE_CCS);
+            }
          }
       else
          {
@@ -45325,7 +45533,7 @@ void Client::process_handshake_msg(const Handshake_State* active_state,
                                 "Server replied with later version than in hello");
             }
 
-         if(!m_policy.acceptable_protocol_version(state.version()))
+         if(!policy().acceptable_protocol_version(state.version()))
             {
             throw TLS_Exception(Alert::PROTOCOL_VERSION,
                                 "Server version " + state.version().to_string() +
@@ -45449,7 +45657,7 @@ void Client::process_handshake_msg(const Handshake_State* active_state,
       state.client_kex(
          new Client_Key_Exchange(state.handshake_io(),
                                  state,
-                                 m_policy,
+                                 policy(),
                                  m_creds,
                                  state.server_public_key.get(),
                                  m_info.hostname(),
@@ -45469,7 +45677,7 @@ void Client::process_handshake_msg(const Handshake_State* active_state,
          state.client_verify(
             new Certificate_Verify(state.handshake_io(),
                                    state,
-                                   m_policy,
+                                   policy(),
                                    rng(),
                                    private_key)
             );
@@ -45520,7 +45728,7 @@ void Client::process_handshake_msg(const Handshake_State* active_state,
       const std::vector<byte>& session_ticket = state.session_ticket();
 
       if(session_id.empty() && !session_ticket.empty())
-         session_id = make_hello_random(rng(), m_policy);
+         session_id = make_hello_random(rng(), policy());
 
       Session session_info(
          session_id,
@@ -46193,7 +46401,7 @@ secure_vector<byte> Handshake_Hash::final(Protocol_Version version,
 }
 /*
 * TLS Handshake IO
-* (C) 2012,2014 Jack Lloyd
+* (C) 2012,2014,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -46218,6 +46426,24 @@ void store_be24(byte out[3], size_t val)
    out[0] = get_byte<u32bit>(1, val);
    out[1] = get_byte<u32bit>(2, val);
    out[2] = get_byte<u32bit>(3, val);
+   }
+
+u64bit steady_clock_ms()
+   {
+   return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+   }
+
+size_t split_for_mtu(size_t mtu, size_t msg_size)
+   {
+   const size_t DTLS_HEADERS_SIZE = 25; // DTLS record+handshake headers
+
+   const size_t parts = (msg_size + mtu) / mtu;
+
+   if(parts + DTLS_HEADERS_SIZE > mtu)
+      return parts + 1;
+
+   return parts;
    }
 
 }
@@ -46310,41 +46536,15 @@ Protocol_Version Datagram_Handshake_IO::initial_record_version() const
    return Protocol_Version::DTLS_V10;
    }
 
-namespace {
-
-// 1 second initial timeout, 60 second max - see RFC 6347 sec 4.2.4.1
-const u64bit INITIAL_TIMEOUT = 1*1000;
-const u64bit MAXIMUM_TIMEOUT = 60*1000;
-
-u64bit steady_clock_ms()
+void Datagram_Handshake_IO::retransmit_last_flight()
    {
-   return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now().time_since_epoch()).count();
+   const size_t flight_idx = (m_flights.size() == 1) ? 0 : (m_flights.size() - 2);
+   retransmit_flight(flight_idx);
    }
 
-}
-
-bool Datagram_Handshake_IO::timeout_check()
+void Datagram_Handshake_IO::retransmit_flight(size_t flight_idx)
    {
-   if(m_last_write == 0 || (m_flights.size() > 1 && !m_flights.rbegin()->empty()))
-      {
-      /*
-      If we haven't written anything yet obviously no timeout.
-      Also no timeout possible if we are mid-flight,
-      */
-      return false;
-      }
-
-   const u64bit ms_since_write = steady_clock_ms() - m_last_write;
-
-   if(ms_since_write < m_next_timeout)
-      return false;
-
-   std::vector<u16bit> flight;
-   if(m_flights.size() == 1)
-      flight = m_flights.at(0); // lost initial client hello
-   else
-      flight = m_flights.at(m_flights.size() - 2);
+   const std::vector<u16bit>& flight = m_flights.at(flight_idx);
 
    BOTAN_ASSERT(flight.size() > 0, "Nonempty flight to retransmit");
 
@@ -46364,8 +46564,27 @@ bool Datagram_Handshake_IO::timeout_check()
       send_message(msg_seq, msg.epoch, msg.msg_type, msg.msg_bits);
       epoch = msg.epoch;
       }
+   }
 
-   m_next_timeout = std::min(2 * m_next_timeout, MAXIMUM_TIMEOUT);
+bool Datagram_Handshake_IO::timeout_check()
+   {
+   if(m_last_write == 0 || (m_flights.size() > 1 && !m_flights.rbegin()->empty()))
+      {
+      /*
+      If we haven't written anything yet obviously no timeout.
+      Also no timeout possible if we are mid-flight,
+      */
+      return false;
+      }
+
+   const u64bit ms_since_write = steady_clock_ms() - m_last_write;
+
+   if(ms_since_write < m_next_timeout)
+      return false;
+
+   retransmit_last_flight();
+
+   m_next_timeout = std::min(2 * m_next_timeout, m_max_timeout);
    return true;
    }
 
@@ -46438,7 +46657,6 @@ Datagram_Handshake_IO::get_next_record(bool expecting_ccs)
          if(m_ccs_epochs.count(current_epoch))
             return std::make_pair(HANDSHAKE_CCS, std::vector<byte>());
          }
-
       return std::make_pair(HANDSHAKE_NONE, std::vector<byte>());
       }
 
@@ -46563,21 +46781,6 @@ Datagram_Handshake_IO::format(const std::vector<byte>& msg,
    return format_w_seq(msg, type, m_in_message_seq - 1);
    }
 
-namespace {
-
-size_t split_for_mtu(size_t mtu, size_t msg_size)
-   {
-   const size_t DTLS_HEADERS_SIZE = 25; // DTLS record+handshake headers
-
-   const size_t parts = (msg_size + mtu) / mtu;
-
-   if(parts + DTLS_HEADERS_SIZE > mtu)
-      return parts + 1;
-
-   return parts;
-   }
-
-}
 
 std::vector<byte>
 Datagram_Handshake_IO::send(const Handshake_Message& msg)
@@ -46598,7 +46801,7 @@ Datagram_Handshake_IO::send(const Handshake_Message& msg)
 
    m_out_message_seq += 1;
    m_last_write = steady_clock_ms();
-   m_next_timeout = INITIAL_TIMEOUT;
+   m_next_timeout = m_initial_timeout;
 
    return send_message(m_out_message_seq - 1, epoch, msg_type, msg_bits);
    }
@@ -46612,7 +46815,9 @@ std::vector<byte> Datagram_Handshake_IO::send_message(u16bit msg_seq,
       format_w_seq(msg_bits, msg_type, msg_seq);
 
    if(no_fragment.size() + DTLS_HEADER_SIZE <= m_mtu)
+      {
       m_send_hs(epoch, HANDSHAKE, no_fragment);
+      }
    else
       {
       const size_t parts = split_for_mtu(m_mtu, msg_bits.size());
@@ -46647,7 +46852,7 @@ std::vector<byte> Datagram_Handshake_IO::send_message(u16bit msg_seq,
 }
 /*
 * TLS Handshaking
-* (C) 2004-2006,2011,2012 Jack Lloyd
+* (C) 2004-2006,2011,2012,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -46656,6 +46861,67 @@ std::vector<byte> Datagram_Handshake_IO::send_message(u16bit msg_seq,
 namespace Botan {
 
 namespace TLS {
+
+std::string Handshake_Message::type_string() const
+   {
+   return handshake_type_to_string(type());
+   }
+
+const char* handshake_type_to_string(Handshake_Type type)
+   {
+   switch(type)
+      {
+      case HELLO_VERIFY_REQUEST:
+         return "hello_verify_request";
+
+      case HELLO_REQUEST:
+         return "hello_request";
+
+      case CLIENT_HELLO:
+         return "client_hello";
+
+      case SERVER_HELLO:
+         return "server_hello";
+
+      case CERTIFICATE:
+         return "certificate";
+
+      case CERTIFICATE_URL:
+         return "certificate_url";
+
+      case CERTIFICATE_STATUS:
+         return "certificate_status";
+
+      case SERVER_KEX:
+         return "server_key_exchange";
+
+      case CERTIFICATE_REQUEST:
+         return "certificate_request";
+
+      case SERVER_HELLO_DONE:
+         return "server_hello_done";
+
+      case CERTIFICATE_VERIFY:
+         return "certificate_verify";
+
+      case CLIENT_KEX:
+         return "client_key_exchange";
+
+      case NEW_SESSION_TICKET:
+         return "new_session_ticket";
+
+      case HANDSHAKE_CCS:
+         return "change_cipher_spec";
+
+      case FINISHED:
+         return "finished";
+
+      case HANDSHAKE_NONE:
+         return "invalid";
+      }
+
+   throw Internal_Error("Unknown TLS handshake message type " + std::to_string(type));
+   }
 
 namespace {
 
@@ -46669,9 +46935,6 @@ u32bit bitmask_for_handshake_type(Handshake_Type type)
       case HELLO_REQUEST:
          return (1 << 1);
 
-      /*
-      * Same code point for both client hello styles
-      */
       case CLIENT_HELLO:
          return (1 << 2);
 
@@ -46719,12 +46982,48 @@ u32bit bitmask_for_handshake_type(Handshake_Type type)
    throw Internal_Error("Unknown handshake type " + std::to_string(type));
    }
 
+std::string handshake_mask_to_string(u32bit mask)
+   {
+   const Handshake_Type types[] = {
+      HELLO_VERIFY_REQUEST,
+      HELLO_REQUEST,
+      CLIENT_HELLO,
+      CERTIFICATE,
+      CERTIFICATE_URL,
+      CERTIFICATE_STATUS,
+      SERVER_KEX,
+      CERTIFICATE_REQUEST,
+      SERVER_HELLO_DONE,
+      CERTIFICATE_VERIFY,
+      CLIENT_KEX,
+      NEW_SESSION_TICKET,
+      HANDSHAKE_CCS,
+      FINISHED
+   };
+
+   std::ostringstream o;
+   bool empty = true;
+
+   for(auto&& t : types)
+      {
+      if(mask & bitmask_for_handshake_type(t))
+         {
+         if(!empty)
+            o << ",";
+         o << handshake_type_to_string(t);
+         empty = false;
+         }
+      }
+
+   return o.str();
+   }
+
 }
 
 /*
 * Initialize the SSL/TLS Handshake State
 */
-Handshake_State::Handshake_State(Handshake_IO* io, hs_msg_cb cb) :
+Handshake_State::Handshake_State(Handshake_IO* io, handshake_msg_cb cb) :
    m_msg_callback(cb),
    m_handshake_io(io),
    m_version(m_handshake_io->initial_record_version())
@@ -46840,10 +47139,10 @@ void Handshake_State::confirm_transition_to(Handshake_Type handshake_msg)
    const bool ok = (m_hand_expecting_mask & mask); // overlap?
 
    if(!ok)
-      throw Unexpected_Message("Unexpected state transition in handshake, got " +
+      throw Unexpected_Message("Unexpected state transition in handshake, got type " +
                                std::to_string(handshake_msg) +
-                               " expected " + std::to_string(m_hand_expecting_mask) +
-                               " received " + std::to_string(m_hand_received_mask));
+                               " expected " + handshake_mask_to_string(m_hand_expecting_mask) +
+                               " received " + handshake_mask_to_string(m_hand_received_mask));
 
    /* We don't know what to expect next, so force a call to
       set_expected_next; if it doesn't happen, the next transition
@@ -47155,9 +47454,9 @@ std::vector<std::string> Policy::allowed_ciphers() const
    return {
       //"AES-256/OCB(12)",
       //"AES-128/OCB(12)",
-      "ChaCha20Poly1305",
       "AES-256/GCM",
       "AES-128/GCM",
+      "ChaCha20Poly1305",
       "AES-256/CCM",
       "AES-128/CCM",
       "AES-256/CCM(8)",
@@ -47170,7 +47469,6 @@ std::vector<std::string> Policy::allowed_ciphers() const
       //"Camellia-128",
       //"SEED"
       //"3DES",
-      //"RC4",
       };
    }
 
@@ -47309,6 +47607,16 @@ bool Policy::allow_insecure_renegotiation() const { return false; }
 bool Policy::include_time_in_hello_random() const { return true; }
 bool Policy::hide_unknown_users() const { return false; }
 bool Policy::server_uses_own_ciphersuite_preferences() const { return true; }
+
+// 1 second initial timeout, 60 second max - see RFC 6347 sec 4.2.4.1
+size_t Policy::dtls_initial_timeout() const { return 1*1000; }
+size_t Policy::dtls_maximum_timeout() const { return 60*1000; }
+
+size_t Policy::dtls_default_mtu() const
+   {
+   // default MTU is IPv6 min MTU minus UDP/IP headers
+   return 1280 - 40 - 8;
+   }
 
 std::vector<u16bit> Policy::srtp_profiles() const
    {
@@ -47796,31 +48104,26 @@ size_t fill_buffer_to(secure_vector<byte>& readbuf,
 *
 * Returning 0 in the error case should ensure the MAC check will fail.
 * This approach is suggested in section 6.2.3.2 of RFC 5246.
-*
-* Also returns 0 if block_size == 0, so can be safely called with a
-* stream cipher in use.
-*
-* @fixme This should run in constant time
 */
-size_t tls_padding_check(const byte record[], size_t record_len)
+u16bit tls_padding_check(const byte record[], size_t record_len)
    {
-   const size_t padding_length = record[(record_len-1)];
-
-   if(padding_length >= record_len)
-      return 0;
-
    /*
    * TLS v1.0 and up require all the padding bytes be the same value
    * and allows up to 255 bytes.
    */
-   const size_t pad_start = record_len - padding_length - 1;
 
-   volatile size_t cmp = 0;
+   const byte pad_byte = record[(record_len-1)];
 
-   for(size_t i = 0; i != padding_length; ++i)
-      cmp += record[pad_start + i] ^ padding_length;
+   byte pad_invalid = 0;
+   for(size_t i = 0; i != record_len; ++i)
+      {
+      const size_t left = record_len - i - 2;
+      const byte delim_mask = CT::is_less<u16bit>(left, pad_byte) & 0xFF;
+      pad_invalid |= (delim_mask & (record[i] ^ pad_byte));
+      }
 
-   return cmp ? 0 : padding_length + 1;
+   u16bit pad_invalid_mask = CT::expand_mask<u16bit>(pad_invalid);
+   return CT::select<u16bit>(pad_invalid_mask, 0, pad_byte + 1);
    }
 
 void cbc_decrypt_record(byte record_contents[], size_t record_len,
@@ -47887,38 +48190,39 @@ void decrypt_record(secure_vector<byte>& output,
    else
       {
       // GenericBlockCipher case
-
-      volatile bool padding_bad = false;
-      size_t pad_size = 0;
-
-      if(BlockCipher* bc = cs.block_cipher())
-         {
-         cbc_decrypt_record(record_contents, record_len, cs, *bc);
-
-         pad_size = tls_padding_check(record_contents, record_len);
-
-         padding_bad = (pad_size == 0);
-         }
-      else
-         {
-         throw Internal_Error("No cipher state set but needed to decrypt");
-         }
+      BlockCipher* bc = cs.block_cipher();
+      BOTAN_ASSERT(bc != nullptr, "No cipher state set but needed to decrypt");
 
       const size_t mac_size = cs.mac_size();
       const size_t iv_size = cs.iv_size();
 
-      const size_t mac_pad_iv_size = mac_size + pad_size + iv_size;
-
-      if(record_len < mac_pad_iv_size)
+      // This early exit does not leak info because all the values are public
+      if((record_len < mac_size + iv_size) || (record_len % cs.block_size() != 0))
          throw Decoding_Error("Record sent with invalid length");
 
+      CT::poison(record_contents, record_len);
+
+      cbc_decrypt_record(record_contents, record_len, cs, *bc);
+
+      // 0 if padding was invalid, otherwise 1 + padding_bytes
+      u16bit pad_size = tls_padding_check(record_contents, record_len);
+
+      // This mask is zero if there is not enough room in the packet
+      const u16bit size_ok_mask = CT::is_less<u16bit>(mac_size + pad_size + iv_size, record_len);
+      pad_size &= size_ok_mask;
+
+      CT::unpoison(record_contents, record_len);
+
+      /*
+      This is unpoisoned sooner than it should. The pad_size leaks to plaintext_length and
+      then to the timing channel in the MAC computation described in the Lucky 13 paper.
+      */
+      CT::unpoison(pad_size);
+
       const byte* plaintext_block = &record_contents[iv_size];
-      const u16bit plaintext_length = record_len - mac_pad_iv_size;
+      const u16bit plaintext_length = record_len - mac_size - iv_size - pad_size;
 
-      cs.mac()->update(
-         cs.format_ad(record_sequence, record_type, record_version, plaintext_length)
-         );
-
+      cs.mac()->update(cs.format_ad(record_sequence, record_type, record_version, plaintext_length));
       cs.mac()->update(plaintext_block, plaintext_length);
 
       std::vector<byte> mac_buf(mac_size);
@@ -47926,12 +48230,16 @@ void decrypt_record(secure_vector<byte>& output,
 
       const size_t mac_offset = record_len - (mac_size + pad_size);
 
-      const bool mac_bad = !same_mem(&record_contents[mac_offset], mac_buf.data(), mac_size);
+      const bool mac_ok = same_mem(&record_contents[mac_offset], mac_buf.data(), mac_size);
 
-      if(mac_bad || padding_bad)
+      const u16bit ok_mask = size_ok_mask & CT::expand_mask<u16bit>(mac_ok) & CT::expand_mask<u16bit>(pad_size);
+
+      CT::unpoison(ok_mask);
+
+      if(ok_mask)
+         output.assign(plaintext_block, plaintext_block + plaintext_length);
+      else
          throw TLS_Exception(Alert::BAD_RECORD_MAC, "Message authentication failure");
-
-      output.assign(plaintext_block, plaintext_block + plaintext_length);
       }
    }
 
@@ -48165,8 +48473,7 @@ class Server_Handshake_State : public Handshake_State
    public:
       // using Handshake_State::Handshake_State;
 
-      Server_Handshake_State(Handshake_IO* io, hs_msg_cb cb = hs_msg_cb()) :
-         Handshake_State(io, cb) {}
+      Server_Handshake_State(Handshake_IO* io, handshake_msg_cb cb) : Handshake_State(io, cb) {}
 
       // Used by the server only, in case of RSA key exchange. Not owned
       Private_Key* server_rsa_kex_key = nullptr;
@@ -48359,9 +48666,26 @@ Server::Server(output_fn output,
                next_protocol_fn next_proto,
                bool is_datagram,
                size_t io_buf_sz) :
-   Channel(output, data_cb, alert_cb, handshake_cb,
-           session_manager, rng, is_datagram, io_buf_sz),
-   m_policy(policy),
+   Channel(output, data_cb, alert_cb, handshake_cb, Channel::handshake_msg_cb(),
+           session_manager, rng, policy, is_datagram, io_buf_sz),
+   m_creds(creds),
+   m_choose_next_protocol(next_proto)
+   {
+   }
+
+Server::Server(output_fn output,
+               data_cb data_cb,
+               alert_cb alert_cb,
+               handshake_cb handshake_cb,
+               handshake_msg_cb hs_msg_cb,
+               Session_Manager& session_manager,
+               Credentials_Manager& creds,
+               const Policy& policy,
+               RandomNumberGenerator& rng,
+               next_protocol_fn next_proto,
+               bool is_datagram) :
+   Channel(output, data_cb, alert_cb, handshake_cb, hs_msg_cb,
+           session_manager, rng, policy, is_datagram),
    m_creds(creds),
    m_choose_next_protocol(next_proto)
    {
@@ -48369,7 +48693,9 @@ Server::Server(output_fn output,
 
 Handshake_State* Server::new_handshake_state(Handshake_IO* io)
    {
-   std::unique_ptr<Handshake_State> state(new Server_Handshake_State(io));
+   std::unique_ptr<Handshake_State> state(
+      new Server_Handshake_State(io, get_handshake_msg_cb()));
+
    state->set_expected_next(CLIENT_HELLO);
    return state.release();
    }
@@ -48422,7 +48748,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
       {
       const bool initial_handshake = !active_state;
 
-      if(!m_policy.allow_insecure_renegotiation() &&
+      if(!policy().allow_insecure_renegotiation() &&
          !(initial_handshake || secure_renegotiation_supported()))
          {
          send_warning_alert(Alert::NO_RENEGOTIATION);
@@ -48436,7 +48762,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
       Protocol_Version negotiated_version;
 
       const Protocol_Version latest_supported =
-         m_policy.latest_supported_version(client_version.is_datagram_protocol());
+         policy().latest_supported_version(client_version.is_datagram_protocol());
 
       if((initial_handshake && client_version.known_version()) ||
          (!initial_handshake && client_version == active_state->version()))
@@ -48478,7 +48804,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
          negotiated_version = latest_supported;
          }
 
-      if(!m_policy.acceptable_protocol_version(negotiated_version))
+      if(!policy().acceptable_protocol_version(negotiated_version))
          {
          throw TLS_Exception(Alert::PROTOCOL_VERSION,
                              "Client version " + negotiated_version.to_string() +
@@ -48503,7 +48829,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
                           session_manager(),
                           m_creds,
                           state.client_hello(),
-                          std::chrono::seconds(m_policy.session_ticket_lifetime()));
+                          std::chrono::seconds(policy().session_ticket_lifetime()));
 
       bool have_session_ticket_key = false;
 
@@ -48531,7 +48857,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
          state.server_hello(new Server_Hello(
                state.handshake_io(),
                state.hash(),
-               m_policy,
+               policy(),
                rng(),
                secure_renegotiation_data_for_server_hello(),
                *state.client_hello(),
@@ -48567,7 +48893,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
                   new New_Session_Ticket(state.handshake_io(),
                                          state.hash(),
                                          session_info.encrypt(ticket_key, rng()),
-                                         m_policy.session_ticket_lifetime())
+                                         policy().session_ticket_lifetime())
                   );
                }
             catch(...) {}
@@ -48613,14 +48939,14 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
          state.server_hello(new Server_Hello(
                state.handshake_io(),
                state.hash(),
-               m_policy,
+               policy(),
                rng(),
                secure_renegotiation_data_for_server_hello(),
                *state.client_hello(),
-               make_hello_random(rng(), m_policy), // new session ID
+               make_hello_random(rng(), policy()), // new session ID
                state.version(),
-               choose_ciphersuite(m_policy, state.version(), m_creds, cert_chains, state.client_hello()),
-               choose_compression(m_policy, state.client_hello()->compression_methods()),
+               choose_ciphersuite(policy(), state.version(), m_creds, cert_chains, state.client_hello()),
+               choose_compression(policy(), state.client_hello()->compression_methods()),
                have_session_ticket_key,
                m_next_protocol)
             );
@@ -48660,7 +48986,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
          else
             {
             state.server_kex(new Server_Key_Exchange(state.handshake_io(),
-                                                     state, m_policy,
+                                                     state, policy(),
                                                      m_creds, rng(), private_key));
             }
 
@@ -48678,7 +49004,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
             {
             state.cert_req(
                new Certificate_Req(state.handshake_io(), state.hash(),
-                                   m_policy, client_auth_CAs, state.version()));
+                                   policy(), client_auth_CAs, state.version()));
 
             state.set_expected_next(CERTIFICATE);
             }
@@ -48709,7 +49035,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
       state.client_kex(
          new Client_Key_Exchange(contents, state,
                                  state.server_rsa_kex_key,
-                                 m_creds, m_policy, rng())
+                                 m_creds, policy(), rng())
          );
 
       state.compute_session_keys();
@@ -48793,7 +49119,7 @@ void Server::process_handshake_msg(const Handshake_State* active_state,
                      new New_Session_Ticket(state.handshake_io(),
                                             state.hash(),
                                             session_info.encrypt(ticket_key, rng()),
-                                            m_policy.session_ticket_lifetime())
+                                            policy().session_ticket_lifetime())
                      );
                   }
                catch(...) {}
@@ -50668,6 +50994,7 @@ std::vector<std::vector<std::string>> Unix_EntropySource::get_default_sources()
 
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include <signal.h>
 #include <stdlib.h>
 
@@ -51565,6 +51892,214 @@ void CPUID::initialize()
 
 }
 /*
+* DataSource
+* (C) 1999-2007 Jack Lloyd
+*     2005 Matthew Gregan
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+
+namespace Botan {
+
+/*
+* Read a single byte from the DataSource
+*/
+size_t DataSource::read_byte(byte& out)
+   {
+   return read(&out, 1);
+   }
+
+/*
+* Peek a single byte from the DataSource
+*/
+size_t DataSource::peek_byte(byte& out) const
+   {
+   return peek(&out, 1, 0);
+   }
+
+/*
+* Discard the next N bytes of the data
+*/
+size_t DataSource::discard_next(size_t n)
+   {
+   byte buf[64] = { 0 };
+   size_t discarded = 0;
+
+   while(n)
+      {
+      const size_t got = this->read(buf, std::min(n, sizeof(buf)));
+      discarded += got;
+
+      if(got == 0)
+         break;
+      }
+
+   return discarded;
+   }
+
+/*
+* Read from a memory buffer
+*/
+size_t DataSource_Memory::read(byte out[], size_t length)
+   {
+   size_t got = std::min<size_t>(source.size() - offset, length);
+   copy_mem(out, source.data() + offset, got);
+   offset += got;
+   return got;
+   }
+
+bool DataSource_Memory::check_available(size_t n)
+   {
+   return (n <= (source.size() - offset));
+   }
+
+/*
+* Peek into a memory buffer
+*/
+size_t DataSource_Memory::peek(byte out[], size_t length,
+                               size_t peek_offset) const
+   {
+   const size_t bytes_left = source.size() - offset;
+   if(peek_offset >= bytes_left) return 0;
+
+   size_t got = std::min(bytes_left - peek_offset, length);
+   copy_mem(out, &source[offset + peek_offset], got);
+   return got;
+   }
+
+/*
+* Check if the memory buffer is empty
+*/
+bool DataSource_Memory::end_of_data() const
+   {
+   return (offset == source.size());
+   }
+
+/*
+* DataSource_Memory Constructor
+*/
+DataSource_Memory::DataSource_Memory(const std::string& in) :
+   source(reinterpret_cast<const byte*>(in.data()),
+          reinterpret_cast<const byte*>(in.data()) + in.length()),
+   offset(0)
+   {
+   offset = 0;
+   }
+
+/*
+* Read from a stream
+*/
+size_t DataSource_Stream::read(byte out[], size_t length)
+   {
+   source.read(reinterpret_cast<char*>(out), length);
+   if(source.bad())
+      throw Stream_IO_Error("DataSource_Stream::read: Source failure");
+
+   size_t got = source.gcount();
+   total_read += got;
+   return got;
+   }
+
+bool DataSource_Stream::check_available(size_t n)
+   {
+   const std::streampos orig_pos = source.tellg();
+   source.seekg(0, std::ios::end);
+   const size_t avail = source.tellg() - orig_pos;
+   source.seekg(orig_pos);
+   return (avail >= n);
+   }
+
+/*
+* Peek into a stream
+*/
+size_t DataSource_Stream::peek(byte out[], size_t length, size_t offset) const
+   {
+   if(end_of_data())
+      throw Invalid_State("DataSource_Stream: Cannot peek when out of data");
+
+   size_t got = 0;
+
+   if(offset)
+      {
+      secure_vector<byte> buf(offset);
+      source.read(reinterpret_cast<char*>(buf.data()), buf.size());
+      if(source.bad())
+         throw Stream_IO_Error("DataSource_Stream::peek: Source failure");
+      got = source.gcount();
+      }
+
+   if(got == offset)
+      {
+      source.read(reinterpret_cast<char*>(out), length);
+      if(source.bad())
+         throw Stream_IO_Error("DataSource_Stream::peek: Source failure");
+      got = source.gcount();
+      }
+
+   if(source.eof())
+      source.clear();
+   source.seekg(total_read, std::ios::beg);
+
+   return got;
+   }
+
+/*
+* Check if the stream is empty or in error
+*/
+bool DataSource_Stream::end_of_data() const
+   {
+   return (!source.good());
+   }
+
+/*
+* Return a human-readable ID for this stream
+*/
+std::string DataSource_Stream::id() const
+   {
+   return identifier;
+   }
+
+/*
+* DataSource_Stream Constructor
+*/
+DataSource_Stream::DataSource_Stream(const std::string& path,
+                                     bool use_binary) :
+   identifier(path),
+   source_p(new std::ifstream(path,
+                              use_binary ? std::ios::binary : std::ios::in)),
+   source(*source_p),
+   total_read(0)
+   {
+   if(!source.good())
+      {
+      delete source_p;
+      throw Stream_IO_Error("DataSource: Failure opening file " + path);
+      }
+   }
+
+/*
+* DataSource_Stream Constructor
+*/
+DataSource_Stream::DataSource_Stream(std::istream& in,
+                                     const std::string& name) :
+   identifier(name),
+   source_p(nullptr),
+   source(in),
+   total_read(0)
+   {
+   }
+
+/*
+* DataSource_Stream Destructor
+*/
+DataSource_Stream::~DataSource_Stream()
+   {
+   delete source_p;
+   }
+
+}
+/*
 * (C) 2015 Jack Lloyd
 * (C) 2015 Simon Warta (Kullo GmbH)
 *
@@ -51686,7 +52221,7 @@ std::vector<std::string> get_files_recursive(const std::string& dir)
 }
 /*
 * Various string utils and parsing functions
-* (C) 1999-2007,2013,2014 Jack Lloyd
+* (C) 1999-2007,2013,2014,2015 Jack Lloyd
 * (C) 2015 Simon Warta (Kullo GmbH)
 *
 * Botan is released under the Simplified BSD License (see license.txt)
@@ -52013,6 +52548,27 @@ std::string replace_char(const std::string& str, char from_char, char to_char)
    return out;
    }
 
+bool host_wildcard_match(const std::string& issued, const std::string& host)
+   {
+   if(issued == host)
+      return true;
+
+   if(issued.size() > 2 && issued[0] == '*' && issued[1] == '.')
+      {
+      size_t host_i = host.find('.');
+      if(host_i == std::string::npos || host_i == host.size() - 1)
+         return false;
+
+      const std::string host_base = host.substr(host_i + 1);
+      const std::string issued_base = issued.substr(2);
+
+      if(host_base == issued_base)
+         return true;
+         }
+
+   return false;
+   }
+
 }
 /*
 * Simple config/test file reader
@@ -52113,71 +52669,6 @@ void Semaphore::acquire()
       --m_wakeups;
       }
    }
-
-}
-/*
-* Timing Attack Countermeasure Functions
-* (C) 2010 Falko Strenzke, Jack Lloyd
-*
-* Botan is released under the Simplified BSD License (see license.txt)
-*/
-
-
-namespace Botan {
-
-namespace TA_CM {
-
-/*
-* We use volatile in these functions in an attempt to ensure that the
-* compiler doesn't optimize in a way that would create branching
-* operations.
-*
-* Note: this needs further testing; on at least x86-64 with GCC,
-* volatile is not required to get branch-free operations, it just
-* makes the functions much longer/slower. It may not be required
-* anywhere.
-*/
-
-namespace {
-
-template<typename T>
-T expand_mask(T x)
-   {
-   volatile T r = x;
-   for(size_t i = 1; i != sizeof(T) * 8; i *= 2)
-      r |= r >> i;
-   r &= 1;
-   r = ~(r - 1);
-   return r;
-   }
-
-}
-
-u32bit expand_mask_u32bit(u32bit in)
-   {
-   return expand_mask<u32bit>(in);
-   }
-
-u16bit expand_mask_u16bit(u16bit in)
-   {
-   return expand_mask<u16bit>(in);
-   }
-
-u32bit max_32(u32bit a, u32bit b)
-   {
-   const u32bit a_larger = b - a; /* negative if a larger */
-   const u32bit mask = expand_mask<u32bit>(a_larger >> 31);
-   return (a & mask) | (b & ~mask);
-   }
-
-u32bit min_32(u32bit a, u32bit b)
-   {
-   const u32bit a_larger = b - a; /* negative if a larger */
-   const u32bit mask = expand_mask<u32bit>(a_larger >> 31);
-   return (a & ~mask) | (b & mask);
-   }
-
-}
 
 }
 /*
@@ -55139,7 +55630,7 @@ void X509_Object::do_decode()
 }
 /*
 * X.509 Certificates
-* (C) 1999-2010 Jack Lloyd
+* (C) 1999-2010,2015 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -55349,7 +55840,7 @@ bool X509_Certificate::is_CA_cert() const
    if(!subject.get1_u32bit("X509v3.BasicConstraints.is_ca"))
       return false;
 
-   return allowed_usage(KEY_CERT_SIGN);
+   return allowed_usage(Key_Constraints(KEY_CERT_SIGN));
    }
 
 bool X509_Certificate::allowed_usage(Key_Constraints usage) const
@@ -55361,9 +55852,36 @@ bool X509_Certificate::allowed_usage(Key_Constraints usage) const
 
 bool X509_Certificate::allowed_usage(const std::string& usage) const
    {
-   for(auto constraint : ex_constraints())
-      if(constraint == usage)
+   const std::vector<std::string> ex = ex_constraints();
+
+   if(ex.empty())
+      return true;
+
+   if(std::find(ex.begin(), ex.end(), usage) != ex.end())
+      return true;
+
+   return false;
+   }
+
+bool X509_Certificate::allowed_usage(Usage_Type usage) const
+   {
+   switch(usage)
+      {
+      case Usage_Type::UNSPECIFIED:
          return true;
+
+      case Usage_Type::TLS_SERVER_AUTH:
+         return allowed_usage(Key_Constraints(DATA_ENCIPHERMENT | KEY_ENCIPHERMENT | DIGITAL_SIGNATURE)) && allowed_usage("PKIX.ServerAuth");
+
+      case Usage_Type::TLS_CLIENT_AUTH:
+         return allowed_usage(Key_Constraints(DIGITAL_SIGNATURE | NON_REPUDIATION)) && allowed_usage("PKIX.ClientAuth");
+
+      case Usage_Type::OCSP_RESPONDER:
+         return allowed_usage(Key_Constraints(DIGITAL_SIGNATURE | NON_REPUDIATION)) && allowed_usage("PKIX.OCSPSigning");
+
+      case Usage_Type::CERTIFICATE_AUTHORITY:
+         return is_CA_cert();
+      }
 
    return false;
    }
@@ -55435,9 +55953,6 @@ std::vector<byte> X509_Certificate::serial_number() const
    return subject.get1_memvec("X509.Certificate.serial");
    }
 
-/*
-* Return the distinguished name of the issuer
-*/
 X509_DN X509_Certificate::issuer_dn() const
    {
    return create_dn(issuer);
@@ -55448,9 +55963,6 @@ std::vector<byte> X509_Certificate::raw_issuer_dn() const
    return issuer.get1_memvec("X509.Certificate.dn_bits");
    }
 
-/*
-* Return the distinguished name of the subject
-*/
 X509_DN X509_Certificate::subject_dn() const
    {
    return create_dn(subject);
@@ -55460,36 +55972,6 @@ std::vector<byte> X509_Certificate::raw_subject_dn() const
    {
    return subject.get1_memvec("X509.Certificate.dn_bits");
    }
-
-namespace {
-
-bool cert_subject_dns_match(const std::string& name,
-                            const std::vector<std::string>& cert_names)
-   {
-   for(size_t i = 0; i != cert_names.size(); ++i)
-      {
-      const std::string cn = cert_names[i];
-
-      if(cn == name)
-         return true;
-
-      /*
-      * Possible wildcard match. We only support the most basic form of
-      * cert wildcarding ala RFC 2595
-      */
-      if(cn.size() > 2 && cn[0] == '*' && cn[1] == '.' && name.size() > cn.size())
-         {
-         const std::string base = cn.substr(1, std::string::npos);
-
-         if(name.compare(name.size() - base.size(), base.size(), base) == 0)
-            return true;
-         }
-      }
-
-   return false;
-   }
-
-}
 
 std::string X509_Certificate::fingerprint(const std::string& hash_name) const
    {
@@ -55516,11 +55998,17 @@ bool X509_Certificate::matches_dns_name(const std::string& name) const
    if(name == "")
       return false;
 
-   if(cert_subject_dns_match(name, subject_info("DNS")))
-      return true;
+   std::vector<std::string> issued_names = subject_info("DNS");
 
-   if(cert_subject_dns_match(name, subject_info("Name")))
-      return true;
+   // Fall back to CN only if no DNS names are set (RFC 6125 sec 6.4.4)
+   if(issued_names.empty())
+      issued_names = subject_info("Name");
+
+   for(size_t i = 0; i != issued_names.size(); ++i)
+      {
+      if(host_wildcard_match(issued_names[i], name))
+         return true;
+      }
 
    return false;
    }
@@ -55561,45 +56049,36 @@ bool operator!=(const X509_Certificate& cert1, const X509_Certificate& cert2)
 
 std::string X509_Certificate::to_string() const
    {
-   const char* dn_fields[] = { "Name",
-                               "Email",
-                               "Organization",
-                               "Organizational Unit",
-                               "Locality",
-                               "State",
-                               "Country",
-                               "IP",
-                               "DNS",
-                               "URI",
-                               "PKIX.XMPPAddr",
-                               nullptr };
+   const std::vector<std::string> dn_fields{
+      "Name",
+      "Email",
+      "Organization",
+      "Organizational Unit",
+      "Locality",
+      "State",
+      "Country",
+      "IP",
+      "DNS",
+      "URI",
+      "PKIX.XMPPAddr"
+      };
 
    std::ostringstream out;
 
-   for(size_t i = 0; dn_fields[i]; ++i)
+   for(auto&& field : dn_fields)
       {
-      const std::vector<std::string> vals = this->subject_info(dn_fields[i]);
-
-      if(vals.empty())
-         continue;
-
-      out << "Subject " << dn_fields[i] << ":";
-      for(size_t j = 0; j != vals.size(); ++j)
-         out << " " << vals[j];
-      out << "\n";
+      for(auto&& val : subject_info(field))
+         {
+         out << "Subject " << field << ": " << val << "\n";
+         }
       }
 
-   for(size_t i = 0; dn_fields[i]; ++i)
+   for(auto&& field : dn_fields)
       {
-      const std::vector<std::string> vals = this->issuer_info(dn_fields[i]);
-
-      if(vals.empty())
-         continue;
-
-      out << "Issuer " << dn_fields[i] << ":";
-      for(size_t j = 0; j != vals.size(); ++j)
-         out << " " << vals[j];
-      out << "\n";
+      for(auto&& val : issuer_info(field))
+         {
+         out << "Issuer " << field << ": " << val << "\n";
+         }
       }
 
    out << "Version: " << this->x509_version() << "\n";
@@ -56017,13 +56496,22 @@ check_chain(const std::vector<X509_Certificate>& cert_path,
 Path_Validation_Result x509_path_validate(
    const std::vector<X509_Certificate>& end_certs,
    const Path_Validation_Restrictions& restrictions,
-   const std::vector<Certificate_Store*>& certstores)
+   const std::vector<Certificate_Store*>& certstores,
+   const std::string& hostname,
+   Usage_Type usage)
    {
    if(end_certs.empty())
       throw std::invalid_argument("x509_path_validate called with no subjects");
 
    std::vector<X509_Certificate> cert_path;
    cert_path.push_back(end_certs[0]);
+
+   /*
+   * This is an inelegant but functional way of preventing path loops
+   * (where C1 -> C2 -> C3 -> C1). We store a set of all the certificate
+   * fingerprints in the path. If there is a duplicate, we error out.
+   */
+   std::set<std::string> certs_seen;
 
    Certificate_Store_Overlay extra(end_certs);
 
@@ -56034,38 +56522,55 @@ Path_Validation_Result x509_path_validate(
       if(!cert)
          return Path_Validation_Result(Certificate_Status_Code::CERT_ISSUER_NOT_FOUND);
 
+      const std::string fprint = cert->fingerprint("SHA-256");
+      if(certs_seen.count(fprint) > 0)
+         return Path_Validation_Result(Certificate_Status_Code::CERT_CHAIN_LOOP);
+      certs_seen.insert(fprint);
       cert_path.push_back(*cert);
       }
 
-   return Path_Validation_Result(check_chain(cert_path, restrictions, certstores),
-                                 std::move(cert_path));
+   std::vector<std::set<Certificate_Status_Code>> res = check_chain(cert_path, restrictions, certstores);
+
+   if(hostname != "" && !cert_path[0].matches_dns_name(hostname))
+      res[0].insert(Certificate_Status_Code::CERT_NAME_NOMATCH);
+
+   if(!cert_path[0].allowed_usage(usage))
+      res[0].insert(Certificate_Status_Code::INVALID_USAGE);
+
+   return Path_Validation_Result(res, std::move(cert_path));
    }
 
 Path_Validation_Result x509_path_validate(
    const X509_Certificate& end_cert,
    const Path_Validation_Restrictions& restrictions,
-   const std::vector<Certificate_Store*>& certstores)
+   const std::vector<Certificate_Store*>& certstores,
+   const std::string& hostname,
+   Usage_Type usage)
    {
    std::vector<X509_Certificate> certs;
    certs.push_back(end_cert);
-   return x509_path_validate(certs, restrictions, certstores);
+   return x509_path_validate(certs, restrictions, certstores, hostname, usage);
    }
 
 Path_Validation_Result x509_path_validate(
    const std::vector<X509_Certificate>& end_certs,
    const Path_Validation_Restrictions& restrictions,
-   const Certificate_Store& store)
+   const Certificate_Store& store,
+   const std::string& hostname,
+   Usage_Type usage)
    {
    std::vector<Certificate_Store*> certstores;
    certstores.push_back(const_cast<Certificate_Store*>(&store));
 
-   return x509_path_validate(end_certs, restrictions, certstores);
+   return x509_path_validate(end_certs, restrictions, certstores, hostname, usage);
    }
 
 Path_Validation_Result x509_path_validate(
    const X509_Certificate& end_cert,
    const Path_Validation_Restrictions& restrictions,
-   const Certificate_Store& store)
+   const Certificate_Store& store,
+   const std::string& hostname,
+   Usage_Type usage)
    {
    std::vector<X509_Certificate> certs;
    certs.push_back(end_cert);
@@ -56073,7 +56578,7 @@ Path_Validation_Result x509_path_validate(
    std::vector<Certificate_Store*> certstores;
    certstores.push_back(const_cast<Certificate_Store*>(&store));
 
-   return x509_path_validate(certs, restrictions, certstores);
+   return x509_path_validate(certs, restrictions, certstores, hostname, usage);
    }
 
 Path_Validation_Restrictions::Path_Validation_Restrictions(bool require_rev,
@@ -56113,6 +56618,11 @@ Path_Validation_Result::Path_Validation_Result(std::vector<std::set<Certificate_
 
 const X509_Certificate& Path_Validation_Result::trust_root() const
    {
+   if(m_cert_path.empty())
+      throw std::runtime_error("Path_Validation_Result::trust_root no path set");
+   if(result() != Certificate_Status_Code::VERIFIED)
+      throw std::runtime_error("Path_Validation_Result::trust_root meaningless with invalid status");
+
    return m_cert_path[m_cert_path.size()-1];
    }
 
@@ -56169,6 +56679,8 @@ const char* Path_Validation_Result::status_string(Certificate_Status_Code code)
          return "Certificate issuer not found";
       case Certificate_Status_Code::CANNOT_ESTABLISH_TRUST:
          return "Cannot establish trust";
+      case Certificate_Status_Code::CERT_CHAIN_LOOP:
+         return "Loop in certificate chain";
 
       case Certificate_Status_Code::POLICY_ERROR:
          return "Policy error";
@@ -56184,6 +56696,8 @@ const char* Path_Validation_Result::status_string(Certificate_Status_Code code)
          return "OCSP cert not listed";
       case Certificate_Status_Code::OCSP_BAD_STATUS:
          return "OCSP bad status";
+      case Certificate_Status_Code::CERT_NAME_NOMATCH:
+         return "Certificate does not match provided name";
 
       case Certificate_Status_Code::CERT_IS_REVOKED:
          return "Certificate is revoked";
@@ -56191,9 +56705,10 @@ const char* Path_Validation_Result::status_string(Certificate_Status_Code code)
          return "CRL bad signature";
       case Certificate_Status_Code::SIGNATURE_ERROR:
          return "Signature error";
-      default:
-         return "Unknown error";
+         // intentionally no default so we are warned
       }
+
+   return "Unknown error";
    }
 
 }

@@ -1,5 +1,5 @@
 /*
-* Botan 1.11.21 Amalgamation
+* Botan 1.11.24 Amalgamation
 * (C) 1999-2013,2014,2015 Jack Lloyd and others
 *
 * Botan is released under the Simplified BSD License (see license.txt)
@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <stddef.h>
 #include <stdexcept>
 #include <string>
@@ -32,30 +33,30 @@
 #include <vector>
 
 /*
-* This file was automatically generated Mon Oct 19 06:20:56 2015 UTC by
-* alcides@alcides-bigpc running 'configure.py --gen-amalgamation'
+* This file was automatically generated Mon Nov 30 18:20:57 2015 UTC by
+* alcides@Alcidess-Mac-mini.local running './configure.py --gen-amalgamation'
 *
 * Target
-*  - Compiler: g++ -m64 -pthread -fstack-protector -c -O2
+*  - Compiler: clang++  -m64 -pthread -std=c++11 -D_REENTRANT -fstack-protector -O3
 *  - Arch: x86_64/x86_64
-*  - OS: linux
+*  - OS: darwin
 */
 
 #define BOTAN_VERSION_MAJOR 1
 #define BOTAN_VERSION_MINOR 11
-#define BOTAN_VERSION_PATCH 21
-#define BOTAN_VERSION_DATESTAMP 20151011
+#define BOTAN_VERSION_PATCH 24
+#define BOTAN_VERSION_DATESTAMP 0
 
-#define BOTAN_VERSION_RELEASE_TYPE "released"
+#define BOTAN_VERSION_RELEASE_TYPE "unreleased"
 
-#define BOTAN_VERSION_VC_REVISION "git:1ed5d9e990353e5d4f1b8dcf42afc143b0abe933"
+#define BOTAN_VERSION_VC_REVISION "unknown"
 
 #define BOTAN_DISTRIBUTION_INFO "unspecified"
 
 #define BOTAN_INSTALL_PREFIX "/usr/local"
 #define BOTAN_INSTALL_HEADER_DIR "include/botan-1.11"
 #define BOTAN_INSTALL_LIB_DIR "lib"
-#define BOTAN_LIB_LINK "-lrt"
+#define BOTAN_LIB_LINK "-framework Security"
 
 #ifndef BOTAN_DLL
   #define BOTAN_DLL __attribute__((visibility("default")))
@@ -101,14 +102,31 @@
 * representation of an ECC point. Set to zero to diable this
 * side-channel countermeasure.
 */
-#define BOTAN_POINTGFP_RANDOMIZE_BLINDING_BITS 64
+#define BOTAN_POINTGFP_RANDOMIZE_BLINDING_BITS 80
 
-#define BOTAN_CURVE_GFP_USE_MONTGOMERY_LADDER 0
+/*
+* Normally blinding is performed by choosing a random starting point (plus
+* its inverse, of a form appropriate to the algorithm being blinded), and
+* then choosing new blinding operands by successive squaring of both
+* values. This is much faster than computing a new starting point but
+* introduces some possible coorelation
+*
+* To avoid possible leakage problems in long-running processes, the blinder
+* periodically reinitializes the sequence. This value specifies how often
+* a new sequence should be started.
+*/
+#define BOTAN_BLINDING_REINIT_INTERVAL 32
 
 /* PK key consistency checking toggles */
 #define BOTAN_PUBLIC_KEY_STRONG_CHECKS_ON_LOAD 1
 #define BOTAN_PRIVATE_KEY_STRONG_CHECKS_ON_LOAD 0
 #define BOTAN_PRIVATE_KEY_STRONG_CHECKS_ON_GENERATE 1
+
+/*
+* Define BOTAN_USE_CTGRIND to enable checking constant time
+* annotations using ctgrind https://github.com/agl/ctgrind
+*/
+//#define BOTAN_USE_CTGRIND
 
 /*
 * RNGs will automatically poll the system for additional seed material
@@ -132,13 +150,12 @@
 #endif
 
 /* Target identification and feature test macros */
-#define BOTAN_TARGET_OS_IS_LINUX
-#define BOTAN_TARGET_OS_HAS_CLOCK_GETTIME
+#define BOTAN_TARGET_OS_IS_DARWIN
 #define BOTAN_TARGET_OS_HAS_DLOPEN
 #define BOTAN_TARGET_OS_HAS_GETSID
 #define BOTAN_TARGET_OS_HAS_GETTIMEOFDAY
 #define BOTAN_TARGET_OS_HAS_GMTIME_R
-#define BOTAN_TARGET_OS_HAS_POSIX_MLOCK
+#define BOTAN_TARGET_OS_HAS_MEMSET_S
 #define BOTAN_TARGET_OS_HAS_READDIR
 #define BOTAN_TARGET_OS_HAS_TIMEGM
 
@@ -164,7 +181,7 @@
   #define BOTAN_TARGET_CPU_HAS_KNOWN_ENDIANNESS
 #endif
 
-#define BOTAN_BUILD_COMPILER_IS_GCC
+#define BOTAN_BUILD_COMPILER_IS_CLANG
 
 #if defined(_MSC_VER)
   // 4250: inherits via dominance (diamond inheritence issue)
@@ -273,13 +290,14 @@
 #define BOTAN_HAS_EMSA_RAW 20131128
 #define BOTAN_HAS_EMSA_X931 20140118
 #define BOTAN_HAS_ENTROPY_SOURCE 20150201
+#define BOTAN_HAS_ENTROPY_SRC_DARWIN_SECRANDOM 20150925
 #define BOTAN_HAS_ENTROPY_SRC_DEV_RANDOM 20131128
 #define BOTAN_HAS_ENTROPY_SRC_EGD 20131128
 #define BOTAN_HAS_ENTROPY_SRC_HIGH_RESOLUTION_TIMER 20131128
 #define BOTAN_HAS_ENTROPY_SRC_PROC_WALKER 20131128
 #define BOTAN_HAS_ENTROPY_SRC_RDRAND 20131128
 #define BOTAN_HAS_ENTROPY_SRC_UNIX_PROCESS_RUNNER 20131128
-#define BOTAN_HAS_FFI 20151001
+#define BOTAN_HAS_FFI 20151015
 #define BOTAN_HAS_FILTERS 20131128
 #define BOTAN_HAS_FPE_FE1 20131128
 #define BOTAN_HAS_GCM_CLMUL 20131227
@@ -304,7 +322,6 @@
 #define BOTAN_HAS_KECCAK 20131128
 #define BOTAN_HAS_KEYPAIR_TESTING 20131128
 #define BOTAN_HAS_LION 20131128
-#define BOTAN_HAS_LOCKING_ALLOCATOR 20131128
 #define BOTAN_HAS_MAC 20150626
 #define BOTAN_HAS_MARS 20131128
 #define BOTAN_HAS_MCEIES 20150706
@@ -380,7 +397,7 @@
 #define BOTAN_HAS_TWOFISH 20131128
 #define BOTAN_HAS_UTIL_FUNCTIONS 20150919
 #define BOTAN_HAS_WHIRLPOOL 20131128
-#define BOTAN_HAS_X509_CERTIFICATES 20131128
+#define BOTAN_HAS_X509_CERTIFICATES 20151023
 #define BOTAN_HAS_X931_RNG 20131128
 #define BOTAN_HAS_X942_PRF 20131128
 #define BOTAN_HAS_XTEA 20131128
@@ -784,36 +801,6 @@ operator^=(std::vector<T, Alloc>& out,
 
 
 #if defined(BOTAN_HAS_LOCKING_ALLOCATOR)
-
-namespace Botan {
-
-class BOTAN_DLL mlock_allocator
-   {
-   public:
-      static mlock_allocator& instance();
-
-      void* allocate(size_t num_elems, size_t elem_size);
-
-      bool deallocate(void* p, size_t num_elems, size_t elem_size);
-
-      mlock_allocator(const mlock_allocator&) = delete;
-
-      mlock_allocator& operator=(const mlock_allocator&) = delete;
-
-   private:
-      mlock_allocator();
-
-      ~mlock_allocator();
-
-      const size_t m_poolsize;
-
-      std::mutex m_mutex;
-      std::vector<std::pair<size_t, size_t>> m_freelist;
-      byte* m_pool;
-   };
-
-}
-
 #endif
 
 namespace Botan {
@@ -1052,7 +1039,7 @@ inline u16bit reverse_bytes(u16bit val)
 */
 inline u32bit reverse_bytes(u32bit val)
    {
-#if BOTAN_GCC_VERSION >= 430 && !defined(BOTAN_TARGET_CPU_IS_ARM_FAMILY)
+#if BOTAN_GCC_VERSION >= 430 && !defined(BOTAN_TARGET_ARCH_IS_ARM32)
    /*
    GCC intrinsic added in 4.3, works for a number of CPUs
 
@@ -1068,7 +1055,7 @@ inline u32bit reverse_bytes(u32bit val)
    asm("bswapl %0" : "=r" (val) : "0" (val));
    return val;
 
-#elif defined(BOTAN_USE_GCC_INLINE_ASM) && defined(BOTAN_TARGET_CPU_IS_ARM_FAMILY)
+#elif defined(BOTAN_USE_GCC_INLINE_ASM) && defined(BOTAN_TARGET_ARCH_IS_ARM32)
 
    asm ("eor r3, %1, %1, ror #16\n\t"
         "bic r3, r3, #0x00FF0000\n\t"
@@ -2255,6 +2242,8 @@ BOTAN_DLL std::string ipv4_to_string(u32bit ip_addr);
 std::map<std::string, std::string> BOTAN_DLL read_cfg(std::istream& is);
 
 std::string BOTAN_DLL clean_ws(const std::string& s);
+
+bool BOTAN_DLL host_wildcard_match(const std::string& wildcard, const std::string& host);
 
 
 }
@@ -3869,6 +3858,14 @@ class BOTAN_DLL RandomNumberGenerator
       * @return random byte
       */
       byte next_byte() { return get_random<byte>(); }
+
+      byte next_nonzero_byte()
+         {
+         byte b = next_byte();
+         while(b == 0)
+            b = next_byte();
+         return b;
+         }
 
       /**
       * Check whether this RNG is seeded.
@@ -6014,6 +6011,8 @@ class BOTAN_DLL Modular_Reducer
 
 namespace Botan {
 
+class RandomNumberGenerator;
+
 /**
 * Blinding Function Object
 */
@@ -6032,9 +6031,21 @@ class BOTAN_DLL Blinder
               std::function<BigInt (const BigInt&)> fwd_func,
               std::function<BigInt (const BigInt&)> inv_func);
 
+      Blinder(const Blinder&) = delete;
+
+      Blinder& operator=(const Blinder&) = delete;
+
    private:
+      BigInt blinding_nonce() const;
+
       Modular_Reducer m_reducer;
+      std::unique_ptr<RandomNumberGenerator> m_rng;
+      std::function<BigInt (const BigInt&)> m_fwd_fn;
+      std::function<BigInt (const BigInt&)> m_inv_fn;
+      size_t m_modulus_bits = 0;
+
       mutable BigInt m_e, m_d;
+      mutable size_t m_counter = 0;
    };
 
 }
@@ -7011,6 +7022,8 @@ enum class Certificate_Status_Code {
    CERT_ISSUER_NOT_FOUND = 3000,
    CANNOT_ESTABLISH_TRUST,
 
+   CERT_CHAIN_LOOP,
+
    // Validation errors
    POLICY_ERROR = 4000,
    INVALID_USAGE,
@@ -7021,6 +7034,8 @@ enum class Certificate_Status_Code {
    CA_CERT_NOT_FOR_CRL_ISSUER,
    OCSP_CERT_NOT_LISTED,
    OCSP_BAD_STATUS,
+
+   CERT_NAME_NOMATCH,
 
    // Hard failures
    CERT_IS_REVOKED = 5000,
@@ -7163,351 +7178,6 @@ typedef Public_Key X509_PublicKey;
 typedef Private_Key PKCS8_PrivateKey;
 
 }
-
-
-namespace Botan {
-
-/**
-* This class represents pipe objects.
-* A set of filters can be placed into a pipe, and information flows
-* through the pipe until it reaches the end, where the output is
-* collected for retrieval.  If you're familiar with the Unix shell
-* environment, this design will sound quite familiar.
-*/
-class BOTAN_DLL Pipe : public DataSource
-   {
-   public:
-      /**
-      * An opaque type that identifies a message in this Pipe
-      */
-      typedef size_t message_id;
-
-      /**
-      * Exception if you use an invalid message as an argument to
-      * read, remaining, etc
-      */
-      struct BOTAN_DLL Invalid_Message_Number : public Invalid_Argument
-         {
-         /**
-         * @param where the error occurred
-         * @param msg the invalid message id that was used
-         */
-         Invalid_Message_Number(const std::string& where, message_id msg) :
-            Invalid_Argument("Pipe::" + where + ": Invalid message number " +
-                             std::to_string(msg))
-            {}
-         };
-
-      /**
-      * A meta-id for whatever the last message is
-      */
-      static const message_id LAST_MESSAGE;
-
-      /**
-      * A meta-id for the default message (set with set_default_msg)
-      */
-      static const message_id DEFAULT_MESSAGE;
-
-      /**
-      * Write input to the pipe, i.e. to its first filter.
-      * @param in the byte array to write
-      * @param length the length of the byte array in
-      */
-      void write(const byte in[], size_t length);
-
-      /**
-      * Write input to the pipe, i.e. to its first filter.
-      * @param in the secure_vector containing the data to write
-      */
-      void write(const secure_vector<byte>& in)
-         { write(in.data(), in.size()); }
-
-      /**
-      * Write input to the pipe, i.e. to its first filter.
-      * @param in the std::vector containing the data to write
-      */
-      void write(const std::vector<byte>& in)
-         { write(in.data(), in.size()); }
-
-      /**
-      * Write input to the pipe, i.e. to its first filter.
-      * @param in the string containing the data to write
-      */
-      void write(const std::string& in);
-
-      /**
-      * Write input to the pipe, i.e. to its first filter.
-      * @param in the DataSource to read the data from
-      */
-      void write(DataSource& in);
-
-      /**
-      * Write input to the pipe, i.e. to its first filter.
-      * @param in a single byte to be written
-      */
-      void write(byte in);
-
-      /**
-      * Perform start_msg(), write() and end_msg() sequentially.
-      * @param in the byte array containing the data to write
-      * @param length the length of the byte array to write
-      */
-      void process_msg(const byte in[], size_t length);
-
-      /**
-      * Perform start_msg(), write() and end_msg() sequentially.
-      * @param in the secure_vector containing the data to write
-      */
-      void process_msg(const secure_vector<byte>& in);
-
-      /**
-      * Perform start_msg(), write() and end_msg() sequentially.
-      * @param in the secure_vector containing the data to write
-      */
-      void process_msg(const std::vector<byte>& in);
-
-      /**
-      * Perform start_msg(), write() and end_msg() sequentially.
-      * @param in the string containing the data to write
-      */
-      void process_msg(const std::string& in);
-
-      /**
-      * Perform start_msg(), write() and end_msg() sequentially.
-      * @param in the DataSource providing the data to write
-      */
-      void process_msg(DataSource& in);
-
-      /**
-      * Find out how many bytes are ready to read.
-      * @param msg the number identifying the message
-      * for which the information is desired
-      * @return number of bytes that can still be read
-      */
-      size_t remaining(message_id msg = DEFAULT_MESSAGE) const;
-
-      /**
-      * Read the default message from the pipe. Moves the internal
-      * offset so that every call to read will return a new portion of
-      * the message.
-      *
-      * @param output the byte array to write the read bytes to
-      * @param length the length of the byte array output
-      * @return number of bytes actually read into output
-      */
-      size_t read(byte output[], size_t length) override;
-
-      /**
-      * Read a specified message from the pipe. Moves the internal
-      * offset so that every call to read will return a new portion of
-      * the message.
-      * @param output the byte array to write the read bytes to
-      * @param length the length of the byte array output
-      * @param msg the number identifying the message to read from
-      * @return number of bytes actually read into output
-      */
-      size_t read(byte output[], size_t length, message_id msg);
-
-      /**
-      * Read a single byte from the pipe. Moves the internal offset so
-      * that every call to read will return a new portion of the
-      * message.
-      *
-      * @param output the byte to write the result to
-      * @param msg the message to read from
-      * @return number of bytes actually read into output
-      */
-      size_t read(byte& output, message_id msg = DEFAULT_MESSAGE);
-
-      /**
-      * Read the full contents of the pipe.
-      * @param msg the number identifying the message to read from
-      * @return secure_vector holding the contents of the pipe
-      */
-      secure_vector<byte> read_all(message_id msg = DEFAULT_MESSAGE);
-
-      /**
-      * Read the full contents of the pipe.
-      * @param msg the number identifying the message to read from
-      * @return string holding the contents of the pipe
-      */
-      std::string read_all_as_string(message_id = DEFAULT_MESSAGE);
-
-      /** Read from the default message but do not modify the internal
-      * offset. Consecutive calls to peek() will return portions of
-      * the message starting at the same position.
-      * @param output the byte array to write the peeked message part to
-      * @param length the length of the byte array output
-      * @param offset the offset from the current position in message
-      * @return number of bytes actually peeked and written into output
-      */
-      size_t peek(byte output[], size_t length, size_t offset) const override;
-
-      /** Read from the specified message but do not modify the
-      * internal offset. Consecutive calls to peek() will return
-      * portions of the message starting at the same position.
-      * @param output the byte array to write the peeked message part to
-      * @param length the length of the byte array output
-      * @param offset the offset from the current position in message
-      * @param msg the number identifying the message to peek from
-      * @return number of bytes actually peeked and written into output
-      */
-      size_t peek(byte output[], size_t length,
-                  size_t offset, message_id msg) const;
-
-      /** Read a single byte from the specified message but do not
-      * modify the internal offset. Consecutive calls to peek() will
-      * return portions of the message starting at the same position.
-      * @param output the byte to write the peeked message byte to
-      * @param offset the offset from the current position in message
-      * @param msg the number identifying the message to peek from
-      * @return number of bytes actually peeked and written into output
-      */
-      size_t peek(byte& output, size_t offset,
-                  message_id msg = DEFAULT_MESSAGE) const;
-
-      /**
-      * @return the number of bytes read from the default message.
-      */
-      size_t get_bytes_read() const override;
-
-      /**
-      * @return the number of bytes read from the specified message.
-      */
-      size_t get_bytes_read(message_id msg) const;
-
-      bool check_available(size_t n) override;
-      bool check_available_msg(size_t n, message_id msg);
-
-      /**
-      * @return currently set default message
-      */
-      size_t default_msg() const { return default_read; }
-
-      /**
-      * Set the default message
-      * @param msg the number identifying the message which is going to
-      * be the new default message
-      */
-      void set_default_msg(message_id msg);
-
-      /**
-      * Get the number of messages the are in this pipe.
-      * @return number of messages the are in this pipe
-      */
-      message_id message_count() const;
-
-      /**
-      * Test whether this pipe has any data that can be read from.
-      * @return true if there is more data to read, false otherwise
-      */
-      bool end_of_data() const override;
-
-      /**
-      * Start a new message in the pipe. A potential other message in this pipe
-      * must be closed with end_msg() before this function may be called.
-      */
-      void start_msg();
-
-      /**
-      * End the current message.
-      */
-      void end_msg();
-
-      /**
-      * Insert a new filter at the front of the pipe
-      * @param filt the new filter to insert
-      */
-      void prepend(Filter* filt);
-
-      /**
-      * Insert a new filter at the back of the pipe
-      * @param filt the new filter to insert
-      */
-      void append(Filter* filt);
-
-      /**
-      * Remove the first filter at the front of the pipe.
-      */
-      void pop();
-
-      /**
-      * Reset this pipe to an empty pipe.
-      */
-      void reset();
-
-      /**
-      * Construct a Pipe of up to four filters. The filters are set up
-      * in the same order as the arguments.
-      */
-      Pipe(Filter* = nullptr, Filter* = nullptr,
-           Filter* = nullptr, Filter* = nullptr);
-
-      /**
-      * Construct a Pipe from a list of filters
-      * @param filters the set of filters to use
-      */
-      Pipe(std::initializer_list<Filter*> filters);
-
-      Pipe(const Pipe&) = delete;
-      Pipe& operator=(const Pipe&) = delete;
-
-      ~Pipe();
-   private:
-      void init();
-      void destruct(Filter*);
-      void find_endpoints(Filter*);
-      void clear_endpoints(Filter*);
-
-      message_id get_message_no(const std::string&, message_id) const;
-
-      Filter* pipe;
-      class Output_Buffers* outputs;
-      message_id default_read;
-      bool inside_msg;
-   };
-
-/**
-* Stream output operator; dumps the results from pipe's default
-* message to the output stream.
-* @param out an output stream
-* @param pipe the pipe
-*/
-BOTAN_DLL std::ostream& operator<<(std::ostream& out, Pipe& pipe);
-
-/**
-* Stream input operator; dumps the remaining bytes of input
-* to the (assumed open) pipe message.
-* @param in the input stream
-* @param pipe the pipe
-*/
-BOTAN_DLL std::istream& operator>>(std::istream& in, Pipe& pipe);
-
-}
-
-#if defined(BOTAN_HAS_PIPE_UNIXFD_IO)
-
-namespace Botan {
-
-/**
-* Stream output operator; dumps the results from pipe's default
-* message to the output stream.
-* @param out file descriptor for an open output stream
-* @param pipe the pipe
-*/
-int BOTAN_DLL operator<<(int out, Pipe& pipe);
-
-/**
-* File descriptor input operator; dumps the remaining bytes of input
-* to the (assumed open) pipe message.
-* @param in file descriptor for an open input stream
-* @param pipe the pipe
-*/
-int BOTAN_DLL operator>>(int in, Pipe& pipe);
-
-}
-
-#endif
 
 
 namespace Botan {
@@ -7750,15 +7420,15 @@ namespace Botan {
 */
 enum Key_Constraints {
    NO_CONSTRAINTS     = 0,
-   DIGITAL_SIGNATURE  = 32768,
-   NON_REPUDIATION    = 16384,
-   KEY_ENCIPHERMENT   = 8192,
-   DATA_ENCIPHERMENT  = 4096,
-   KEY_AGREEMENT      = 2048,
-   KEY_CERT_SIGN      = 1024,
-   CRL_SIGN           = 512,
-   ENCIPHER_ONLY      = 256,
-   DECIPHER_ONLY      = 128
+   DIGITAL_SIGNATURE  = 1 << 15,
+   NON_REPUDIATION    = 1 << 14,
+   KEY_ENCIPHERMENT   = 1 << 13,
+   DATA_ENCIPHERMENT  = 1 << 12,
+   KEY_AGREEMENT      = 1 << 11,
+   KEY_CERT_SIGN      = 1 << 10,
+   CRL_SIGN           = 1 << 9,
+   ENCIPHER_ONLY      = 1 << 8,
+   DECIPHER_ONLY      = 1 << 7
 };
 
 class Public_Key;
@@ -7790,6 +7460,15 @@ void BOTAN_DLL decode(BER_Decoder&, Key_Constraints&);
 
 namespace Botan {
 
+enum class Usage_Type
+   {
+   UNSPECIFIED, // no restrictions
+   TLS_SERVER_AUTH,
+   TLS_CLIENT_AUTH,
+   CERTIFICATE_AUTHORITY,
+   OCSP_RESPONDER
+   };
+
 /**
 * This class represents X.509 Certificate
 */
@@ -7809,13 +7488,13 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       std::vector<byte> subject_public_key_bits() const;
 
       /**
-      * Get the issuer certificate DN.
+      * Get the certificate's issuer distinguished name (DN).
       * @return issuer DN of this certificate
       */
       X509_DN issuer_dn() const;
 
       /**
-      * Get the subject certificate DN.
+      * Get the certificate's subject distinguished name (DN).
       * @return subject DN of this certificate
       */
       X509_DN subject_dn() const;
@@ -7908,6 +7587,8 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       * key extension.
       */
       bool allowed_usage(const std::string& usage) const;
+
+      bool allowed_usage(Usage_Type usage) const;
 
       /**
       * Get the path limit as defined in the BasicConstraints extension of
@@ -8632,7 +8313,7 @@ class BOTAN_DLL Compression_Filter : public Compression_Decompression_Filter
       using Compression_Decompression_Filter::flush;
    };
 
-class Decompression_Filter : public Compression_Decompression_Filter
+class BOTAN_DLL Decompression_Filter : public Compression_Decompression_Filter
    {
    public:
       Decompression_Filter(const std::string& type,
@@ -10647,6 +10328,19 @@ class BOTAN_DLL PK_Decryptor
 class BOTAN_DLL PK_Signer
    {
    public:
+
+      /**
+      * Construct a PK Signer.
+      * @param key the key to use inside this signer
+      * @param emsa the EMSA to use
+      * An example would be "EMSA1(SHA-224)".
+      * @param format the signature format to use
+      */
+      PK_Signer(const Private_Key& key,
+                const std::string& emsa,
+                Signature_Format format = IEEE_1363,
+                const std::string& provider = "");
+
       /**
       * Sign a message.
       * @param in the message to sign as a byte array
@@ -10707,17 +10401,6 @@ class BOTAN_DLL PK_Signer
       * @param format the signature format to use
       */
       void set_output_format(Signature_Format format) { m_sig_format = format; }
-
-      /**
-      * Construct a PK Signer.
-      * @param key the key to use inside this signer
-      * @param emsa the EMSA to use
-      * An example would be "EMSA1(SHA-224)".
-      * @param format the signature format to use
-      */
-      PK_Signer(const Private_Key& key,
-                const std::string& emsa,
-                Signature_Format format = IEEE_1363);
    private:
       std::unique_ptr<PK_Ops::Signature> m_op;
       Signature_Format m_sig_format;
@@ -10731,6 +10414,17 @@ class BOTAN_DLL PK_Signer
 class BOTAN_DLL PK_Verifier
    {
    public:
+      /**
+      * Construct a PK Verifier.
+      * @param pub_key the public key to verify against
+      * @param emsa the EMSA to use (eg "EMSA3(SHA-1)")
+      * @param format the signature format to use
+      */
+      PK_Verifier(const Public_Key& pub_key,
+                  const std::string& emsa,
+                  Signature_Format format = IEEE_1363,
+                  const std::string& provider = "");
+
       /**
       * Verify a signature.
       * @param msg the message that the signature belongs to, as a byte array
@@ -10805,15 +10499,6 @@ class BOTAN_DLL PK_Verifier
       */
       void set_input_format(Signature_Format format);
 
-      /**
-      * Construct a PK Verifier.
-      * @param pub_key the public key to verify against
-      * @param emsa the EMSA to use (eg "EMSA3(SHA-1)")
-      * @param format the signature format to use
-      */
-      PK_Verifier(const Public_Key& pub_key,
-                  const std::string& emsa,
-                  Signature_Format format = IEEE_1363);
    private:
       std::unique_ptr<PK_Ops::Verification> m_op;
       Signature_Format m_sig_format;
@@ -10825,6 +10510,13 @@ class BOTAN_DLL PK_Verifier
 class BOTAN_DLL PK_Key_Agreement
    {
    public:
+
+      /**
+      * Construct a PK Key Agreement.
+      * @param key the key to use
+      * @param kdf name of the KDF to use (or 'Raw' for no KDF)
+      */
+      PK_Key_Agreement(const Private_Key& key, const std::string& kdf);
 
       /*
       * Perform Key Agreement Operation
@@ -10888,18 +10580,13 @@ class BOTAN_DLL PK_Key_Agreement
                            params.length());
          }
 
-      /**
-      * Construct a PK Key Agreement.
-      * @param key the key to use
-      * @param kdf name of the KDF to use (or 'Raw' for no KDF)
-      */
-      PK_Key_Agreement(const Private_Key& key, const std::string& kdf);
    private:
       std::unique_ptr<PK_Ops::Key_Agreement> m_op;
    };
 
 /**
-* Encryption with an MR algorithm and an EME.
+* Encryption using a standard message recovery algorithm like RSA or
+* ElGamal, paired with an encoding scheme like OAEP.
 */
 class BOTAN_DLL PK_Encryptor_EME : public PK_Encryptor
    {
@@ -10909,10 +10596,11 @@ class BOTAN_DLL PK_Encryptor_EME : public PK_Encryptor
       /**
       * Construct an instance.
       * @param key the key to use inside the decryptor
-      * @param eme the EME to use
+      * @param padding the message encoding scheme to use (eg "OAEP(SHA-256)")
       */
       PK_Encryptor_EME(const Public_Key& key,
-                       const std::string& eme);
+                       const std::string& padding,
+                       const std::string& provider = "");
    private:
       std::vector<byte> enc(const byte[], size_t,
                              RandomNumberGenerator& rng) const override;
@@ -10932,7 +10620,8 @@ class BOTAN_DLL PK_Decryptor_EME : public PK_Decryptor
       * @param eme the EME to use
       */
       PK_Decryptor_EME(const Private_Key& key,
-                       const std::string& eme);
+                       const std::string& eme,
+                       const std::string& provider = "");
    private:
       secure_vector<byte> dec(const byte[], size_t) const override;
 
@@ -12149,6 +11838,351 @@ class BOTAN_DLL EMSA_X931 : public EMSA
 
 }
 
+
+namespace Botan {
+
+/**
+* This class represents pipe objects.
+* A set of filters can be placed into a pipe, and information flows
+* through the pipe until it reaches the end, where the output is
+* collected for retrieval.  If you're familiar with the Unix shell
+* environment, this design will sound quite familiar.
+*/
+class BOTAN_DLL Pipe : public DataSource
+   {
+   public:
+      /**
+      * An opaque type that identifies a message in this Pipe
+      */
+      typedef size_t message_id;
+
+      /**
+      * Exception if you use an invalid message as an argument to
+      * read, remaining, etc
+      */
+      struct BOTAN_DLL Invalid_Message_Number : public Invalid_Argument
+         {
+         /**
+         * @param where the error occurred
+         * @param msg the invalid message id that was used
+         */
+         Invalid_Message_Number(const std::string& where, message_id msg) :
+            Invalid_Argument("Pipe::" + where + ": Invalid message number " +
+                             std::to_string(msg))
+            {}
+         };
+
+      /**
+      * A meta-id for whatever the last message is
+      */
+      static const message_id LAST_MESSAGE;
+
+      /**
+      * A meta-id for the default message (set with set_default_msg)
+      */
+      static const message_id DEFAULT_MESSAGE;
+
+      /**
+      * Write input to the pipe, i.e. to its first filter.
+      * @param in the byte array to write
+      * @param length the length of the byte array in
+      */
+      void write(const byte in[], size_t length);
+
+      /**
+      * Write input to the pipe, i.e. to its first filter.
+      * @param in the secure_vector containing the data to write
+      */
+      void write(const secure_vector<byte>& in)
+         { write(in.data(), in.size()); }
+
+      /**
+      * Write input to the pipe, i.e. to its first filter.
+      * @param in the std::vector containing the data to write
+      */
+      void write(const std::vector<byte>& in)
+         { write(in.data(), in.size()); }
+
+      /**
+      * Write input to the pipe, i.e. to its first filter.
+      * @param in the string containing the data to write
+      */
+      void write(const std::string& in);
+
+      /**
+      * Write input to the pipe, i.e. to its first filter.
+      * @param in the DataSource to read the data from
+      */
+      void write(DataSource& in);
+
+      /**
+      * Write input to the pipe, i.e. to its first filter.
+      * @param in a single byte to be written
+      */
+      void write(byte in);
+
+      /**
+      * Perform start_msg(), write() and end_msg() sequentially.
+      * @param in the byte array containing the data to write
+      * @param length the length of the byte array to write
+      */
+      void process_msg(const byte in[], size_t length);
+
+      /**
+      * Perform start_msg(), write() and end_msg() sequentially.
+      * @param in the secure_vector containing the data to write
+      */
+      void process_msg(const secure_vector<byte>& in);
+
+      /**
+      * Perform start_msg(), write() and end_msg() sequentially.
+      * @param in the secure_vector containing the data to write
+      */
+      void process_msg(const std::vector<byte>& in);
+
+      /**
+      * Perform start_msg(), write() and end_msg() sequentially.
+      * @param in the string containing the data to write
+      */
+      void process_msg(const std::string& in);
+
+      /**
+      * Perform start_msg(), write() and end_msg() sequentially.
+      * @param in the DataSource providing the data to write
+      */
+      void process_msg(DataSource& in);
+
+      /**
+      * Find out how many bytes are ready to read.
+      * @param msg the number identifying the message
+      * for which the information is desired
+      * @return number of bytes that can still be read
+      */
+      size_t remaining(message_id msg = DEFAULT_MESSAGE) const;
+
+      /**
+      * Read the default message from the pipe. Moves the internal
+      * offset so that every call to read will return a new portion of
+      * the message.
+      *
+      * @param output the byte array to write the read bytes to
+      * @param length the length of the byte array output
+      * @return number of bytes actually read into output
+      */
+      size_t read(byte output[], size_t length) override;
+
+      /**
+      * Read a specified message from the pipe. Moves the internal
+      * offset so that every call to read will return a new portion of
+      * the message.
+      * @param output the byte array to write the read bytes to
+      * @param length the length of the byte array output
+      * @param msg the number identifying the message to read from
+      * @return number of bytes actually read into output
+      */
+      size_t read(byte output[], size_t length, message_id msg);
+
+      /**
+      * Read a single byte from the pipe. Moves the internal offset so
+      * that every call to read will return a new portion of the
+      * message.
+      *
+      * @param output the byte to write the result to
+      * @param msg the message to read from
+      * @return number of bytes actually read into output
+      */
+      size_t read(byte& output, message_id msg = DEFAULT_MESSAGE);
+
+      /**
+      * Read the full contents of the pipe.
+      * @param msg the number identifying the message to read from
+      * @return secure_vector holding the contents of the pipe
+      */
+      secure_vector<byte> read_all(message_id msg = DEFAULT_MESSAGE);
+
+      /**
+      * Read the full contents of the pipe.
+      * @param msg the number identifying the message to read from
+      * @return string holding the contents of the pipe
+      */
+      std::string read_all_as_string(message_id = DEFAULT_MESSAGE);
+
+      /** Read from the default message but do not modify the internal
+      * offset. Consecutive calls to peek() will return portions of
+      * the message starting at the same position.
+      * @param output the byte array to write the peeked message part to
+      * @param length the length of the byte array output
+      * @param offset the offset from the current position in message
+      * @return number of bytes actually peeked and written into output
+      */
+      size_t peek(byte output[], size_t length, size_t offset) const override;
+
+      /** Read from the specified message but do not modify the
+      * internal offset. Consecutive calls to peek() will return
+      * portions of the message starting at the same position.
+      * @param output the byte array to write the peeked message part to
+      * @param length the length of the byte array output
+      * @param offset the offset from the current position in message
+      * @param msg the number identifying the message to peek from
+      * @return number of bytes actually peeked and written into output
+      */
+      size_t peek(byte output[], size_t length,
+                  size_t offset, message_id msg) const;
+
+      /** Read a single byte from the specified message but do not
+      * modify the internal offset. Consecutive calls to peek() will
+      * return portions of the message starting at the same position.
+      * @param output the byte to write the peeked message byte to
+      * @param offset the offset from the current position in message
+      * @param msg the number identifying the message to peek from
+      * @return number of bytes actually peeked and written into output
+      */
+      size_t peek(byte& output, size_t offset,
+                  message_id msg = DEFAULT_MESSAGE) const;
+
+      /**
+      * @return the number of bytes read from the default message.
+      */
+      size_t get_bytes_read() const override;
+
+      /**
+      * @return the number of bytes read from the specified message.
+      */
+      size_t get_bytes_read(message_id msg) const;
+
+      bool check_available(size_t n) override;
+      bool check_available_msg(size_t n, message_id msg);
+
+      /**
+      * @return currently set default message
+      */
+      size_t default_msg() const { return default_read; }
+
+      /**
+      * Set the default message
+      * @param msg the number identifying the message which is going to
+      * be the new default message
+      */
+      void set_default_msg(message_id msg);
+
+      /**
+      * Get the number of messages the are in this pipe.
+      * @return number of messages the are in this pipe
+      */
+      message_id message_count() const;
+
+      /**
+      * Test whether this pipe has any data that can be read from.
+      * @return true if there is more data to read, false otherwise
+      */
+      bool end_of_data() const override;
+
+      /**
+      * Start a new message in the pipe. A potential other message in this pipe
+      * must be closed with end_msg() before this function may be called.
+      */
+      void start_msg();
+
+      /**
+      * End the current message.
+      */
+      void end_msg();
+
+      /**
+      * Insert a new filter at the front of the pipe
+      * @param filt the new filter to insert
+      */
+      void prepend(Filter* filt);
+
+      /**
+      * Insert a new filter at the back of the pipe
+      * @param filt the new filter to insert
+      */
+      void append(Filter* filt);
+
+      /**
+      * Remove the first filter at the front of the pipe.
+      */
+      void pop();
+
+      /**
+      * Reset this pipe to an empty pipe.
+      */
+      void reset();
+
+      /**
+      * Construct a Pipe of up to four filters. The filters are set up
+      * in the same order as the arguments.
+      */
+      Pipe(Filter* = nullptr, Filter* = nullptr,
+           Filter* = nullptr, Filter* = nullptr);
+
+      /**
+      * Construct a Pipe from a list of filters
+      * @param filters the set of filters to use
+      */
+      Pipe(std::initializer_list<Filter*> filters);
+
+      Pipe(const Pipe&) = delete;
+      Pipe& operator=(const Pipe&) = delete;
+
+      ~Pipe();
+   private:
+      void init();
+      void destruct(Filter*);
+      void find_endpoints(Filter*);
+      void clear_endpoints(Filter*);
+
+      message_id get_message_no(const std::string&, message_id) const;
+
+      Filter* pipe;
+      class Output_Buffers* outputs;
+      message_id default_read;
+      bool inside_msg;
+   };
+
+/**
+* Stream output operator; dumps the results from pipe's default
+* message to the output stream.
+* @param out an output stream
+* @param pipe the pipe
+*/
+BOTAN_DLL std::ostream& operator<<(std::ostream& out, Pipe& pipe);
+
+/**
+* Stream input operator; dumps the remaining bytes of input
+* to the (assumed open) pipe message.
+* @param in the input stream
+* @param pipe the pipe
+*/
+BOTAN_DLL std::istream& operator>>(std::istream& in, Pipe& pipe);
+
+}
+
+#if defined(BOTAN_HAS_PIPE_UNIXFD_IO)
+#endif
+
+
+namespace Botan {
+
+/**
+* Stream output operator; dumps the results from pipe's default
+* message to the output stream.
+* @param out file descriptor for an open output stream
+* @param pipe the pipe
+*/
+int BOTAN_DLL operator<<(int out, Pipe& pipe);
+
+/**
+* File descriptor input operator; dumps the remaining bytes of input
+* to the (assumed open) pipe message.
+* @param in file descriptor for an open input stream
+* @param pipe the pipe
+*/
+int BOTAN_DLL operator>>(int in, Pipe& pipe);
+
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -12358,6 +12392,10 @@ BOTAN_DLL int botan_cipher_valid_nonce_length(botan_cipher_t cipher, size_t nl);
 BOTAN_DLL int botan_cipher_get_tag_length(botan_cipher_t cipher, size_t* tag_size);
 BOTAN_DLL int botan_cipher_get_default_nonce_length(botan_cipher_t cipher, size_t* nl);
 BOTAN_DLL int botan_cipher_get_update_granularity(botan_cipher_t cipher, size_t* ug);
+
+BOTAN_DLL int botan_cipher_query_keylen(botan_cipher_t,
+                                        size_t* out_minimum_keylength,
+                                        size_t* out_maximum_keylength);
 
 BOTAN_DLL int botan_cipher_set_key(botan_cipher_t cipher,
                                    const uint8_t* key, size_t key_len);
@@ -14623,6 +14661,7 @@ struct polyn_gf2m
       std::shared_ptr<GF2m_Field> msp_field;
    };
 
+gf2m random_gf2m(RandomNumberGenerator& rng);
 gf2m random_code_element(unsigned code_length, RandomNumberGenerator& rng);
 
 std::vector<polyn_gf2m> syndrome_init(polyn_gf2m const& generator, std::vector<gf2m> const& support, int n);
@@ -17428,6 +17467,29 @@ namespace Botan {
 */
 BOTAN_DLL RandomNumberGenerator& system_rng();
 
+/*
+* Instantiatable reference to the system RNG.
+*/
+class BOTAN_DLL System_RNG : public RandomNumberGenerator
+   {
+   public:
+      System_RNG() : m_rng(system_rng()) {}
+
+      void randomize(Botan::byte out[], size_t len) override { m_rng.randomize(out, len); }
+
+      bool is_seeded() const override { return m_rng.is_seeded(); }
+
+      void clear() override { m_rng.clear(); }
+
+      std::string name() const override { return m_rng.name(); }
+
+      void reseed(size_t poll_bits = 256) override { m_rng.reseed(poll_bits); }
+
+      void add_entropy(const byte in[], size_t len) override { m_rng.add_entropy(in, len); }
+   private:
+      Botan::RandomNumberGenerator& m_rng;
+   };
+
 }
 
 
@@ -18042,6 +18104,12 @@ class BOTAN_DLL Policy
       virtual std::vector<u16bit> ciphersuite_list(Protocol_Version version,
                                                    bool have_srp) const;
 
+      virtual size_t dtls_default_mtu() const;
+
+      virtual size_t dtls_initial_timeout() const;
+
+      virtual size_t dtls_maximum_timeout() const;
+
       virtual void print(std::ostream& o) const;
 
       virtual ~Policy() {}
@@ -18168,6 +18236,14 @@ class BOTAN_DLL Text_Policy : public Policy
          return r;
          }
 
+      void set(const std::string& k, const std::string& v) { m_kv[k] = v; }
+
+      Text_Policy(const std::string& s)
+         {
+         std::istringstream iss(s);
+         m_kv = read_cfg(iss);
+         }
+
       Text_Policy(std::istream& in)
          {
          m_kv = read_cfg(in);
@@ -18275,6 +18351,8 @@ enum Handshake_Type {
    HANDSHAKE_CCS        = 254, // Not a wire value
    HANDSHAKE_NONE       = 255  // Null value
 };
+
+const char* handshake_type_to_string(Handshake_Type t);
 
 enum Compression_Method {
    NO_COMPRESSION       = 0x00,
@@ -18697,6 +18775,7 @@ namespace TLS {
 class Connection_Cipher_State;
 class Connection_Sequence_Numbers;
 class Handshake_State;
+class Handshake_Message;
 
 /**
 * Generic interface for TLS endpoint
@@ -18708,15 +18787,18 @@ class BOTAN_DLL Channel
       typedef std::function<void (const byte[], size_t)> data_cb;
       typedef std::function<void (Alert, const byte[], size_t)> alert_cb;
       typedef std::function<bool (const Session&)> handshake_cb;
+      typedef std::function<void (const Handshake_Message&)> handshake_msg_cb;
 
       Channel(output_fn out,
               data_cb app_data_cb,
               alert_cb alert_cb,
               handshake_cb hs_cb,
+              handshake_msg_cb hs_msg_cb,
               Session_Manager& session_manager,
               RandomNumberGenerator& rng,
+              const Policy& policy,
               bool is_datagram,
-              size_t reserved_io_buffer_size);
+              size_t io_buf_sz = 16*1024);
 
       Channel(const Channel&) = delete;
 
@@ -18869,6 +18951,8 @@ class BOTAN_DLL Channel
 
       Handshake_State& create_handshake_state(Protocol_Version version);
 
+      void inspect_handshake_message(const Handshake_Message& msg);
+
       void activate_session();
 
       void change_cipher_spec_reader(Connection_Side side);
@@ -18887,8 +18971,11 @@ class BOTAN_DLL Channel
 
       Session_Manager& session_manager() { return m_session_manager; }
 
+      const Policy& policy() const { return m_policy; }
+
       bool save_session(const Session& session) const { return m_handshake_cb(session); }
 
+      handshake_msg_cb get_handshake_msg_cb() const { return m_handshake_msg_cb; }
    private:
       size_t maximum_fragment_size() const;
 
@@ -18918,14 +19005,16 @@ class BOTAN_DLL Channel
       bool m_is_datagram;
 
       /* callbacks */
-      handshake_cb m_handshake_cb;
       data_cb m_data_cb;
       alert_cb m_alert_cb;
       output_fn m_output_fn;
+      handshake_cb m_handshake_cb;
+      handshake_msg_cb m_handshake_msg_cb;
 
       /* external state */
-      RandomNumberGenerator& m_rng;
       Session_Manager& m_session_manager;
+      const Policy& m_policy;
+      RandomNumberGenerator& m_rng;
 
       /* sequence number state */
       std::unique_ptr<Connection_Sequence_Numbers> m_sequence_numbers;
@@ -19003,6 +19092,20 @@ class BOTAN_DLL Client : public Channel
              size_t reserved_io_buffer_size = 16*1024
          );
 
+      Client(output_fn out,
+             data_cb app_data_cb,
+             alert_cb alert_cb,
+             handshake_cb hs_cb,
+             handshake_msg_cb hs_msg_cb,
+             Session_Manager& session_manager,
+             Credentials_Manager& creds,
+             const Policy& policy,
+             RandomNumberGenerator& rng,
+             const Server_Information& server_info = Server_Information(),
+             const Protocol_Version offer_version = Protocol_Version::latest_tls_version(),
+             const std::vector<std::string>& next_protocols = {}
+         );
+
       const std::string& application_protocol() const { return m_application_protocol; }
    private:
       std::vector<X509_Certificate>
@@ -19024,7 +19127,6 @@ class BOTAN_DLL Client : public Channel
 
       Handshake_State* new_handshake_state(Handshake_IO* io) override;
 
-      const Policy& m_policy;
       Credentials_Manager& m_creds;
       const Server_Information m_info;
       std::string m_application_protocol;
@@ -19063,6 +19165,19 @@ class BOTAN_DLL Server : public Channel
              size_t reserved_io_buffer_size = 16*1024
          );
 
+      Server(output_fn output,
+             data_cb data_cb,
+             alert_cb alert_cb,
+             handshake_cb handshake_cb,
+             handshake_msg_cb hs_msg_cb,
+             Session_Manager& session_manager,
+             Credentials_Manager& creds,
+             const Policy& policy,
+             RandomNumberGenerator& rng,
+             next_protocol_fn next_proto = next_protocol_fn(),
+             bool is_datagram = false
+         );
+
       /**
       * Return the protocol notification set by the client (using the
       * NPN extension) for this connection, if any. This value is not
@@ -19085,7 +19200,6 @@ class BOTAN_DLL Server : public Channel
 
       Handshake_State* new_handshake_state(Handshake_IO* io) override;
 
-      const Policy& m_policy;
       Credentials_Manager& m_creds;
 
       next_protocol_fn m_choose_next_protocol;
@@ -19230,6 +19344,8 @@ namespace TLS {
 class BOTAN_DLL Handshake_Message
    {
    public:
+      std::string type_string() const;
+
       virtual Handshake_Type type() const = 0;
 
       virtual std::vector<byte> serialize() const = 0;
@@ -20082,7 +20198,8 @@ class BOTAN_DLL Path_Validation_Result
       std::set<std::string> trusted_hashes() const;
 
       /**
-      * @return the trust root of the validation
+      * @return the trust root of the validation if successful
+      * throws an exception if the validation failed
       */
       const X509_Certificate& trust_root() const;
 
@@ -20130,29 +20247,6 @@ class BOTAN_DLL Path_Validation_Result
       std::vector<X509_Certificate> m_cert_path;
    };
 
-/**
-* PKIX Path Validation
-*/
-Path_Validation_Result BOTAN_DLL x509_path_validate(
-   const std::vector<X509_Certificate>& end_certs,
-   const Path_Validation_Restrictions& restrictions,
-   const std::vector<Certificate_Store*>& certstores);
-
-/**
-* PKIX Path Validation
-*/
-Path_Validation_Result BOTAN_DLL x509_path_validate(
-   const X509_Certificate& end_cert,
-   const Path_Validation_Restrictions& restrictions,
-   const std::vector<Certificate_Store*>& certstores);
-
-/**
-* PKIX Path Validation
-*/
-Path_Validation_Result BOTAN_DLL x509_path_validate(
-   const X509_Certificate& end_cert,
-   const Path_Validation_Restrictions& restrictions,
-   const Certificate_Store& store);
 
 /**
 * PKIX Path Validation
@@ -20160,7 +20254,39 @@ Path_Validation_Result BOTAN_DLL x509_path_validate(
 Path_Validation_Result BOTAN_DLL x509_path_validate(
    const std::vector<X509_Certificate>& end_certs,
    const Path_Validation_Restrictions& restrictions,
-   const Certificate_Store& store);
+   const std::vector<Certificate_Store*>& certstores,
+   const std::string& hostname = "",
+   Usage_Type usage = Usage_Type::UNSPECIFIED);
+
+/**
+* PKIX Path Validation
+*/
+Path_Validation_Result BOTAN_DLL x509_path_validate(
+   const X509_Certificate& end_cert,
+   const Path_Validation_Restrictions& restrictions,
+   const std::vector<Certificate_Store*>& certstores,
+   const std::string& hostname = "",
+   Usage_Type usage = Usage_Type::UNSPECIFIED);
+
+/**
+* PKIX Path Validation
+*/
+Path_Validation_Result BOTAN_DLL x509_path_validate(
+   const X509_Certificate& end_cert,
+   const Path_Validation_Restrictions& restrictions,
+   const Certificate_Store& store,
+   const std::string& hostname = "",
+   Usage_Type usage = Usage_Type::UNSPECIFIED);
+
+/**
+* PKIX Path Validation
+*/
+Path_Validation_Result BOTAN_DLL x509_path_validate(
+   const std::vector<X509_Certificate>& end_certs,
+   const Path_Validation_Restrictions& restrictions,
+   const Certificate_Store& store,
+   const std::string& hostname = "",
+   Usage_Type usage = Usage_Type::UNSPECIFIED);
 
 }
 

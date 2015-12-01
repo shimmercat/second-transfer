@@ -1,6 +1,4 @@
 
-#include <functional>
-
 #ifdef INCLUDE_BOTAN_ALL_H
 #include "botan_all.h"
 #else
@@ -18,7 +16,8 @@
 #include <botan/data_src.h>
 #endif
 
-#include "../SecondTransfer/TLS/Botan_stub.h"
+#include "Botan_stub.h"
+#include <functional>
 
 #include <cstdlib>
 
