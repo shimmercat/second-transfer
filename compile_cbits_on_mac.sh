@@ -49,3 +49,4 @@ cp $THIS_DIR/$libname $placement_path
 cp $THIS_DIR/$libname $iplace
 
 install_name_tool -add_rpath $iplace $target_dependent
+rm $THIS_DIR/$libname
