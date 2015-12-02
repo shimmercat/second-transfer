@@ -1,7 +1,7 @@
 
 name        :              second-transfer
 
--- The package version.  See the Haskell package versioning policy (PVP)
+-- The package version.  See the Haskell package versioning policy (PVP) 
 -- for standards guiding when and how versions should be incremented.
 -- http://www.haskell.org/haskellwiki/Package_versioning_policy
 -- PVP       summary:      +-+------- breaking API changes
@@ -208,7 +208,7 @@ library
   if os(linux)
       ghc-options: -pgmPcpphs "-pgmc g++"  -optP--cpp 
   if os(darwin)
-      ghc-options: -pgmPcpphs "-pgmc g++-5" "-pgml g++-5" -optP--cpp  
+      ghc-options: -pgmPcpphs "-pgmc g++-5" "-pgml g++-5"  -optP--cpp
 
   --               v------ remove this
   if os(linux)
@@ -223,15 +223,16 @@ library
                    , cbits/botan_all_rdrand.cpp
 
   if os(darwin)
-      extra-libraries: stdc++.6 gcc_s.1 enable_tls
-      extra-lib-dirs: /usr/local/opt/gcc/lib/gcc/5 
-      ld-options: -framework Security
+      extra-libraries: second_transfer__enable_tls
+      extra-lib-dirs: /usr/local/shimmercat-build/ 
+      ld-options: -framework Security 
   if os(linux)
       extra-libraries: stdc++
+      extra-lib-dirs: /usr/local
   if flag(fastc)
-      extra-libraries: botan-1.11
+      if os(linux)
+          extra-libraries: botan-1.11
 
-  extra-lib-dirs: /usr/local/lib
 
 
 
