@@ -21,9 +21,18 @@
 
 #include <cstdlib>
 
+// TODO:
+//
+// Consider marking these functions "safe" in Haskell code.
+// For that to work, you need first to change them in such a way that no lock
+// takes place, that is, you shouldn't call back to Haskell code from here, but
+// instead have the callbacks to simply write that in a provided buffer.
+//
+// This is also a good point to write about the "TLS overhead."
+
 namespace second_transfer {
 
-// Just because of the conversions, but it may be a handy place for 
+// Just because of the conversions, but it may be a handy place for
 // other stuff later.
 void output_dn_cb (void* botan_pad_ref, const unsigned char a[], size_t sz)
 {
