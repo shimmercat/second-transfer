@@ -14,6 +14,9 @@ module SecondTransfer.Http1.Parse(
     ,serializeHTTPResponse
     ,methodHasRequestBody
     ,methodHasResponseBody
+    ,chunkParser
+    ,transferEncodingIsChunked
+    ,wrapChunk
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
@@ -22,11 +25,13 @@ module SecondTransfer.Http1.Parse(
 
 
 
-import           Control.Exception                      (throw)
+--import           Control.Exception                      (throw)
 -- import           Control.Lens
 import qualified Control.Lens                           as L
 import           Control.Applicative
 --import           Control.DeepSeq                        (deepseq)
+
+import           Numeric                                as Nm
 
 import qualified Data.ByteString                        as B
 import           Data.List                              (foldl')
@@ -38,6 +43,7 @@ import           Data.Char                              (toLower)
 import           Data.Maybe                             (isJust, fromMaybe)
 
 import qualified Data.Attoparsec.ByteString             as Ap
+import qualified Data.Attoparsec.ByteString.Char8       as Ap8
 
 import           Data.Foldable                          (find)
 import           Data.Word                              (Word8)
@@ -48,7 +54,7 @@ import qualified Network.URI                            as U
 
 import qualified SecondTransfer.Utils.HTTPHeaders       as E
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
-import           SecondTransfer.Exception
+--import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 import qualified SecondTransfer.ConstantsAndLimits      as Constant
@@ -102,11 +108,11 @@ data Http1ParserCompletion =
 --  header, in those cases there is a long chain of conditions to determine the
 --  message length, and at the end of those, there is CloseConnection
 --
---  TODO: Support "chunked" transfer encoding for classical
---  HTTP/1.1, uploads will need it.
 data BodyStopCondition =
-     UseBodyLength_BSC Int
-   | ConnectionClosedByPeer_BSC
+     UseBodyLength_BSC Int          -- ^ There is a content-length header, and a length
+   | ConnectionClosedByPeer_BSC     -- ^ We expect the connection to be closed by the peer when the stream finishes
+   | Chunked_BSC                    -- ^ It's a chunked transfer, use the corresponding parser
+   | SemanticAbort_BSC              -- ^ Terrible things have happened, close the connection
      deriving (Show, Eq)
 
 
@@ -228,6 +234,8 @@ elaborateHeaders full_text crlf_positions last_headers_position =
           let
             -- No lowercase, methods are case sensitive
             -- lc_method = bsToLower method
+            --
+            -- TODO: There is a bug here, according to Section 3.3 of RFC 7230
             has_body' = methodHasRequestBody method
           in
             -- TODO:  We should probably add the "scheme" pseudo header here
@@ -252,11 +260,22 @@ elaborateHeaders full_text crlf_positions last_headers_position =
     content_stop =
       let
         cnt_length_header = find (\ x -> (fst x) == "content-length" )  headers_3
-      in case cnt_length_header of
-        Just (_, hv) -> case readEither . unpack $ hv of
-           Left _ -> throw ContentLengthMissingException
-           Right n -> UseBodyLength_BSC n
-        Nothing -> ConnectionClosedByPeer_BSC
+        transfer_encoding = find (\ x -> (fst x) == "transfer-encoding" ) headers_3
+      in
+        case transfer_encoding of
+            Nothing ->
+              case cnt_length_header of
+                  Just (_, hv) -> case readEither . unpack $ hv of
+                     Left _ -> SemanticAbort_BSC
+                     Right n -> UseBodyLength_BSC n
+                  Nothing -> ConnectionClosedByPeer_BSC
+
+            Just (_, tre_value)
+              | transferEncodingIsChunked tre_value ->
+                  Chunked_BSC
+              | otherwise ->
+                  SemanticAbort_BSC
+
 
     leftovers = B.drop (last_headers_position + 4) full_headers_text
     all_headers_ok = all verifyHeaderSyntax headers_1
@@ -278,6 +297,9 @@ splitByColon :: B.ByteString -> (B.ByteString, B.ByteString)
 splitByColon  = L.over L._2 (B.tail) . Ch8.break (== ':')
 
 
+transferEncodingIsChunked :: B.ByteString -> Bool
+transferEncodingIsChunked x = x == "chunked"
+
 verifyHeaderName :: B.ByteString -> Bool
 verifyHeaderName =
   B.all ( \ w8 ->
@@ -287,10 +309,12 @@ verifyHeaderName =
        || ( w8 == 45)  -- Standard dash
   )
 
+
 verifyHeaderValue :: B.ByteString -> Bool
 verifyHeaderValue =   B.all ( \ w8 ->
    w8 >= 32 && w8 < 127
   )
+
 
 verifyHeaderSyntax :: (B.ByteString, B.ByteString) -> Bool
 verifyHeaderSyntax (a,b) = verifyHeaderName a && verifyHeaderValue b
@@ -332,6 +356,7 @@ stripBs s =
 stripBsHName :: B.ByteString -> B.ByteString
 stripBsHName s =
    Ch8.dropWhile isWsCh8 s
+
 
 locateCRLFs :: Int -> [Int] -> Word8 ->  B.ByteString ->  ([Int], Int, Word8)
 locateCRLFs initial_offset other_positions prev_last_char next_chunk =
@@ -430,6 +455,31 @@ responseLine =
 
 httpFirstLine :: Ap.Parser RequestOrResponseLine
 httpFirstLine = requestLine <|> responseLine
+
+-- A parser for chunked  messages ....
+chunkParser :: Ap.Parser B.ByteString
+chunkParser = do
+    lng_bs <- Ap8.hexadecimal :: Ap.Parser Int
+    Ap.option () (
+      do
+        _ <- Ap.sepBy (Ap8.many1 $ Ap8.satisfy (Ap8.notInClass ";\r\n") ) (Ap8.char ';')
+        return ()
+        )
+    _ <- Ap8.char '\r'
+    _ <- Ap8.char '\n'
+    cnt <- Ap.take lng_bs
+    _ <- Ap8.char '\r'
+    _ <- Ap8.char '\n'
+    return cnt
+
+
+wrapChunk :: B.ByteString -> Lb.ByteString
+wrapChunk bs = let
+    lng = B.length bs
+    lng_str = showHex lng ""
+    a0 = Bu.byteString . pack $ lng_str
+    a1 = Bu.byteString bs
+    in Bu.toLazyByteString $ a0 `mappend` "\r\n" `mappend` a1 `mappend` "\r\n"
 
 
 -- This is a serialization function: it goes from content to string

@@ -12,12 +12,14 @@ import           Control.Monad.IO.Class                  (liftIO)
 import           Control.Monad                           (when)
 
 import qualified Data.ByteString                         as B
--- import qualified Data.ByteString.Lazy                   as LB
--- import           Data.ByteString.Char8                  (unpack)
--- import qualified Data.ByteString.Builder                as Bu
+import qualified Data.ByteString.Lazy                   as LB
+import           Data.ByteString.Char8                  (unpack)
+import qualified Data.ByteString.Builder                as Bu
+import           Data.Foldable                           (find)
 import           Data.Conduit
-import           Data.Conduit.List                       (consume)
+import qualified Data.Conduit.List                       as CL
 import           Data.IORef
+import qualified Data.Attoparsec.ByteString              as Ap
 -- import           Data.Monoid                            (mconcat, mappend)
 
 import           SecondTransfer.MainLoop.CoherentWorker
@@ -122,24 +124,12 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                           _anouncedProtocols_Pr = Nothing
                         }
                     }
-                let
-                    data_and_conclusion = principal_stream ^. dataAndConclusion_PS
-                    response_headers    = principal_stream ^. headers_PS
-                (_, fragments) <- runConduit $ fuseBoth data_and_conclusion consume
-                let
-                    response_text =
-                        serializeHTTPResponse response_headers fragments
+                answer_by_principal_stream principal_stream leftovers
 
-                catch
-                    (do
-                        push_action response_text
-                        return $ Just leftovers
-                    )
-                    ((\ _e -> do
-                        -- debugM "Session.HTTP1" "Session abandoned"
-                        close_action
-                        return Nothing
-                    ) :: IOProblem -> IO (Maybe B.ByteString) )
+            -- We close the connection of any of the delimiting headers could not be parsed.
+            HeadersAndBody_H1PC _headers SemanticAbort_BSC _recv_leftovers -> do
+                close_action
+                return Nothing
 
             HeadersAndBody_H1PC headers stopcondition recv_leftovers -> do
                 -- putStrLn $ "HeadersAndBody_H1PC " ++ (show recv_leftovers)
@@ -147,10 +137,14 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                     modified_headers = addExtraHeaders sessions_context headers
                 started_time <- getTime Monotonic
                 set_leftovers <- newIORef ""
+
                 let
+                    source :: Source IO B.ByteString
                     source = case stopcondition of
                         UseBodyLength_BSC n -> counting_read recv_leftovers n set_leftovers
                         ConnectionClosedByPeer_BSC -> readforever recv_leftovers
+                        Chunked_BSC -> readchunks recv_leftovers
+                        _ -> error "ImplementMe"
 
                 principal_stream <- coherent_worker Request {
                         _headers_RQ = modified_headers,
@@ -163,25 +157,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                           _anouncedProtocols_Pr = Nothing
                         }
                     }
-                let
-                    data_and_conclusion = principal_stream ^. dataAndConclusion_PS
-                    response_headers    = principal_stream ^. headers_PS
-                (_, fragments) <- runConduit $ fuseBoth data_and_conclusion consume
-                channel_leftovers <- readIORef set_leftovers
-                let
-                    response_text =
-                        serializeHTTPResponse response_headers fragments
-
-                catch
-                    (do
-                        push_action response_text
-                        return $ Just channel_leftovers
-                    )
-                    ((\ _e -> do
-                        -- debugM "Session.HTTP1" "Session abandoned"
-                        close_action
-                        return Nothing
-                    ) :: IOProblem -> IO (Maybe B.ByteString) )
+                answer_by_principal_stream principal_stream recv_leftovers
 
     counting_read :: B.ByteString -> Int -> IORef B.ByteString -> Source IO B.ByteString
     counting_read leftovers n set_leftovers = do
@@ -225,6 +201,142 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                     when (B.length bs > 0) $ yield bs
                     readforever mempty
 
+    readchunks :: B.ByteString -> Source IO B.ByteString
+    readchunks leftovers = do
+        let
+            gorc :: B.ByteString -> (B.ByteString -> Ap.IResult B.ByteString B.ByteString ) -> Source IO B.ByteString
+            gorc lo f = case f lo of
+                Ap.Fail _ _ _ ->
+                  return ()
+                Ap.Partial continuation ->
+                  do
+                    more_text_or_error <- liftIO . try $ best_effort_pull_action True
+                    case more_text_or_error :: Either NoMoreDataException B.ByteString of
+                        Left _ -> return ()
+                        Right bs
+                          | B.length bs > 0 -> gorc bs continuation
+                          | otherwise -> return ()
+                Ap.Done i piece ->
+                  do
+                    if B.length piece > 0
+                       then do
+                           yield piece
+                           gorc i (Ap.parse chunkParser)
+                       else
+                           return ()
+        gorc leftovers (Ap.parse chunkParser)
+
+    piecewiseconsume :: Sink LB.ByteString IO Bool
+    piecewiseconsume = do
+        maybe_text <- await
+        case maybe_text of
+            Just txt -> do
+                can_continue <- liftIO $ catch
+                    (do
+                        push_action txt
+                        return True
+                    )
+                    ((\ _e -> do
+                        -- debugM "Session.HTTP1" "Session abandoned"
+                        close_action
+                        return False
+                    ) :: IOProblem -> IO Bool )
+                if can_continue
+                  then
+                    piecewiseconsume
+                  else
+                    return False
+
+            Nothing -> return True
+
+    piecewiseconsumecounting :: Int -> Sink LB.ByteString IO Bool
+    piecewiseconsumecounting n
+      | n > 0 = do
+        maybe_text <- await
+        case maybe_text of
+            Just txt -> do
+                let
+                    send_txt = LB.take (fromIntegral n) txt
+                can_continue <- liftIO $ catch
+                    (do
+                        push_action send_txt
+                        return True
+                    )
+                    ((\ _e -> do
+                        -- debugM "Session.HTTP1" "Session abandoned"
+                        close_action
+                        return False
+                    ) :: IOProblem -> IO Bool )
+                if can_continue
+                  then
+                    piecewiseconsumecounting ( n - fromIntegral (LB.length send_txt))
+                  else
+                    return False
+
+            Nothing -> return True
+      | otherwise =
+            return True
+
+
+    answer_by_principal_stream principal_stream leftovers = do
+        let
+            data_and_conclusion = principal_stream ^. dataAndConclusion_PS
+            response_headers    = principal_stream ^. headers_PS
+            transfer_encoding = find (\ x -> (fst x) == "transfer-encoding" ) response_headers
+            cnt_length_header = find (\ x -> (fst x) == "content-length" )    response_headers
+            headers_text_as_lbs = Bu.toLazyByteString $ headerListToHTTP1ResponseText response_headers  `mappend` "\r\n"
+
+        push_action headers_text_as_lbs
+
+        case (transfer_encoding, cnt_length_header) of
+
+            (Just (_, enc), _ )
+              | transferEncodingIsChunked enc -> do
+                  -- TODO: Take care of footers
+                  (_maybe_footers, did_ok) <- runConduit  $ data_and_conclusion `fuseBothMaybe` (CL.map wrapChunk =$= piecewiseconsume)
+                  if did_ok
+                    then
+                      return $ Just leftovers
+                    else do
+                      close_action
+                      return Nothing
+
+              | otherwise -> do
+                -- This is a pretty bad condition, I don't know how to use
+                -- any other encoding...
+                  putStrLn "ISawTransferEncodingICouldntHandle/ClosingConnection"
+                  close_action
+                  return Nothing
+
+            (Nothing, (Just (_,content_length_str))) -> do
+                -- Use the provided chunks, as naturally as possible
+                let
+                    content_length :: Int
+                    content_length = read . unpack $ content_length_str
+                (_maybe_footers, did_ok) <- runConduit $ data_and_conclusion `fuseBothMaybe` (CL.map LB.fromStrict =$= piecewiseconsumecounting content_length)
+                if did_ok
+                  then
+                    return $ Just leftovers
+                  else do
+                    close_action
+                    return Nothing
+
+            (Nothing, Nothing) -> do
+                (_, fragments) <- runConduit $ fuseBoth data_and_conclusion CL.consume
+                let
+                    response_text =
+                        serializeHTTPResponse response_headers fragments
+
+                catch
+                    (do
+                        push_action response_text
+                        return $ Just leftovers
+                    )
+                    ((\ _e -> do
+                        -- debugM "Session.HTTP1" "Session abandoned"
+                        close_action
+                        return Nothing
+                    ) :: IOProblem -> IO (Maybe B.ByteString) )
 
 addExtraHeaders :: SessionsContext -> Headers -> Headers
 addExtraHeaders sessions_context headers =
