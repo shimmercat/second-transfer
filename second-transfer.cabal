@@ -84,6 +84,13 @@ library
                   , SecondTransfer.Socks5.Types
                   , SecondTransfer.Socks5.Session
 
+                  , SecondTransfer.Sessions
+                  , SecondTransfer.Sessions.Config
+
+                  , SecondTransfer.Http1.Parse
+                  , SecondTransfer.Http1.Types
+                  , SecondTransfer.Http1.Proxy
+
                   -- These ones should probably go in their own package
                   , SecondTransfer.IOCallbacks.Types
                   , SecondTransfer.IOCallbacks.SocketServer
@@ -103,12 +110,6 @@ library
                   , SecondTransfer.MainLoop.Logging
                   , SecondTransfer.MainLoop.DebugMonitor
 
-                  , SecondTransfer.Sessions
-                  , SecondTransfer.Sessions.Config
-
-                  , SecondTransfer.Http1.Parse
-                  , SecondTransfer.Http1.Types
-                  , SecondTransfer.Http1.Proxy
 
                   -- TODO: Most of these should be moved back to "other-modules"
                   , SecondTransfer.TLS.Botan
@@ -241,19 +242,6 @@ library
   -- include-dirs above.
 
   include-dirs: macros/
-
-
-  -- Test-Suite compiling-ok
-  --   type            : exitcode-stdio-1.0
-  --   main-is         : compiling_ok.hs
-  --   hs-source-dirs  : tests/tests-hs-src/
-  --   default-language: Haskell2010
-  --   build-depends   : base >=4.7 && <= 4.9
-  --                     , second-transfer
-  --                     , conduit >= 1.2.4
-  --   ghc-options     : -threaded
-
-
 
 -- These are just some tests for the engine, there should
 -- be more as an independent python test suite, checking

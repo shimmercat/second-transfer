@@ -89,29 +89,15 @@ anyWordN = anyWordN' undefined
   where anyWordN' :: (FiniteBits a) => a -> (B.ByteString -> a) -> P.Parser a
         anyWordN' d = flip fmap $ P.take $ byteSize d
 
--- |Match any 16-bit big-endian word.
+-- | Match any 16 bit big endian word.
 anyWord16be :: P.Parser Word16
 anyWord16be = anyWordN pack
 
--- -- |Match any 16-bit little-endian word.
--- anyWord16le :: P.Parser Word16
--- anyWord16le = anyWordN $ pack . B.reverse
 
- -- |Match any 32-bit big-endian word.
+-- | Match any 32 bit big endian word.
 anyWord32be :: P.Parser Word32
 anyWord32be = anyWordN pack
 
--- -- |Match any 32-bit little-endian word.
--- anyWord32le :: P.Parser Word32
--- anyWord32le = anyWordN $ pack . B.reverse
-
--- -- |Match any 64-bit big-endian word.
--- anyWord64be :: P.Parser Word64
--- anyWord64be = anyWordN pack
-
--- -- |Match any 64-bit little-endian word.
--- anyWord64le :: P.Parser Word64
--- anyWord64le = anyWordN $ pack . B.reverse
 
 unpack :: (FiniteBits a, Integral a) => a -> B.ByteString
 unpack x = B.pack $ map f $ reverse [0..byteSize x - 1]
@@ -123,23 +109,3 @@ wordN u w = P.string (u w) >> return w
  -- |Match a specific 16-bit big-endian word.
 word16be :: Word16 -> P.Parser Word16
 word16be = wordN unpack
-
--- -- |Match a specific 16-bit little-endian word.
--- word16le :: Word16 -> P.Parser Word16
--- word16le = wordN $ B.reverse . unpack
-
--- -- |Match a specific 32-bit big-endian word.
--- word32be :: Word32 -> P.Parser Word32
--- word32be = wordN unpack
-
--- -- |Match a specific 32-bit little-endian word.
--- word32le :: Word32 -> P.Parser Word32
--- word32le = wordN $ B.reverse . unpack
-
--- -- |Match a specific 64-bit big-endian word.
--- word64be :: Word64 -> P.Parser Word64
--- word64be = wordN unpack
-
--- -- |Match a specific 64-bit little-endian word.
--- word64le :: Word64 -> P.Parser Word64
--- word64le = wordN $ B.reverse . unpack
