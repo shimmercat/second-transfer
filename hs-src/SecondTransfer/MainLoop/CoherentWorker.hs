@@ -165,9 +165,6 @@ type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
 data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway /after/ this stream finishes delivery
                        |InterruptConnectionNow_IEf    -- ^ Close and send GoAway /without/ delivering this stream.  This implies that
                                                       --   other fields of the PrincipalStream record will be ignored.
-                       |CloseOnHttp1_IEf              -- ^ Close the connection if it is an HTTP/1.1 connection. This is for achieving
-                                                      --   a cheap form of streaming without actually used chunked transfer encoding.
-                    -- |InterruptThisStream_IEf       -- ^ Just reset this stream, disabled for now.
 
 
 -- | Sometimes a response needs to be handled a bit specially,

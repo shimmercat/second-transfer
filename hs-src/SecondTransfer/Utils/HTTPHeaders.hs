@@ -32,6 +32,7 @@ module SecondTransfer.Utils.HTTPHeaders (
     ,introduceDateHeader
     ,headerIsPseudo
     ,combineAuthorityAndHost
+    ,removeConnectionHeaders
     ) where
 
 import qualified Control.Lens                           as L
@@ -359,3 +360,14 @@ introduceDateHeader header_editor = do
             formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" current_time
         new_editor = L.set date_header_lens formatted_date header_editor
     return new_editor
+
+
+-- | Remove connection-specific headers as required by HTTP/2
+removeConnectionHeaders :: Headers -> Headers
+removeConnectionHeaders headers =
+    filter (\(h,_v) ->
+               (h /= "keep-alive") &&
+               (h /= "proxy-connection") &&
+               (h /= "transfer-encoding") &&
+               (h /= "upgrade")
+           ) headers

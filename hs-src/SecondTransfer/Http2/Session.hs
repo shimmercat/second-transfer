@@ -738,7 +738,7 @@ sessionInputThread  = do
             handleSettingsFrame settings_list
             continue
 
-        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ err _ ))
+        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
                 -- liftIO $ putStrLn $ "cc5 "  ++ show err
@@ -1406,7 +1406,7 @@ normallyHandleStream principal_stream = do
 
     -- Pieces of the header
     let
-       headers              = principal_stream ^. headers_PS
+       headers              = He.removeConnectionHeaders $ principal_stream ^. headers_PS
        data_and_conclusion  = principal_stream ^. dataAndConclusion_PS
        effects              = principal_stream ^. effect_PS
        pushed_streams       = principal_stream ^. pushedStreams_PS
@@ -1427,6 +1427,8 @@ normallyHandleStream principal_stream = do
             -- it before sending the actual response headers of this stream
             let
                 request_headers            = pushed_stream ^. requestHeaders_Psh
+                -- We do not expect connection headers in pushed streams, since they
+                -- are HTTP/2-specific.
                 response_headers           = pushed_stream ^. responseHeaders_Psh
                 pushed_data_and_conclusion = pushed_stream ^. dataAndConclusion_Psh
 
