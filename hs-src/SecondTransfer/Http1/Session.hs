@@ -226,21 +226,24 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                            return ()
         gorc leftovers (Ap.parse chunkParser)
 
+    maybepushtext :: LB.ByteString -> IO Bool
+    maybepushtext txt =  catch
+        (do
+            push_action txt
+            return True
+        )
+        ((\ _e -> do
+            -- debugM "Session.HTTP1" "Session abandoned"
+            close_action
+            return False
+        ) :: IOProblem -> IO Bool )
+
     piecewiseconsume :: Sink LB.ByteString IO Bool
     piecewiseconsume = do
         maybe_text <- await
         case maybe_text of
             Just txt -> do
-                can_continue <- liftIO $ catch
-                    (do
-                        push_action txt
-                        return True
-                    )
-                    ((\ _e -> do
-                        -- debugM "Session.HTTP1" "Session abandoned"
-                        close_action
-                        return False
-                    ) :: IOProblem -> IO Bool )
+                can_continue <- liftIO $ maybepushtext txt
                 if can_continue
                   then
                     piecewiseconsume
@@ -257,16 +260,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
             Just txt -> do
                 let
                     send_txt = LB.take (fromIntegral n) txt
-                can_continue <- liftIO $ catch
-                    (do
-                        push_action send_txt
-                        return True
-                    )
-                    ((\ _e -> do
-                        -- debugM "Session.HTTP1" "Session abandoned"
-                        close_action
-                        return False
-                    ) :: IOProblem -> IO Bool )
+                can_continue <- liftIO $ maybepushtext send_txt
                 if can_continue
                   then
                     piecewiseconsumecounting ( n - fromIntegral (LB.length send_txt))
@@ -295,8 +289,14 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                   -- TODO: Take care of footers
                   (_maybe_footers, did_ok) <- runConduit  $ data_and_conclusion `fuseBothMaybe` (CL.map wrapChunk =$= piecewiseconsume)
                   if did_ok
-                    then
-                      return $ Just leftovers
+                    then do
+                      -- Don't forget the zero-length terminating chunk...
+                      didok' <- maybepushtext $ wrapChunk ""
+                      if didok'
+                        then
+                          return $ Just leftovers
+                        else
+                          return Nothing
                     else do
                       close_action
                       return Nothing
