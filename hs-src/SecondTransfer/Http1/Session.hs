@@ -13,7 +13,7 @@ import           Control.Monad                           (when)
 
 import qualified Data.ByteString                         as B
 import qualified Data.ByteString.Lazy                   as LB
-import           Data.ByteString.Char8                  (unpack)
+import           Data.ByteString.Char8                  (unpack, pack)
 import qualified Data.ByteString.Builder                as Bu
 import           Data.Foldable                           (find)
 import           Data.Conduit
@@ -262,8 +262,10 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                     send_txt = LB.take (fromIntegral n) txt
                 can_continue <- liftIO $ maybepushtext send_txt
                 if can_continue
-                  then
-                    piecewiseconsumecounting ( n - fromIntegral (LB.length send_txt))
+                  then do
+                    let
+                        left_to_take = ( n - fromIntegral (LB.length send_txt))
+                    piecewiseconsumecounting left_to_take
                   else
                     return False
 
@@ -280,13 +282,12 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
             cnt_length_header = find (\ x -> (fst x) == "content-length" )    response_headers
             headers_text_as_lbs = Bu.toLazyByteString $ headerListToHTTP1ResponseText response_headers  `mappend` "\r\n"
 
-        push_action headers_text_as_lbs
-
         case (transfer_encoding, cnt_length_header) of
 
             (Just (_, enc), _ )
               | transferEncodingIsChunked enc -> do
                   -- TODO: Take care of footers
+                  push_action headers_text_as_lbs
                   (_maybe_footers, did_ok) <- runConduit  $ data_and_conclusion `fuseBothMaybe` (CL.map wrapChunk =$= piecewiseconsume)
                   if did_ok
                     then do
@@ -313,6 +314,7 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                 let
                     content_length :: Int
                     content_length = read . unpack $ content_length_str
+                push_action headers_text_as_lbs
                 (_maybe_footers, did_ok) <- runConduit $ data_and_conclusion `fuseBothMaybe` (CL.map LB.fromStrict =$= piecewiseconsumecounting content_length)
                 if did_ok
                   then
@@ -325,7 +327,17 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                 (_, fragments) <- runConduit $ fuseBoth data_and_conclusion CL.consume
                 let
                     response_text =
-                        serializeHTTPResponse response_headers fragments
+                        Bu.toLazyByteString . mconcat . map Bu.byteString $ fragments
+                    content_length_str = pack . show . LB.length $ response_text
+                    h2 = He.fromList response_headers
+                    h3 =
+                        (set $ He.headerLens "content-length" )
+                        (Just content_length_str)
+                        h2
+                    h4 = He.toList h3
+                    headers_text_as_lbs' = Bu.toLazyByteString $ headerListToHTTP1ResponseText h4  `mappend` "\r\n"
+
+                push_action headers_text_as_lbs'
 
                 catch
                     (do
