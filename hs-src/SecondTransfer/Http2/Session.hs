@@ -733,9 +733,25 @@ sessionInputThread  = do
 
             continue
 
-        MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame _)) | isSettingsAck frame_header -> do
+        MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame settings_list))
+          | frameLength frame_header `mod` 6 /= 0 -> do
+            closeConnectionBecauseIsInvalid NH2.FrameSizeError
+            return ()
+
+          | isSettingsAck frame_header && isStreamZero frame_header && isLengthZero frame_header  -> do
             -- Frame was received by the peer, do nothing here...
             continue
+
+
+          | not (isSettingsAck frame_header) && isStreamZero frame_header -> do
+            handleSettingsFrame settings_list
+            continue
+
+
+          | otherwise  -> do
+            -- Frame was received by the peer, do nothing here...
+            closeConnectionBecauseIsInvalid NH2.ProtocolError
+            return ()
 
         -- TODO: Do something with these settings!!
         MiddleFrame_SIC (NH2.Frame _ (NH2.SettingsFrame settings_list))  -> do
@@ -1376,6 +1392,16 @@ postDataSourceFromMechanism (PostInputMechanism (_, source)) = source
 isSettingsAck :: NH2.FrameHeader -> Bool
 isSettingsAck (NH2.FrameHeader _ flags _) =
     NH2.testAck flags
+
+
+isLengthZero :: NH2.FrameHeader -> Bool
+isLengthZero (NH2.FrameHeader l _ _ ) = l == 0
+
+frameLength :: NH2.FrameHeader -> Int
+frameLength (NH2.FrameHeader l _ _ ) = l
+
+isStreamZero :: NH2.FrameHeader -> Bool
+isStreamZero (NH2.FrameHeader _  _ s) = s == 0
 
 
 isStreamCancelled :: GlobalStreamId  -> WorkerMonad Bool
