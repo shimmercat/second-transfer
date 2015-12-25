@@ -217,7 +217,8 @@ extern "C" int iocba_receive_data(
     Botan::TLS::Channel* channel = (Botan::TLS::Channel*) tls_channel;
     try {
         //printf("Before taking data=%p \n", channel);
-        channel->received_data( (const unsigned char*) data, length);
+        size_t more_data_required = channel->received_data( (const unsigned char*) data, length);
+        //printf("More data required %d \n", more_data_required);
         //printf("After taking data=%p \n", channel);
     } catch (std::exception const& e)
     {

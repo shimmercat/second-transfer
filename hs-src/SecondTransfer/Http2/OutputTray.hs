@@ -29,6 +29,14 @@ import qualified Data.Vector.Algorithms.Merge                as Dam
 import qualified Data.ByteString.Lazy                        as LB
 
 
+-- | The output tray.... all data is sorted according to the priority
+--   assigned here ....
+--
+--
+--   Priorities:  0 for data frames
+--               -1 for header and other HTTP/2 low level
+--               -2 for go-away frame. The deliverer is expected to close
+--                  the connection inmmediately after.
 data TrayEntry = TrayEntry {
     _systemPriority_TyE           :: !Int
   , _streamPriority_TyE           :: !Int

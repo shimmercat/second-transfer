@@ -631,25 +631,31 @@ sessionInputThread  = do
         -- on it.
         MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
-            liftIO $ do
-                -- putStrLn $ "StreamReset " ++ show (_error_code_id)
-                cancelled_streams <- takeMVar cancelled_streams_mvar
-                putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
-            closePostDataSource stream_id
-            liftIO $ do
-                maybe_thread_id <- H.lookup stream2workerthread stream_id
-                case maybe_thread_id  of
-                    Nothing ->
-                        -- This is can actually happen in some implementations: we are asked to
-                        -- cancel an stream we know nothing about.
-                        return ()
+            is_iddle <- streamIsIdle stream_id
+            if ( stream_id == 0 || is_iddle )
+              then do
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
+                return ()
+              else do
+                liftIO $ do
+                    -- putStrLn $ "StreamReset " ++ show (_error_code_id)
+                    cancelled_streams <- takeMVar cancelled_streams_mvar
+                    putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
+                closePostDataSource stream_id
+                liftIO $ do
+                    maybe_thread_id <- H.lookup stream2workerthread stream_id
+                    case maybe_thread_id  of
+                        Nothing ->
+                            -- This is can actually happen in some implementations: we are asked to
+                            -- cancel an stream we know nothing about.
+                            return ()
 
-                    Just thread_id -> do
-                        -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
-                        throwTo thread_id StreamCancelledException
-                        H.delete stream2workerthread stream_id
+                        Just thread_id -> do
+                            -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
+                            throwTo thread_id StreamCancelledException
+                            H.delete stream2workerthread stream_id
 
-            continue
+                continue
 
         MiddleFrame_SIC frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes))
           -> unlessReceivingHeaders $ do
@@ -741,8 +747,8 @@ sessionInputThread  = do
         MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
-                -- liftIO $ putStrLn $ "cc5 "  ++ show err
-                closeConnectionBecauseIsInvalid NH2.NoError
+                liftIO $ putStrLn $ "quietly close conn"
+                quietlyCloseConnection NH2.NoError
                 return ()
 
             | Client_SR <- session_role -> do
@@ -751,9 +757,17 @@ sessionInputThread  = do
                 _ <- closeConnectionForClient NH2.NoError
                 return ()
 
+        MiddleFrame_SIC (NH2.Frame  (NH2.FrameHeader _ _ nh2_stream_id) (NH2.PriorityFrame NH2.Priority {NH2.exclusive=_e, NH2.streamDependency=dep_id, NH2.weight=_w}  ) )
+            | nh2_stream_id == dep_id -> do
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
+                return ()
+
+            | otherwise ->
+                continue
+
         MiddleFrame_SIC _somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
-            -- liftIO $ putStrLn "cc6"
+            liftIO $ putStrLn $ "Unhandled " ++ show _somethingelse
             continue
 
   where
@@ -802,6 +816,15 @@ sessionInputThread  = do
                 Nothing
             )
             (NH2.SettingsFrame [])
+
+
+
+streamIsIdle :: GlobalStreamId -> ReaderT SessionData IO Bool
+streamIsIdle stream_id =
+  do
+    last_good_stream_mvar <- view lastGoodStream
+    last_good_stream <- liftIO . readMVar $ last_good_stream_mvar
+    return ( stream_id > last_good_stream )
 
 
 serverProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
@@ -1192,6 +1215,34 @@ closeConnectionBecauseIsInvalid error_code = do
 
     -- It never gets here
     return ()
+
+-- Sends a GO_AWAY frame and closes everything, without being too drastic
+quietlyCloseConnection :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
+quietlyCloseConnection error_code = do
+    -- liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
+    last_good_stream_mvar <- view lastGoodStream
+    last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
+    session_output_mvar <- view sessionOutput
+    stream2workerthread <- view stream2WorkerThread
+
+    _ <- liftIO $ do
+        -- Close all active threads for this session
+        H.mapM_
+            ( \(_stream_id, thread_id) ->
+                    throwTo thread_id StreamCancelledException
+            )
+            stream2workerthread
+
+        -- Notify the framer that the session is closing, so
+        -- that it stops accepting frames from connected sources
+        -- (Streams?)
+        session_output <- takeMVar session_output_mvar
+        writeChan session_output $ TT.Command_StFB (TT.SpecificTerminate_SOC last_good_stream error_code)
+        putMVar session_output_mvar session_output
+
+    -- It never gets here
+    return ()
+
 
 -- Sends a GO_AWAY frame and raises an exception, effectively terminating the input
 -- thread of the session. This one for the client is different because it throws

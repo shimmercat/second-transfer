@@ -129,16 +129,23 @@ iocba_push siocb p len =
                 return ()
 
 
+-- | Callback invoked by Botan with clear text data just decoded from the stream
 foreign export ccall iocba_data_cb :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
 iocba_data_cb siocb p len = withBotanPad siocb $ \ botan_pad -> do
     let
         cstr = (p, fromIntegral len)
         avail_data = botan_pad ^. availableData_BP
     b <- B.packCStringLen cstr
-    atomicModifyIORef' avail_data $ \ previous -> ( previous `mappend` (Bu.byteString b), ())
-    --putStrLn "Got data"
-    tryPutMVar (botan_pad ^. dataCame_BP) ()
-    return ()
+    if B.length b > 0
+      then do
+          atomicModifyIORef' avail_data $ \ previous -> ( previous `mappend` (Bu.byteString b), ())
+          --putStrLn "Got data"
+          _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
+          return ()
+      else do
+          -- Shouldn't ever happen
+          putStrLn "EmptyStringGot"
+          return ()
 
 
 -- TODO: Should we raise some sort of exception here? Maybe call the "closeAction"
@@ -251,11 +258,16 @@ pullAvailableData botan_pad can_wait = do
                     pullAvailableData botan_pad True
 
                 Just () -> do
-                    --putStrLn "ProblemTranslated"
+                    -- avail_data' <- atomicModifyIORef' avail_data_iorref $ \ bu -> (mempty, bu)
+                    -- putStrLn "ProblemTranslated -- Botan"
+                    -- putStrLn $ "(stuck: " ++ (show .  LB.length . Bu.toLazyByteString $ avail_data' ) ++ ")"
                     E.throwIO NoMoreDataException
 
-        (_, _) ->
-            return . LB.toStrict $ avail_data_lb
+        (_, _) -> do
+            let
+                result = LB.toStrict  avail_data_lb
+            -- putStrLn $ "BotanPassingUp #bytes = " ++ (show $ B.length result )
+            return result
 
 
 foreign import ccall iocba_new_tls_server_channel ::
@@ -356,7 +368,7 @@ unencryptChannelData botan_ctx tls_data  = do
                                     return False
                                   else
                                     return True
-                            Just _ ->
+                            Just _ -> do
                                 return False
                     if can_continue
                       then do
@@ -365,7 +377,6 @@ unencryptChannelData botan_ctx tls_data  = do
                         return ()
                   | otherwise -> do
                     -- This is actually an error
-                    putStrLn "Pulled zero-length data, ignoring"
                     pump
 
                 Nothing -> do

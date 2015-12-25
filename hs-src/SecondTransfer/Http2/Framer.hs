@@ -332,27 +332,46 @@ finishFlowControlForStream stream_id =
                  liftIO $ H.delete table stream_id
 
 
-readNextFrame :: Monad m =>
-    (Int -> m B.ByteString)                      -- ^ Generator action
-    -> Source m (Maybe NH2.Frame)                -- ^ Packet and leftovers, if we could get them
+readNextFrame ::
+    (Int -> IO B.ByteString)                      -- ^ Generator action
+    -> Source IO (Maybe NH2.Frame)                -- ^ Packet and leftovers, if we could get them
 readNextFrame pull_action  = do
     -- First get 9 bytes with the frame header
-    frame_header_bs <- lift $ pull_action 9
-    -- decode it
-    let
-        (frame_type_id, frame_header) = NH2.decodeFrameHeader frame_header_bs
-        NH2.FrameHeader payload_length _ _ =  frame_header
-    -- Get as many bytes as the payload length identifies
-    payload_bs <- lift $ pull_action payload_length
-    -- Return the entire frame, or raise an exception...
-    let
-        either_frame = NH2.decodeFramePayload frame_type_id frame_header payload_bs
-    case either_frame of
-        Right frame_payload -> do
-            yield . Just $ NH2.Frame frame_header frame_payload
-            readNextFrame pull_action
-        Left  _     ->
-            yield   Nothing
+    either_frame_header_bs <- lift $ E.try $ pull_action 9
+    case either_frame_header_bs :: Either IOProblem B.ByteString of
+
+        Left _ -> do
+            -- liftIO $ putStrLn "CloseCondition"
+            return ()
+
+        Right frame_header_bs -> do
+            -- decode it
+            let
+                (frame_type_id, frame_header) = NH2.decodeFrameHeader frame_header_bs
+                NH2.FrameHeader payload_length _ _ =  frame_header
+            -- Get as many bytes as the payload length identifies
+            -- liftIO . putStrLn $ "Payload length requested " ++ show payload_length
+            either_payload_bs <- lift $ E.try (pull_action payload_length)
+            case either_payload_bs :: Either IOProblem B.ByteString of
+                Left _ -> do
+                    -- liftIO $ putStrLn "TerminatingSession"
+                    return ()
+                Right payload_bs
+                  | B.length payload_bs == 0 && payload_length > 0 -> do
+                    -- liftIO $ putStrLn "TerminatingSessionX"
+                    return ()
+
+                  | otherwise -> do
+                    -- Return the entire frame, or raise an exception...
+                    let
+                        either_frame = NH2.decodeFramePayload frame_type_id frame_header payload_bs
+                    -- liftIO . putStrLn . show $ B.length payload_bs
+                    case either_frame of
+                        Right frame_payload -> do
+                            yield . Just $ NH2.Frame frame_header frame_payload
+                            readNextFrame pull_action
+                        Left  _     ->
+                            yield   Nothing
 
 
 -- This works by pulling bytes from the input side of the pipeline and converting them to frames.
@@ -384,7 +403,6 @@ inputGatherer pull_action session_input = do
     source $$ consume True
   where
 
-
     sendToSession :: Bool -> InputFrame -> IO ()
     sendToSession starting frame =
       -- print(NH2.streamId $ NH2.frameHeader frame)
@@ -409,6 +427,8 @@ inputGatherer pull_action session_input = do
     consume starting = do
         maybe_maybe_frame <- await
 
+        -- liftIO . putStrLn . show  $ maybe_maybe_frame
+
         output_is_forbidden_mvar <- view outputIsForbidden
         output_is_forbidden <- liftIO $ readMVar output_is_forbidden_mvar
 
@@ -416,7 +436,7 @@ inputGatherer pull_action session_input = do
         -- attacks where a peer refuses to close its socket.
         unless output_is_forbidden $ case maybe_maybe_frame of
 
-            Just Nothing      ->
+            Just Nothing      -> do
                 -- Only way to get here is by a closed connection condition I guess.
                 abortSession
 
@@ -691,14 +711,14 @@ sendGoAwayFrame :: NH2.ErrorCodeId -> FramerSession ()
 sendGoAwayFrame error_code = do
     last_stream_id_mvar <- view lastInputStream
     last_stream_id <- liftIO $ readMVar last_stream_id_mvar
-    pushControlFrame
+    pushGoAwayFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
         (NH2.GoAwayFrame last_stream_id error_code "")
 
 
 sendSpecificTerminateGoAway :: GlobalStreamId -> NH2.ErrorCodeId -> FramerSession ()
 sendSpecificTerminateGoAway last_stream error_code =
-    pushControlFrame
+    pushGoAwayFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
         (NH2.GoAwayFrame last_stream error_code "")
 
@@ -804,6 +824,9 @@ withNormalPrioritySend = withPrioritySend_ 0
 withHighPrioritySend :: LB.ByteString -> FramerSession ()
 withHighPrioritySend  datum = withPrioritySend_ (-1) 0 0 0 datum
 
+goAwaySend :: LB.ByteString -> FramerSession ()
+goAwaySend  datum = withPrioritySend_ (-2) 0 0 0 datum
+
 
 serializeMany :: [OutputFrame] -> LB.ByteString
 serializeMany frames =
@@ -816,12 +839,21 @@ pushControlFrame frame_encode_info frame_payload =
     let datum = LB.fromStrict $ NH2.encodeFrame frame_encode_info frame_payload
     withHighPrioritySend datum
 
+-- | Pushes a GoAway frame with the highest priority, so that everything else
+--   will be overrided (except perhaps any header trains that are already being sent.)
+pushGoAwayFrame  :: NH2.EncodeInfo -> NH2.FramePayload -> FramerSession ()
+pushGoAwayFrame frame_encode_info frame_payload =
+  do
+    let datum = LB.fromStrict $ NH2.encodeFrame frame_encode_info frame_payload
+    goAwaySend datum
+
 
 -- In charge of actually sending the  frames, in a special thread (create said thread
 -- in the caller)
 sendReordering :: FramerSession ()
 sendReordering = do
     pss <- view prioritySendState
+    close_action <- view closeAction
     use_size <- view (sessionsContext . sessionsConfig . networkChunkSize)
     -- Get a set of packets (that is, their reprs) to send
     let
@@ -835,13 +867,32 @@ sendReordering = do
                     let
                       (ot2, entries) = splitOverSize use_size ot1
                     return (ot2, Just entries)
+
             case maybe_entries of
                 Just entries -> do
+                    -- The entries vector is already sorted by priority. if the first entry
+                    -- has priority -2, it means that we should only send that one and lcose
+                    -- the connection immediately....
+                    --
+                    -- Also, this code should guarantee that no empty vector is ever seen
+                    -- here (look for the (ot1 ^. filling_OuT) line above)
                     _ <- tryPutMVar (pss ^. spaceReady_PSS) ()
-                    return . Bu.toLazyByteString . mconcat . map (Bu.lazyByteString . ( ^. payload_TyE) ) $  entries
+                    let
+                      first_entry = head entries
+                    if first_entry ^. systemPriority_TyE == ( -2 )
+                      then
+                        return . Left $ first_entry ^. payload_TyE
+                      else
+                        return . Right . Bu.toLazyByteString . mconcat . map (Bu.lazyByteString . ( ^. payload_TyE) ) $  entries
                 Nothing -> do
                     _ <- readMVar (pss ^. dataReady_PSS)
                     get_sendable_data
-    entries_data <- liftIO get_sendable_data
-    sendBytesN entries_data
-    sendReordering
+    either_entries_data <- liftIO get_sendable_data
+    case either_entries_data of
+        Right entries_data -> do
+           sendBytesN entries_data
+           sendReordering
+
+        Left entries_data -> do
+           sendBytesN entries_data
+           liftIO close_action
