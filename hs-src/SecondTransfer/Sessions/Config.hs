@@ -120,7 +120,8 @@ data SessionsConfig = SessionsConfig {
    -- | Session callbacks
    _sessionsCallbacks         :: SessionsCallbacks
  , _sessionsEnrichedHeaders   :: SessionsEnrichedHeaders
-   -- | Size to use when splitting data in data frames
+   -- | Size to use when splitting data in data frames, to be sent.
+   --   TODO: An equivalent maxRecvSize should be defined here...
  , _dataFrameSize             :: Int
    -- | Should we enable PUSH in sessions? Notice that the client
    --   can still disable PUSH at will. Also users of the library

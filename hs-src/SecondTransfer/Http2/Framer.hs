@@ -110,6 +110,10 @@ data FramerSessionData = FramerSessionData {
     -- The default flow-control window advertised by the peer (e.g., the browser)
     , _defaultStreamWindow   :: MVar Int
 
+    -- The max frame size that I'm willing to receive, (including frame header). This size can't be less
+    -- than 16384 nor greater than 16777215. But it is decided here in the server
+    , _maxRecvSize           :: Int
+
     -- Flag that says if the session has been unwound... if such,
     -- threads are adviced to exit as early as possible
     , _outputIsForbidden     :: MVar Bool
@@ -197,11 +201,15 @@ wrapSession session_payload sessions_context io_callbacks = do
     data_ready_mvar           <- newEmptyMVar
     space_ready_mvar          <- newMVar ()
 
+    -- TODO: this one should be comming from the SessionsConfig struct at Sessions/Config.hs
+    let max_recv_frame_size   =  16384
+
     -- We need some shared state
     let framer_session_data = FramerSessionData {
         _stream2flow          = stream2flow_mvar
         ,_stream2outputBytes  = stream2output_bytes_mvar
         ,_defaultStreamWindow = default_stream_size_mvar
+        ,_maxRecvSize         = max_recv_frame_size
         ,_pushAction          = push_action
         ,_closeAction         = close_action
         ,_sessionIdAtFramer   = new_session_id
@@ -333,9 +341,10 @@ finishFlowControlForStream stream_id =
 
 
 readNextFrame ::
-    (Int -> IO B.ByteString)                      -- ^ Generator action
+    Int
+    -> (Int -> IO B.ByteString)                      -- ^ Generator action
     -> Source IO (Maybe NH2.Frame)                -- ^ Packet and leftovers, if we could get them
-readNextFrame pull_action  = do
+readNextFrame max_acceptable_size pull_action  = do
     -- First get 9 bytes with the frame header
     either_frame_header_bs <- lift $ E.try $ pull_action 9
     case either_frame_header_bs :: Either IOProblem B.ByteString of
@@ -349,29 +358,34 @@ readNextFrame pull_action  = do
             let
                 (frame_type_id, frame_header) = NH2.decodeFrameHeader frame_header_bs
                 NH2.FrameHeader payload_length _ _ =  frame_header
-            -- Get as many bytes as the payload length identifies
-            -- liftIO . putStrLn $ "Payload length requested " ++ show payload_length
-            either_payload_bs <- lift $ E.try (pull_action payload_length)
-            case either_payload_bs :: Either IOProblem B.ByteString of
-                Left _ -> do
-                    -- liftIO $ putStrLn "TerminatingSession"
-                    return ()
-                Right payload_bs
-                  | B.length payload_bs == 0 && payload_length > 0 -> do
-                    -- liftIO $ putStrLn "TerminatingSessionX"
-                    return ()
+            if payload_length + 9 > max_acceptable_size
+              then do
+                liftIO $ putStrLn "Frame too big"
+                return ()
+              else do
+                -- Get as many bytes as the payload length identifies
+                -- liftIO . putStrLn $ "Payload length requested " ++ show payload_length
+                either_payload_bs <- lift $ E.try (pull_action payload_length)
+                case either_payload_bs :: Either IOProblem B.ByteString of
+                    Left _ -> do
+                        -- liftIO $ putStrLn "TerminatingSession"
+                        return ()
+                    Right payload_bs
+                      | B.length payload_bs == 0 && payload_length > 0 -> do
+                        -- liftIO $ putStrLn "TerminatingSessionX"
+                        return ()
 
-                  | otherwise -> do
-                    -- Return the entire frame, or raise an exception...
-                    let
-                        either_frame = NH2.decodeFramePayload frame_type_id frame_header payload_bs
-                    -- liftIO . putStrLn . show $ B.length payload_bs
-                    case either_frame of
-                        Right frame_payload -> do
-                            yield . Just $ NH2.Frame frame_header frame_payload
-                            readNextFrame pull_action
-                        Left  _     ->
-                            yield   Nothing
+                      | otherwise -> do
+                        -- Return the entire frame, or raise an exception...
+                        let
+                            either_frame = NH2.decodeFramePayload frame_type_id frame_header payload_bs
+                        -- liftIO . putStrLn . show $ B.length payload_bs
+                        case either_frame of
+                            Right frame_payload -> do
+                                yield . Just $ NH2.Frame frame_header frame_payload
+                                readNextFrame max_acceptable_size pull_action
+                            Left  _     ->
+                                yield   Nothing
 
 
 -- This works by pulling bytes from the input side of the pipeline and converting them to frames.
@@ -387,6 +401,8 @@ inputGatherer pull_action session_input = do
 
     session_role <- view sessionRole_FSD
 
+    max_recv_size <- view maxRecvSize
+
     when (session_role == Server_SR) $ do
         -- We can start by reading off the prefix....
         prefix <- liftIO $ pull_action http2PrefixLength
@@ -399,7 +415,7 @@ inputGatherer pull_action session_input = do
 
     let
         source::Source FramerSession (Maybe NH2.Frame)
-        source = transPipe liftIO $ readNextFrame pull_action
+        source = transPipe liftIO $ readNextFrame max_recv_size  pull_action
     source $$ consume True
   where
 
@@ -437,25 +453,26 @@ inputGatherer pull_action session_input = do
         unless output_is_forbidden $ case maybe_maybe_frame of
 
             Just Nothing      -> do
-                -- Only way to get here is by a closed connection condition I guess.
+                -- Only way to get here is by a closed connection condition, or because some decoding failed
+                -- in a very bad way, or because frame size was exceeded. All of those are error conditions,
+                -- and therefore we should undo the session
                 abortSession
 
             Just (Just right_frame) -> do
                 case right_frame of
 
-                    (NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do
+                    frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do
                         -- Bookkeep the increase on bytes on that stream
                         succeeded <- lift $ addCapacity stream_id (fromIntegral credit)
                         if not succeeded then
-                            abortSession
-                        else
-                            consume_continue
-
+                          abortSession
+                        else do
+                          liftIO $ sendToSession starting $! frame
+                          consume_continue
 
                     frame@(NH2.Frame _ (NH2.SettingsFrame settings_list) ) -> do
                         -- Increase all the stuff....
                         case find (\(i,_) -> i == NH2.SettingsInitialWindowSize) settings_list of
-
                             Just (_, new_default_stream_size) -> do
                                 old_default_stream_size_mvar <- view defaultStreamWindow
                                 old_default_stream_size <- liftIO $ takeMVar old_default_stream_size_mvar
@@ -467,11 +484,8 @@ inputGatherer pull_action session_input = do
                                                  when (k /=0 ) $ writeChan v (AddBytes_FCM $! general_delta)
                                             )
                                             stream_to_flow'
-
-
                                 -- And set a new value
                                 liftIO $ putMVar old_default_stream_size_mvar $! new_default_stream_size
-
 
                             Nothing ->
                                 -- This is a silenced internal error

@@ -551,12 +551,6 @@ sessionInputThread  = do
 
     case input of
 
-        FirstFrame_SIC (NH2.Frame
-            (NH2.FrameHeader _ 1 null_stream_id ) _ )| 0 == null_stream_id  -> do
-            -- This is a SETTINGS ACK frame, which is okej to have,
-            -- do nothing here
-            continue
-
         FirstFrame_SIC
             (NH2.Frame
                 (NH2.FrameHeader _ 0 null_stream_id )
@@ -564,6 +558,12 @@ sessionInputThread  = do
             ) | 0 == null_stream_id  -> do
             -- Good, handle
             handleSettingsFrame settings_list
+            continue
+
+        FirstFrame_SIC (NH2.Frame
+            (NH2.FrameHeader _ 1 null_stream_id )  (NH2.SettingsFrame _ ) ) |  0 == null_stream_id  -> do
+            -- This is a SETTINGS ACK frame, which is okej to have,
+            -- do nothing here
             continue
 
         FirstFrame_SIC _ -> do
@@ -657,8 +657,18 @@ sessionInputThread  = do
 
                 continue
 
-        MiddleFrame_SIC frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes))
-          -> unlessReceivingHeaders $ do
+        MiddleFrame_SIC _frame@(NH2.Frame frame_header (NH2.WindowUpdateFrame _credit) ) -> do
+             -- The Framer is the one using this information, here I just merely inspect the length and destroy
+             -- the session if that length is not good
+             let frame_length = frameLength frame_header
+             if frame_length /= 4
+               then do
+                 closeConnectionBecauseIsInvalid NH2.FrameSizeError
+                 return ()
+               else
+                 continue
+
+        MiddleFrame_SIC frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) -> unlessReceivingHeaders $ do
             -- So I got data to process
             -- TODO: Handle end of stream
             let stream_id = nh2_stream_id
@@ -753,13 +763,6 @@ sessionInputThread  = do
             -- Frame was received by the peer, do nothing here...
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
-
-        -- TODO: Do something with these settings!!
-        MiddleFrame_SIC (NH2.Frame _ (NH2.SettingsFrame settings_list))  -> do
-            -- INSTRUMENTATION( debugM "HTTP2.Session" $ "Received settings: " ++ (show settings_list) )
-            -- Just acknowledge the frame.... for now
-            handleSettingsFrame settings_list
-            continue
 
         MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
             | Server_SR <- session_role -> do
@@ -1462,48 +1465,50 @@ sendPrimitive500Error =
 -- the output thread here in this session.
 workerThread :: Request -> AwareWorker -> WorkerMonad ()
 workerThread req aware_worker =
-  do
-    headers_output <- view headersOutput
-    stream_id      <- view streamId
-    --session_settings <- view sessionSettings_WTE
-    --next_push_stream_mvar <-  view nextPushStream_WTE
+    ignoreCancels $  do
+        headers_output <- view headersOutput
+        stream_id      <- view streamId
+        --session_settings <- view sessionSettings_WTE
+        --next_push_stream_mvar <-  view nextPushStream_WTE
 
-    -- If the request get rejected right away, we can just send
-    -- a 500 error in this very stream, without making any fuss.
-    -- (headers, _, data_and_conclussion)
-    --
-    -- TODO: Can we add debug information in a header here?
-    principal_stream <-
-        liftIO $ E.catch
-            (
-                aware_worker  req
-            )
-            (
-                const $ tupledPrincipalStreamToPrincipalStream <$> sendPrimitive500Error
-                :: HTTP500PrecursorException -> IO PrincipalStream
-            )
+        -- If the request get rejected right away, we can just send
+        -- a 500 error in this very stream, without making any fuss.
+        -- (headers, _, data_and_conclussion)
+        --
+        -- TODO: Can we add debug information in a header here?
+        principal_stream <-
+            liftIO $ E.catch
+                (
+                    aware_worker  req
+                )
+                (
+                    const $ tupledPrincipalStreamToPrincipalStream <$> sendPrimitive500Error
+                    :: HTTP500PrecursorException -> IO PrincipalStream
+                )
 
-    -- Pieces of the header
-    let
-       effects              = principal_stream ^. effect_PS
-       interrupt_maybe      = effects          ^. interrupt_Ef
+        -- Pieces of the header
+        let
+           effects              = principal_stream ^. effect_PS
+           interrupt_maybe      = effects          ^. interrupt_Ef
 
 
-    -- Exceptions can bubble in the points below. If so, send proper resets...
-    case interrupt_maybe of
+        -- Exceptions can bubble in the points below. If so, send proper resets...
+        case interrupt_maybe of
 
-        Nothing -> do
-            normallyHandleStream principal_stream
+            Nothing -> do
+                normallyHandleStream principal_stream
 
-        Just (InterruptConnectionAfter_IEf) -> do
-            normallyHandleStream principal_stream
-            liftIO . writeChan headers_output $ GoAway_HM (stream_id, effects)
+            Just (InterruptConnectionAfter_IEf) -> do
+                normallyHandleStream principal_stream
+                liftIO . writeChan headers_output $ GoAway_HM (stream_id, effects)
 
-        Just (InterruptConnectionNow_IEf) -> do
-            -- Not one hundred-percent sure of this being correct, but we don't want
-            -- to acknowledge reception of this stream then
-            let use_stream_id = stream_id - 1
-            liftIO . writeChan headers_output $ GoAway_HM (use_stream_id, effects)
+            Just (InterruptConnectionNow_IEf) -> do
+                -- Not one hundred-percent sure of this being correct, but we don't want
+                -- to acknowledge reception of this stream then
+                let use_stream_id = stream_id - 1
+                liftIO . writeChan headers_output $ GoAway_HM (use_stream_id, effects)
+  where
+    ignoreCancels = CMC.handle ((\_ -> return () ):: StreamCancelledException -> WorkerMonad ())
 
 
 normallyHandleStream :: PrincipalStream -> WorkerMonad ()
