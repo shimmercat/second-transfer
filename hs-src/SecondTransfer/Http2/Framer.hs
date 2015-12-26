@@ -539,6 +539,7 @@ outputGatherer session_output = do
        loopPart ::  FramerSession ()
        loopPart  = do
            command_or_frame  <- liftIO $ getFrameFromSession session_output
+           -- liftIO . putStrLn . show $ command_or_frame
            case command_or_frame of
 
                Command_StFB (CancelSession_SOC error_code) -> do

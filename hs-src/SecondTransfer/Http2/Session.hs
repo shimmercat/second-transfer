@@ -952,101 +952,114 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                 for_worker_thread_uns
         headers_bytes             <- getHeaderBytes stream_id
         dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
-        (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
-        -- /DEBUG
-        -- Good moment to remove the headers from the table.... we don't want a space
-        -- leak here
-        liftIO $ do
-            H.delete stream_request_headers stream_id
-            putMVar decode_headers_table_mvar new_table
+        maybe_table <- liftIO $
+            E.catch
+                (do
+                   r  <- HP.decodeHeader dyn_table headers_bytes
+                   return . Right $ r )
+                ((const $ return $ Left () ):: HP.DecodeError -> IO (Either () (HP.DynamicTable, HP.HeaderList)))
 
-        -- TODO: Validate headers, abort session if the headers are invalid.
-        -- Otherwise other invariants will break!!
-        -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
-        let
-            headers_editor = He.fromList header_list
-
-        maybe_good_headers_editor <- validateIncomingHeadersServer headers_editor
-
-        good_headers <- case maybe_good_headers_editor of
-            Just yes_they_are_good -> return yes_they_are_good
-            Nothing -> {-# SCC ccB3 #-} do
+        case maybe_table of
+            Left _ -> do
+                liftIO $ putStrLn "InvalidHeadersReceived"
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
-                return . error $ "NotUsedHeaderRepr"
 
-        -- Add any extra headers, on demand
-        --headers_extra_good      <- addExtraHeaders good_headers
-        let
-            headers_extra_good = good_headers
-            header_list_after = He.toList headers_extra_good
-        -- liftIO $ putStrLn $ "header list after " ++ (show header_list_after)
+            Right (new_table, header_list ) -> do
 
-        -- If the headers end the request....
-        post_data_source <- if not (frameEndsStream frame)
-          then do
-            mechanism <- createMechanismForStream stream_id
-            let source = postDataSourceFromMechanism mechanism
-            return $ Just source
-          else do
-            return Nothing
+                -- /DEBUG
+                -- Good moment to remove the headers from the table.... we don't want a space
+                -- leak here
+                liftIO $ do
+                    H.delete stream_request_headers stream_id
+                    putMVar decode_headers_table_mvar new_table
 
-        let
-          perception = Perception {
-              _startedTime_Pr = headers_arrived_time,
-              _streamId_Pr = stream_id,
-              _sessionId_Pr = current_session_id,
-              _protocol_Pr = Http2_HPV,
-              _anouncedProtocols_Pr = Nothing
-              }
-          request' = Request {
-              _headers_RQ = header_list_after,
-              _inputData_RQ = post_data_source,
-              _perception_RQ = perception
-              }
+                -- TODO: Validate headers, abort session if the headers are invalid.
+                -- Otherwise other invariants will break!!
+                -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
+                let
+                    headers_editor = He.fromList header_list
 
-        -- TODO: Handle the cases where a request tries to send data
-        -- even if the method doesn't allow for data.
+                maybe_good_headers_editor <- validateIncomingHeadersServer headers_editor
 
-        -- I'm clear to start the worker, in its own thread
-        --
-        -- NOTE: Some late internal errors from the worker thread are
-        --       handled here by closing the session.
-        --
-        -- TODO: Log exceptions handled here.
+                good_headers <- case maybe_good_headers_editor of
+                    Just yes_they_are_good -> return yes_they_are_good
+                    Nothing -> {-# SCC ccB3 #-} do
+                        closeConnectionBecauseIsInvalid NH2.ProtocolError
+                        return . error $ "NotUsedHeaderRepr"
 
-        liftIO $ do
-            -- The mvar below: avoid starting until the entry has
-            -- been properly inserted in the table...
-            ready <- newMVar ()
-            thread_id <- forkIOExc "s2f7" $ E.catch
-                ({-# SCC growP1 #-} do
-                    putMVar ready ()
-                    runReaderT
-                        (workerThread
-                               request'
-                               coherent_worker)
-                        for_worker_thread
-                    H.delete stream2workerthread stream_id
-                )
-                (
-                    (   \ (E.SomeException e) ->  do
-                        -- Actions to take when the thread breaks....
-                         -- We cancel the entire session because there is a more specific
-                        -- handler that doesn't somewhere below. If the exception bubles here,
-                        -- it is because the situation is out of control. We may as well
-                        -- exit the server, but I'm not being so extreme now.
-                        H.delete stream2workerthread stream_id
-                        putStrLn $ "ERROR: Aborting session after non-handled exception bubbled up " ++ E.displayException e
-                        writeChan session_input InternalAbort_SIC
-                    )
-                    :: E.SomeException -> IO ()
-                )
-            H.insert stream2workerthread stream_id thread_id
-            takeMVar ready
+                -- Add any extra headers, on demand
+                --headers_extra_good      <- addExtraHeaders good_headers
+                let
+                    headers_extra_good = good_headers
+                    header_list_after = He.toList headers_extra_good
+                -- liftIO $ putStrLn $ "header list after " ++ (show header_list_after)
+
+                -- If the headers end the request....
+                post_data_source <- if not (frameEndsStream frame)
+                  then do
+                    mechanism <- createMechanismForStream stream_id
+                    let source = postDataSourceFromMechanism mechanism
+                    return $ Just source
+                  else do
+                    return Nothing
+
+                let
+                  perception = Perception {
+                      _startedTime_Pr = headers_arrived_time,
+                      _streamId_Pr = stream_id,
+                      _sessionId_Pr = current_session_id,
+                      _protocol_Pr = Http2_HPV,
+                      _anouncedProtocols_Pr = Nothing
+                      }
+                  request' = Request {
+                      _headers_RQ = header_list_after,
+                      _inputData_RQ = post_data_source,
+                      _perception_RQ = perception
+                      }
+
+                -- TODO: Handle the cases where a request tries to send data
+                -- even if the method doesn't allow for data.
+
+                -- I'm clear to start the worker, in its own thread
+                --
+                -- NOTE: Some late internal errors from the worker thread are
+                --       handled here by closing the session.
+                --
+                -- TODO: Log exceptions handled here.
+
+                liftIO $ do
+                    -- The mvar below: avoid starting until the entry has
+                    -- been properly inserted in the table...
+                    ready <- newMVar ()
+                    thread_id <- forkIOExc "s2f7" $ E.catch
+                        ({-# SCC growP1 #-} do
+                            putMVar ready ()
+                            runReaderT
+                                (workerThread
+                                       request'
+                                       coherent_worker)
+                                for_worker_thread
+                            H.delete stream2workerthread stream_id
+                        )
+                        (
+                            (   \ (E.SomeException e) ->  do
+                                -- Actions to take when the thread breaks....
+                                 -- We cancel the entire session because there is a more specific
+                                -- handler that doesn't somewhere below. If the exception bubles here,
+                                -- it is because the situation is out of control. We may as well
+                                -- exit the server, but I'm not being so extreme now.
+                                H.delete stream2workerthread stream_id
+                                putStrLn $ "ERROR: Aborting session after non-handled exception bubbled up " ++ E.displayException e
+                                writeChan session_input InternalAbort_SIC
+                            )
+                            :: E.SomeException -> IO ()
+                        )
+                    H.insert stream2workerthread stream_id thread_id
+                    takeMVar ready
 
 
 
-        return ()
+                return ()
     else
         -- Frame doesn't end the headers... it was added before... so
         -- probably do nothing
