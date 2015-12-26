@@ -734,7 +734,6 @@ sessionInputThread  = do
                 )
                 (NH2.PingFrame somebytes)
 
-
             continue
 
         MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame settings_list))
@@ -746,11 +745,9 @@ sessionInputThread  = do
             -- Frame was received by the peer, do nothing here...
             continue
 
-
           | not (isSettingsAck frame_header) && isStreamZero frame_header -> do
             handleSettingsFrame settings_list
             continue
-
 
           | otherwise  -> do
             -- Frame was received by the peer, do nothing here...
