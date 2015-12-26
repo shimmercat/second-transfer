@@ -714,9 +714,13 @@ sessionInputThread  = do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
+        MiddleFrame_SIC (NH2.Frame frame_header (NH2.PingFrame _)) | not (isStreamZero frame_header)  || frameLength frame_header /= 8  -> do
+            closeConnectionBecauseIsInvalid NH2.ProtocolError
+            return ()
 
         MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _)) | NH2.testAck flags-> do
             -- Deal with pings: this is an Ack, so do nothing
+            -- In the future we may have some metric information here....
             continue
 
         MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do
@@ -798,40 +802,72 @@ sessionInputThread  = do
             enable_push = lookup NH2.SettingsEnablePush _settings_list
             max_frame_size = lookup NH2.SettingsMaxFrameSize _settings_list
 
-        case enable_push of
-            Just 1      -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) True
-            Just 0      -> liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) False
-            Just _      ->  closeConnectionBecauseIsInvalid NH2.ProtocolError
+            -- Handled by the framer, but errors should be reported here.
+            max_flow_control_size = lookup NH2.SettingsInitialWindowSize _settings_list
 
-            Nothing     ->  return ()
+        ok <- case enable_push of
+            Just 1      -> do
+                liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) True
+                return True
+            Just 0      -> do
+                liftIO $ DIO.writeIORef (session_settings ^. pushEnabled_SeS) False
+                return True
+            Just _      -> do
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
+                return True
 
-        case max_frame_size of
-            -- The spec says clearly what's the minimum size that can come here
-            Just n | n < 16384 || n > 16777215
-                        -> do
-                           -- liftIO $ putStrLn "Wild max frame size"
-                           closeConnectionBecauseIsInvalid NH2.ProtocolError
-                   | otherwise
-                        ->
-                           if n > (sessions_config ^. dataFrameSize)
-                              -- Ignore if it is bigger than the size configured in this context
-                              then do
-                                 -- liftIO . putStrLn $ "n= " ++ show n
-                                 return ()
-                              else
-                                  liftIO $ do
-                                      -- putStrLn $ "n= " ++ show n
-                                      DIO.writeIORef (session_settings ^. frameSize_SeS) n
+            Nothing     ->  do
+                return True
 
-            Nothing     -> return ()
+        ok2 <- if ok
+                 then
+                   case max_frame_size of
+                       -- The spec says clearly what's the minimum size that can come here
+                       Just n | n < 16384 || n > 16777215
+                                   -> do
+                                      -- liftIO $ putStrLn "Wild max frame size"
+                                      closeConnectionBecauseIsInvalid NH2.ProtocolError
+                                      return False
 
-        sendOutPriorityTrain
-            (NH2.EncodeInfo
-                (NH2.setAck NH2.defaultFlags)
-                0
-                Nothing
-            )
-            (NH2.SettingsFrame [])
+                              | otherwise
+                                   ->
+                                      if n > (sessions_config ^. dataFrameSize)
+                                         -- Ignore if it is bigger than the size configured in this context
+                                         then do
+                                            return True
+                                         else do
+                                             liftIO $  DIO.writeIORef (session_settings ^. frameSize_SeS) n
+                                             return True
+                       Nothing     -> return True
+                 else
+                   return False
+
+        ok3 <- if ok2
+                 then
+                   case max_flow_control_size of
+                       Just n
+                         | n > 2147483647 || n < 0
+                             -> do
+                                    closeConnectionBecauseIsInvalid NH2.FlowControlError
+                                    return False
+                         | otherwise
+                            -> return True
+                       Nothing -> return True
+                 else
+                   return False
+
+
+        if ok3
+          then
+            sendOutPriorityTrain
+                (NH2.EncodeInfo
+                    (NH2.setAck NH2.defaultFlags)
+                    0
+                    Nothing
+                )
+                (NH2.SettingsFrame [])
+          else
+            return ()
 
 
 
