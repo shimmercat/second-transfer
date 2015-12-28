@@ -15,7 +15,7 @@ module SecondTransfer.Http2.OutputTray (
                , newOutputTray
                , splitOverSize
                , addEntry
-     ) where
+       ) where
 
 import           Control.Lens
 --import           Control.Concurrent
