@@ -80,6 +80,8 @@ createAndBindListeningSocket hostname portnumber = do
     --
     NS.setSocketOption the_socket NS.NoDelay 1
     NS.bind the_socket host_address
+    NS.listen the_socket 20
+    putStrLn "LISTEN JUST CALLED"
     -- bound <- NS.isBound the_socket
     return the_socket
 
@@ -101,6 +103,7 @@ createAndBindListeningSocketNSSockAddr host_addr = do
     --
     NS.setSocketOption the_socket NS.NoDelay 1
     NS.bind the_socket host_addr
+    NS.listen the_socket 20
     -- bound <- NS.isBound the_socket
     return the_socket
 
@@ -122,7 +125,6 @@ tcpItcli listen_socket =
     -- of them shows up, we have hit a new abnormal condition that should
     -- be learn from
     do
-        liftIO $ NS.listen listen_socket 20
         LIO_REPORT_EVENT("listening")
         let
           report_abnormality = do
