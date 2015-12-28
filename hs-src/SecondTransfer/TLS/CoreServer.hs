@@ -27,6 +27,7 @@ module SecondTransfer.TLS.CoreServer (
                , coreListen
 
                -- * Utility
+               , NamedAttendants
                , chooseProtocol
 
                -- * Conduit-based session management
@@ -72,6 +73,10 @@ data SessionHandlerState = SessionHandlerState {
 makeLenses ''SessionHandlerState
 
 
+-- | A simple Alias
+type NamedAttendants = [(String, Attendant)]
+
+
 -- | Convenience function to open a port and listen there for connections and
 --   select protocols and so on.
 tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
@@ -81,7 +86,7 @@ tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
                  -> FilePath              -- ^ Path to certificate chain
                  -> FilePath              -- ^ Path to PKCS #8 key
                  -> String                -- ^ Name of the network interface
-                 -> [(String, Attendant)] -- ^ List of attendants and their handlers
+                 -> NamedAttendants       -- ^ List of attendants and their handlers
                  -> Int                   -- ^ Port to listen for connections
                  -> IO ()
 tlsServeWithALPN proxy  conn_callbacks cert_filename key_filename interface_name attendants interface_port = do
@@ -96,8 +101,7 @@ tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
                  -> FilePath              -- ^ Path to certificate chain
                  -> FilePath              -- ^ Path to PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                  -> [(String, Attendant)] -- ^ List of attendants and their handlers
- --                 -> MVar FinishRequest    -- ^ Finish request event, write a value here to finish serving
+                 -> NamedAttendants        -- ^ List of attendants and their handlers
                  -> IO ()
 tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock_addr attendants = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
@@ -115,8 +119,7 @@ tlsServeWithALPNNSSockAddr_Prepare ::   forall ctx session . (TLSContext ctx ses
                  -> FilePath              -- ^ Path to certificate chain
                  -> FilePath              -- ^ Path to PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                  -> [(String, Attendant)] -- ^ List of attendants and their handlers
- --                 -> MVar FinishRequest    -- ^ Finish request event, write a value here to finish serving
+                 -> NamedAttendants       -- ^ List of attendants and their handlers
                  -> IO NormalTCPHold
 tlsServeWithALPNNSSockAddr_Prepare proxy conn_callbacks  cert_filename key_filename sock_addr attendants = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
@@ -136,7 +139,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx s
                  -> FilePath              -- ^ Path to certificate chain
                  -> FilePath              -- ^ Path to PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                 -> [(String, Attendant)] -- ^ List of attendants and their handlers
+                 -> NamedAttendants       -- ^ List of attendants and their handlers
                  -> [B.ByteString]        -- ^ Names of "internal" hosts
                  -> Bool                  -- ^ Should I forward connection requests?
                  -> IO ()
@@ -164,6 +167,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr
        (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
        attendants
 
+
 -- | Opaque hold type
 data Socks5Hold = Socks5Hold (IO ())
 
@@ -176,7 +180,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare ::   forall ctx session  . (TLSConte
                  -> FilePath              -- ^ Path to certificate chain
                  -> FilePath              -- ^ Path to PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                 -> [(String, Attendant)] -- ^ List of attendants and their handlers
+                 -> NamedAttendants       -- ^ List of attendants and their handlers
                  -> [B.ByteString]        -- ^ Names of "internal" hosts
                  -> Bool                  -- ^ Should I forward connection requests?
                  -> IO Socks5Hold
@@ -204,11 +208,17 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
        (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
        attendants
 
+
 tlsServeWithALPNUnderSOCKS5SockAddr_Do :: Socks5Hold -> IO ()
 tlsServeWithALPNUnderSOCKS5SockAddr_Do (Socks5Hold action) = action
 
 
-tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io, HasSocketPeer encrypted_io) => MVar SessionHandlerState -> [(String, Attendant)]  ->  ctx ->  encrypted_io -> IO ()
+tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io, HasSocketPeer encrypted_io) =>
+       MVar SessionHandlerState
+       -> NamedAttendants
+       ->  ctx
+       ->  encrypted_io
+       -> IO ()
 tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
     -- Have the handshake happen in another thread
     forkIOExc "tlsSessionHandler" $ do
@@ -257,7 +267,8 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
     return ()
 
 
-tlsSessionHandlerControllable ::  (TLSContext ctx session, TLSServerIO encrypted_io) => [(String, ControllableAttendant controller)]  ->  ctx ->  encrypted_io -> IO (Maybe controller)
+tlsSessionHandlerControllable ::  (TLSContext ctx session, TLSServerIO encrypted_io)
+    => [(String, ControllableAttendant controller)]  ->  ctx ->  encrypted_io -> IO (Maybe controller)
 tlsSessionHandlerControllable attendants ctx encrypted_io = do
     session <- unencryptTLSServerIO ctx encrypted_io
     plaintext_io_callbacks <- handshake session :: IO IOCallbacks
