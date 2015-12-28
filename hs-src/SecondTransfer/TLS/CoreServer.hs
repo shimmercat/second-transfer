@@ -337,7 +337,8 @@ coreListen _ conn_callbacks certificate_filename key_filename listen_abstraction
 -- | A conduit that takes TLS-encrypted callbacks, creates a TLS server session on top of it, passes the resulting
 --   plain-text io-callbacks to a chosen Attendant in the argument list, and passes up the controller of the attendant
 --   so that it can be undone if needs come. This should be considered a toy API, as multiple handshake can not progress
---   simultaeneusly through Conduits :-(
+--   simultaeneusly through Conduits, so a server using this would be blocked for the entire length of a TLS handshake
+--   with a remote client .... :-(
 coreItcli ::
          forall controller ctx session b . (TLSContext ctx session, TLSServerIO b)
      => ctx                                                      -- ^ Passing in a tls context already-built value allows for sharing a single
