@@ -1,4 +1,10 @@
-{-# LANGUAGE RankNTypes, FunctionalDependencies, PartialTypeSignatures, OverloadedStrings, ScopedTypeVariables, TemplateHaskell #-}
+{-# LANGUAGE RankNTypes,
+             FunctionalDependencies,
+             PartialTypeSignatures,
+             OverloadedStrings,
+             ScopedTypeVariables,
+             TemplateHaskell
+             #-}
 module SecondTransfer.TLS.CoreServer (
                -- * Simpler interfaces
                -- These functions are simple enough but don't work with controllable
@@ -6,8 +12,18 @@ module SecondTransfer.TLS.CoreServer (
                  tlsServeWithALPN
                , tlsServeWithALPNNSSockAddr
                , tlsSessionHandler
-               -- , tlsServeWithALPNUnderSOCKS5
                , tlsServeWithALPNUnderSOCKS5SockAddr
+
+               -- * Interfaces for a pre-fork scenario
+               -- The first part of the invocation opens and
+               -- bind the socket, the second part does the accepting...
+               , NormalTCPHold
+               , tlsServeWithALPNNSSockAddr_Prepare
+               , tlsServeWithALPNNSSockAddr_Do
+               , Socks5Hold
+               , tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
+               , tlsServeWithALPNUnderSOCKS5SockAddr_Do
+
                , coreListen
 
                -- * Utility
@@ -87,6 +103,30 @@ tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
     coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
 
+data NormalTCPHold   = NormalTCPHold ( IO () )
+
+-- | The prefork way requires a first step where we create the sockets and then we listen on them...
+--   This function is identical otherwise to the one without _Prepare. The real thing is done by the
+--   one with _Do below...
+tlsServeWithALPNNSSockAddr_Prepare ::   forall ctx session . (TLSContext ctx session)
+                 => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
+                                          --   of TLS backend to use during the invocation
+                 -> ConnectionCallbacks   -- ^ Control and regulate SOCKS5 connections
+                 -> FilePath              -- ^ Path to certificate chain
+                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> NS.SockAddr           -- ^ Address to bind to
+                  -> [(String, Attendant)] -- ^ List of attendants and their handlers
+ --                 -> MVar FinishRequest    -- ^ Finish request event, write a value here to finish serving
+                 -> IO NormalTCPHold
+tlsServeWithALPNNSSockAddr_Prepare proxy conn_callbacks  cert_filename key_filename sock_addr attendants = do
+    listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
+    return . NormalTCPHold $ coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
+
+
+-- | Actually listen, possibly at the other side of the fork.
+tlsServeWithALPNNSSockAddr_Do :: NormalTCPHold  -> IO ()
+tlsServeWithALPNNSSockAddr_Do (NormalTCPHold action) = action
+
 
 tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx session)
                  => Proxy ctx             -- ^ This is a simple proxy type from Typeable that is used to select the type
@@ -115,7 +155,57 @@ tlsServeWithALPNUnderSOCKS5SockAddr
         approver name = isJust $ elemIndex name internal_hosts
     socks5_state_mvar <- newMVar initSocks5ServerState
     listen_socket <- createAndBindListeningSocketNSSockAddr host_addr
-    coreListen proxy conn_callbacks cert_filename key_filename listen_socket (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal) attendants
+    coreListen
+       proxy
+       conn_callbacks
+       cert_filename
+       key_filename
+       listen_socket
+       (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
+       attendants
+
+-- | Opaque hold type
+data Socks5Hold = Socks5Hold (IO ())
+
+
+tlsServeWithALPNUnderSOCKS5SockAddr_Prepare ::   forall ctx session  . (TLSContext ctx session)
+                 => Proxy ctx             -- ^ This is a simple proxy type from Typeable that is used to select the type
+                                          --   of TLS backend to use during the invocation
+                 -> ConnectionCallbacks   -- ^ Log and control of the inner TLS session
+                 -> Socks5ConnectionCallbacks -- ^ Log and control the outer SOCKS5 session
+                 -> FilePath              -- ^ Path to certificate chain
+                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> NS.SockAddr           -- ^ Address to bind to
+                 -> [(String, Attendant)] -- ^ List of attendants and their handlers
+                 -> [B.ByteString]        -- ^ Names of "internal" hosts
+                 -> Bool                  -- ^ Should I forward connection requests?
+                 -> IO Socks5Hold
+tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
+    proxy
+    conn_callbacks
+    socks5_callbacks
+    cert_filename
+    key_filename
+    host_addr
+    attendants
+    internal_hosts
+    forward_no_internal = do
+    let
+        approver :: B.ByteString -> Bool
+        approver name = isJust $ elemIndex name internal_hosts
+    socks5_state_mvar <- newMVar initSocks5ServerState
+    listen_socket <- createAndBindListeningSocketNSSockAddr host_addr
+    return . Socks5Hold $ coreListen
+       proxy
+       conn_callbacks
+       cert_filename
+       key_filename
+       listen_socket
+       (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
+       attendants
+
+tlsServeWithALPNUnderSOCKS5SockAddr_Do :: Socks5Hold -> IO ()
+tlsServeWithALPNUnderSOCKS5SockAddr_Do (Socks5Hold action) = action
 
 
 tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io, HasSocketPeer encrypted_io) => MVar SessionHandlerState -> [(String, Attendant)]  ->  ctx ->  encrypted_io -> IO ()
