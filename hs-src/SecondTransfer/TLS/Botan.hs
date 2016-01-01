@@ -131,6 +131,7 @@ iocba_push siocb p len =
 
 -- | Callback invoked by Botan with clear text data just decoded from the stream
 foreign export ccall iocba_data_cb :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
+iocba_data_cb :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
 iocba_data_cb siocb p len = withBotanPad siocb $ \ botan_pad -> do
     let
         cstr = (p, fromIntegral len)
@@ -151,14 +152,15 @@ iocba_data_cb siocb p len = withBotanPad siocb $ \ botan_pad -> do
 -- TODO: Should we raise some sort of exception here? Maybe call the "closeAction"
 -- in the other sides?
 foreign export ccall iocba_alert_cb :: BotanPadRef -> CInt -> IO ()
+iocba_alert_cb :: BotanPadRef -> CInt -> IO ()
 iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
     let
         problem_mvar = botan_pad ^. problem_BP
     putStrLn $ "tls alert " ++ (show alert_code)
     if (alert_code < 0)
           then do
-             tryPutMVar problem_mvar ()
-             tryPutMVar (botan_pad ^. dataCame_BP) ()
+             _ <- tryPutMVar problem_mvar ()
+             _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
              return ()
           else
              return ()
@@ -166,11 +168,12 @@ iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
 
 -- Botan relies a wealth of information here, not using at the moment :-(
 foreign export ccall iocba_handshake_cb :: BotanPadRef -> IO ()
+iocba_handshake_cb :: BotanPadRef -> IO ()
 iocba_handshake_cb siocb = do
     withBotanPad siocb $ \botan_pad -> do
         let
             hcmvar = botan_pad ^. handshakeCompleted_BP
-        tryPutMVar hcmvar ()
+        _ <-tryPutMVar hcmvar ()
         maybe_protocol <- tryReadMVar (botan_pad ^. selectedProtocol_BP)
 
         -- If by this time no ALPN has completed, signal that
@@ -184,6 +187,7 @@ iocba_handshake_cb siocb = do
 
 
 foreign export ccall iocba_select_protocol_cb :: BotanPadRef -> Ptr CChar -> Int -> IO Int
+iocba_select_protocol_cb :: BotanPadRef -> Ptr CChar -> Int -> IO Int
 iocba_select_protocol_cb siocb p len =
     withBotanPad siocb $ \ botan_pad -> do
         let
