@@ -30,12 +30,11 @@ data FinishRequest = FinishRequest
 -- | Given a list of ALPN identifiers, if something is suitable, return it.
 type ProtocolSelector = [B.ByteString] -> IO (Maybe Int)
 
--- | Simple alias to identify that something is a FilePath
-type RawFilePath = B.ByteString
 
 -- | Types implementing this class are able to say a little bit about their peer.
 class IOChannels session => TLSContext ctx session | ctx -> session, session -> ctx where
-    newTLSContext :: RawFilePath -> RawFilePath -> ProtocolSelector -> IO ctx
+    newTLSContextFromMemory :: B.ByteString -> B.ByteString -> ProtocolSelector -> IO ctx
+    newTLSContextFromCertFileNames :: B.ByteString -> B.ByteString -> ProtocolSelector -> IO ctx
     unencryptTLSServerIO :: forall cipherio . TLSServerIO cipherio => ctx -> cipherio -> IO session
     getSelectedProtocol :: session -> IO (Maybe (Int, B.ByteString))
 

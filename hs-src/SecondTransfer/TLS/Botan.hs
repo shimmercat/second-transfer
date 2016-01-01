@@ -4,6 +4,7 @@ module SecondTransfer.TLS.Botan (
                 , BotanSession
                 , unencryptChannelData
                 , newBotanTLSContext
+                , newBotanTLSContextFromMemory
                 , botanTLS
        ) where
 
@@ -11,7 +12,7 @@ import           Control.Concurrent
 import qualified Control.Exception                                         as E
 
 import           Foreign
-import           Foreign.C.Types                                           (CChar, CInt(..))
+import           Foreign.C.Types                                           (CChar, CInt(..), CUInt(..))
 import           Foreign.C.String                                          (CString)
 
 --import           Data.List                                                 (elemIndex)
@@ -209,6 +210,8 @@ foreign import ccall "&iocba_delete_tls_context" iocba_delete_tls_context :: Fun
 
 foreign import ccall iocba_make_tls_context :: CString -> CString -> IO BotanTLSContextCSidePtr
 
+foreign import ccall iocba_make_tls_context_from_memory :: CString -> CUInt -> CString -> CUInt -> IO BotanTLSContextCSidePtr
+
 foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_channel :: FunPtr( BotanTLSChannelPtr -> IO () )
 
 --foreign import ccall "wrapper" mkTlsServerDeleter :: (BotanTLSChannelPtr -> IO ()) -> IO (FunPtr ( BotanTLSChannelPtr -> IO () ) )
@@ -292,14 +295,27 @@ protocolSelectorToC prot_sel flat_protocols = do
 
 
 newBotanTLSContext :: RawFilePath -> RawFilePath -> ProtocolSelector ->  IO BotanTLSContext
-newBotanTLSContext cert_filename privkey_filename prot_sel = do
-    let
-
+newBotanTLSContext cert_filename privkey_filename prot_sel =
+  do
     B.useAsCString cert_filename $ \ s1 ->
         B.useAsCString privkey_filename $ \ s2 -> do
             ctx_ptr <-  iocba_make_tls_context s1 s2
             x <- newForeignPtr iocba_delete_tls_context ctx_ptr
             return $ BotanTLSContext x prot_sel
+
+
+newBotanTLSContextFromMemory :: B.ByteString -> B.ByteString -> ProtocolSelector -> IO BotanTLSContext
+newBotanTLSContextFromMemory cert_data key_data prot_sel =
+  do
+    B.useAsCString cert_data $ \ s1 ->
+      B.useAsCString key_data $ \s2 -> do
+          ctx_ptr <- iocba_make_tls_context_from_memory
+                         s1
+                         (fromIntegral . B.length $ cert_data)
+                         s2
+                         (fromIntegral . B.length $ key_data)
+          x <- newForeignPtr iocba_delete_tls_context ctx_ptr
+          return $ BotanTLSContext x prot_sel
 
 
 unencryptChannelData :: TLSServerIO a =>  BotanTLSContext -> a -> IO  BotanSession
@@ -471,7 +487,8 @@ instance IOChannels BotanSession where
 
 
 instance TLSContext BotanTLSContext BotanSession where
-    newTLSContext = newBotanTLSContext
+    newTLSContextFromMemory = newBotanTLSContextFromMemory
+    newTLSContextFromCertFileNames = newBotanTLSContext
     unencryptTLSServerIO = unencryptChannelData
     getSelectedProtocol (BotanSession pad_ioref) = do
         botan_pad <- readIORef pad_ioref
