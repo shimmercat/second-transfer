@@ -2,6 +2,10 @@
 #ifdef INCLUDE_BOTAN_ALL_H
 #include "botan_all.h"
 #else
+
+#include <string>
+#include <sstream>
+
 #include <botan/botan.h>
 #include <botan/tls_session.h>
 #include <botan/tls_alert.h>
@@ -127,7 +131,6 @@ public:
 
 // TODO: We can use different certificates if needs come....
 class HereCredentialsManager: public Botan::Credentials_Manager {
-    Botan::X509_Certificate cert;
     std::vector<Botan::X509_Certificate> certs;
     Botan::Private_Key* privkey;
 public:
@@ -135,8 +138,7 @@ public:
         const char* cert_filename,
         const char* privkey_filename,
         Botan::AutoSeeded_RNG& rng
-        ):
-            cert(cert_filename)
+        )
     {
         // In addition to  the certificate itself, build a chain
         // of certificates
@@ -160,6 +162,44 @@ public:
         }
         privkey = Botan::PKCS8::load_key(
             privkey_filename, rng
+        );
+    }
+
+    HereCredentialsManager(
+        const uint8_t* cert_data,
+        uint32_t cert_data_len,
+        const uint8_t* privkey_data,
+        uint32_t privkey_data_len,
+        Botan::AutoSeeded_RNG& rng
+        )
+    {
+        std::string cert_string((char*)cert_data, cert_data_len);
+        std::stringstream certs_source(cert_string);
+        std::string key_string((char*)privkey_data, privkey_data_len);
+        std::stringstream key_source(key_string);
+        // In addition to  the certificate itself, build a chain
+        // of certificates
+        Botan::DataSource_Stream certs_source_(certs_source);
+        Botan::DataSource_Stream key_source_(key_source);
+        int i = 0;
+        while ( not certs_source_.end_of_data() )
+        {
+            try {
+                certs.push_back(Botan::X509_Certificate(certs_source_));
+            } catch (Botan::Decoding_Error const& err)
+            {
+                if ( i == 0)
+                {
+                    throw;
+                } else
+                {
+                    break;
+                }
+            }
+            i ++;
+        }
+        privkey = Botan::PKCS8::load_key(
+            key_source_, rng
         );
     }
 
@@ -279,7 +319,7 @@ extern "C" botan_tls_context_t* iocba_make_tls_context(
     const char* privkey_filename
     )
 {
-    Botan::AutoSeeded_RNG rng;
+    Botan::AutoSeeded_RNG* rng=new Botan::AutoSeeded_RNG();
     std::vector< std::string > protocols;
 
     // Not sure what is this good for....
@@ -287,13 +327,42 @@ extern "C" botan_tls_context_t* iocba_make_tls_context(
     protocols.push_back("http/1.1");
 
     return new botan_tls_context_t{
-        second_transfer::HereCredentialsManager(cert_filename, privkey_filename, rng), 
-        new Botan::TLS::Session_Manager_In_Memory(rng),
-        new Botan::AutoSeeded_RNG(),
+        second_transfer::HereCredentialsManager(cert_filename, privkey_filename, *rng),
+        new Botan::TLS::Session_Manager_In_Memory(*rng),
+        rng,
         protocols,
         second_transfer::HereTLSPolicy()
     };
 }
+
+extern "C" botan_tls_context_t* iocba_make_tls_context_from_memory(
+    const uint8_t* cert_data,
+    uint32_t cert_data_length,
+    const uint8_t* key_data,
+    uint32_t key_data_length
+)
+{
+    Botan::AutoSeeded_RNG* rng=new Botan::AutoSeeded_RNG();
+    std::vector< std::string > protocols;
+
+    // Not sure what is this good for....
+    protocols.push_back("h2");
+    protocols.push_back("http/1.1");
+
+    return new botan_tls_context_t{
+        second_transfer::HereCredentialsManager(
+            cert_data,
+            cert_data_length,
+            key_data,
+            key_data_length,
+            *rng),
+        new Botan::TLS::Session_Manager_In_Memory(*rng),
+        rng,
+        protocols,
+        second_transfer::HereTLSPolicy()
+    };
+}
+
 
 extern "C" void iocba_delete_tls_context(botan_tls_context_t* ctx)
 {

@@ -83,8 +83,8 @@ tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
                                           --   of TLS backend to use during the invocation
                  -> ConnectionCallbacks   -- ^ Control and log connections
-                 -> FilePath              -- ^ Path to certificate chain
-                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> B.ByteString              -- ^ String with contents of certificate chain
+                 -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> String                -- ^ Name of the network interface
                  -> NamedAttendants       -- ^ List of attendants and their handlers
                  -> Int                   -- ^ Port to listen for connections
@@ -98,8 +98,8 @@ tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
                                           --   of TLS backend to use during the invocation
                  -> ConnectionCallbacks   -- ^ Control and regulate SOCKS5 connections
-                 -> FilePath              -- ^ Path to certificate chain
-                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> B.ByteString              -- ^ String with contents of certificate chain
+                 -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
                  -> NamedAttendants        -- ^ List of attendants and their handlers
                  -> IO ()
@@ -116,14 +116,16 @@ tlsServeWithALPNNSSockAddr_Prepare ::   forall ctx session . (TLSContext ctx ses
                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
                                           --   of TLS backend to use during the invocation
                  -> ConnectionCallbacks   -- ^ Control and regulate SOCKS5 connections
-                 -> FilePath              -- ^ Path to certificate chain
-                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> B.ByteString              -- ^ String with contents of certificate chain
+                 -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                 -> NamedAttendants       -- ^ List of attendants and their handlers
+                 -> IO NamedAttendants    -- ^ Will-be list of attendants and their handlers
                  -> IO NormalTCPHold
-tlsServeWithALPNNSSockAddr_Prepare proxy conn_callbacks  cert_filename key_filename sock_addr attendants = do
+tlsServeWithALPNNSSockAddr_Prepare proxy conn_callbacks  cert_filename key_filename sock_addr make_attendants = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
-    return . NormalTCPHold $ coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
+    return . NormalTCPHold $ do
+        attendants <- make_attendants
+        coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
 
 
 -- | Actually listen, possibly at the other side of the fork.
@@ -136,10 +138,10 @@ tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx s
                                           --   of TLS backend to use during the invocation
                  -> ConnectionCallbacks   -- ^ Log and control of the inner TLS session
                  -> Socks5ConnectionCallbacks -- ^ Log and control the outer SOCKS5 session
-                 -> FilePath              -- ^ Path to certificate chain
-                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> B.ByteString              -- ^ String with contents of certificate chain
+                 -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                 -> NamedAttendants       -- ^ List of attendants and their handlers
+                 -> NamedAttendants       -- ^ List of attendants and their handlers,
                  -> [B.ByteString]        -- ^ Names of "internal" hosts
                  -> Bool                  -- ^ Should I forward connection requests?
                  -> IO ()
@@ -177,10 +179,10 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare ::   forall ctx session  . (TLSConte
                                           --   of TLS backend to use during the invocation
                  -> ConnectionCallbacks   -- ^ Log and control of the inner TLS session
                  -> Socks5ConnectionCallbacks -- ^ Log and control the outer SOCKS5 session
-                 -> FilePath              -- ^ Path to certificate chain
-                 -> FilePath              -- ^ Path to PKCS #8 key
+                 -> B.ByteString              -- ^ String with contents of certificate chain
+                 -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                 -> NamedAttendants       -- ^ List of attendants and their handlers
+                 -> IO NamedAttendants    -- ^ List of attendants and their handlers, as it will be built
                  -> [B.ByteString]        -- ^ Names of "internal" hosts
                  -> Bool                  -- ^ Should I forward connection requests?
                  -> IO Socks5Hold
@@ -188,10 +190,10 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
     proxy
     conn_callbacks
     socks5_callbacks
-    cert_filename
-    key_filename
+    cert_pemfile_data
+    key_pemfile_data
     host_addr
-    attendants
+    make_attendants
     internal_hosts
     forward_no_internal = do
     let
@@ -199,14 +201,16 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
         approver name = isJust $ elemIndex name internal_hosts
     socks5_state_mvar <- newMVar initSocks5ServerState
     listen_socket <- createAndBindListeningSocketNSSockAddr host_addr
-    return . Socks5Hold $ coreListen
-       proxy
-       conn_callbacks
-       cert_filename
-       key_filename
-       listen_socket
-       (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
-       attendants
+    return . Socks5Hold $ do
+        attendants <- make_attendants
+        coreListen
+            proxy
+            conn_callbacks
+            cert_pemfile_data
+            key_pemfile_data
+            listen_socket
+            (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
+            attendants
 
 
 tlsServeWithALPNUnderSOCKS5SockAddr_Do :: Socks5Hold -> IO ()
@@ -316,13 +320,13 @@ coreListen ::
      => (Proxy ctx )                      -- ^ This is a simple proxy type from Typeable that is used to select the type
                                           --   of TLS backend to use during the invocation
      -> ConnectionCallbacks               -- ^ Functions to log and control behaviour of the server
-     -> FilePath                          -- ^ Path to certificate chain
-     -> FilePath                          -- ^ Path to PKCS #8 key
+     -> B.ByteString                      -- ^ PEM-encoded certificate chain, in this string
+     -> B.ByteString                      -- ^ PEM-encoded, un-encrypted PKCS #8 key in this string
      -> a                                 -- ^ An entity that is used to fork new handlers
      -> ( a -> (b -> IO()) -> IO () )    -- ^ The fork-handling functionality
      -> [(String, Attendant)]             -- ^ List of attendants and their handlers
      -> IO ()
-coreListen _ conn_callbacks certificate_filename key_filename listen_abstraction session_forker attendants =   do
+coreListen _ conn_callbacks certificate_pemfile_data key_pemfile_data listen_abstraction session_forker attendants =   do
      let
          state = SessionHandlerState {
              _liveSessions_S = 0
@@ -330,7 +334,7 @@ coreListen _ conn_callbacks certificate_filename key_filename listen_abstraction
            , _connCallbacks_S = conn_callbacks
              }
      state_mvar <- newMVar state
-     ctx <- newTLSContext (pack certificate_filename) (pack key_filename) (chooseProtocol attendants) :: IO ctx
+     ctx <- newTLSContextFromMemory certificate_pemfile_data key_pemfile_data (chooseProtocol attendants) :: IO ctx
      session_forker listen_abstraction (tlsSessionHandler state_mvar attendants ctx)
 
 
