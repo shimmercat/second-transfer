@@ -41,17 +41,17 @@ module SecondTransfer.Sessions.Config(
 
 
 -- import           Control.Concurrent.MVar (MVar)
-import           Control.Exception                      (SomeException)
-import           Control.Lens                           (makeLenses)
+import           Control.Exception                        (SomeException)
+import           Control.Lens                             (makeLenses)
 
 import           GHC.Generics (Generic)
-import           Data.Hashable
-import           Data.Word                              (Word8)
+import           Data.Word                                (Word8)
 
---import           System.Mem.Weak                        (Weak)
-import           System.Clock                           (TimeSpec)
+--import           System.Mem.Weak                          (Weak)
+import           System.Clock                             (TimeSpec)
 
-import           SecondTransfer.IOCallbacks.Types       (IOCallbacks)
+import           SecondTransfer.IOCallbacks.Types         (IOCallbacks)
+import           SecondTransfer.Sessions.HashableSockAddr (HashableSockAddr)
 
 -- | Information used to identify a particular session.
 newtype SessionCoordinates = SessionCoordinates  Int
@@ -121,12 +121,6 @@ instance ActivityMeteredSession SessionGenericHandle where
     sessionLastActivity (Whole_SGH a) = sessionLastActivity a
     sessionLastActivity (Partial_SGH a _) = sessionLastActivity a
 
-
--- | Since SockAddr is not hashable, we need our own. TODO: IPv6.
-newtype HashableSockAddr = HashableSockAddr (Word8, Word8, Word8, Word8)
-    deriving (Eq, Show, Generic)
-
-instance  Hashable HashableSockAddr
 
 -- | Callback to be invoked when a  client establishes a new session. The first parameter
 --   is the address of the client, and the second parameter is a controller that can be used to

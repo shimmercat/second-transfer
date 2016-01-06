@@ -64,6 +64,8 @@ import           SecondTransfer.Socks5.Session                             (tlsS
 import           SecondTransfer.Socks5.Types                               (Socks5ConnectionCallbacks)
 import           SecondTransfer.Exception                                  (forkIOExc)
 
+import           SecondTransfer.Sessions.HashableSockAddr                  (hashableSockAddrFromNSSockAddr)
+
 
 data SessionHandlerState = SessionHandlerState {
     _liveSessions_S    ::  !Int64
@@ -246,6 +248,9 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
               Just c -> c ev
           wconn_id = ConnectionId new_conn_id
       sock_addr <- getSocketPeerAddress encrypted_io
+      let
+          hashable_addr = hashableSockAddrFromNSSockAddr sock_addr
+          connection_data = ConnectionData hashable_addr
       log_event (Established_CoEv sock_addr wconn_id live_now)
       session <- unencryptTLSServerIO ctx encrypted_io
       plaintext_io_callbacks_u <- handshake session :: IO IOCallbacks
@@ -265,7 +270,7 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
                     lookup "" attendants
       case maybe_attendant of
           Just use_attendant ->
-              use_attendant plaintext_io_callbacks
+              use_attendant connection_data plaintext_io_callbacks
           Nothing -> do
               log_event (ALPNFailed_CoEv wconn_id)
               plaintext_io_callbacks ^. closeAction_IOC

@@ -72,7 +72,9 @@ import qualified Network.HTTP2                          as NH2
 
 
 import           System.Clock                            ( getTime
-                                                         , Clock(..))
+                                                         , Clock(..)
+                                                         , TimeSpec
+                                                         )
 
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
@@ -81,6 +83,7 @@ import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.MainLoop.ClientPetitioner
 
 import           SecondTransfer.Sessions.Config
+import           SecondTransfer.IOCallbacks.Types       (ConnectionData, addr_CnD)
 import           SecondTransfer.Sessions.Internal       (sessionExceptionHandler,
                                                          SessionsContext,
                                                          sessionsConfig)
@@ -360,24 +363,35 @@ data SessionData = SessionData {
     -- What role does this session has?
     ,_sessionRole                :: SessionRole
 
+    -- When did we start this session?
+    ,_startTime                  :: TimeSpec
+
+    ,_peerAddress                :: Maybe HashableSockAddr
     }
 
 
 makeLenses ''SessionData
 
 
-http2ServerSession :: AwareWorker -> Int -> SessionsContext -> IO Session
-http2ServerSession a i sctx = http2Session Server_SR a (error "NotAClient") i sctx
+instance ActivityMeteredSession SessionData where
+    sessionLastActivity s = return $ s ^. startTime
+
+instance CleanlyPrunableSession SessionData where
+    cleanlyCloseSession s = runReaderT (quietlyCloseConnection NH2.NoError) s
+
+
+http2ServerSession :: ConnectionData -> AwareWorker -> Int -> SessionsContext -> IO Session
+http2ServerSession conn_data a i sctx = http2Session (Just conn_data) Server_SR a (error "NotAClient") i sctx
 
 
 http2ClientSession :: ClientState -> Int -> SessionsContext -> IO Session
 http2ClientSession client_state session_id sctx =
-    http2Session Client_SR (error "NotAServer") client_state session_id sctx
+    http2Session Nothing Client_SR (error "NotAServer") client_state session_id sctx
 
 
 --                                v- {headers table size comes here!!}
-http2Session :: SessionRole -> AwareWorker -> ClientState  -> Int -> SessionsContext -> IO Session
-http2Session session_role aware_worker client_state session_id sessions_context =   do
+http2Session :: Maybe ConnectionData -> SessionRole -> AwareWorker -> ClientState  -> Int -> SessionsContext -> IO Session
+http2Session maybe_connection_data session_role aware_worker client_state session_id sessions_context =   do
     session_input             <- newChan
     session_output            <- newChan
     session_output_mvar       <- newMVar session_output
@@ -412,10 +426,13 @@ http2Session session_role aware_worker client_state session_id sessions_context 
             }
     next_push_stream          <- newMVar (sessions_context ^. sessionsConfig . firstPushStream )
 
+    start_time                <- getTime Monotonic
+
     -- What about stream cancellation?
     cancelled_streams_mvar    <- newMVar $ NS.empty :: IO (MVar NS.IntSet)
 
-    let for_worker_thread = WorkerThreadEnvironment {
+    let
+        for_worker_thread = WorkerThreadEnvironment {
         _streamId = error "NotInitialized"
         ,_headersOutput = headers_output
         ,_dataOutput = data_output
@@ -425,6 +442,10 @@ http2Session session_role aware_worker client_state session_id sessions_context 
         ,_resetStreamButton_WTE = error "Not initialized"
         ,_childResetStreamButton_WTE = error "Not initialized"
         }
+
+        maybe_hashable_addr = case maybe_connection_data of
+            Just connection_info ->  connection_info ^. addr_CnD
+            Nothing -> Nothing
 
     let session_data  = SessionData {
         _sessionsContext             = sessions_context
@@ -445,9 +466,20 @@ http2Session session_role aware_worker client_state session_id sessions_context 
         ,_lastGoodStream             = last_good_stream_mvar
         ,_nextPushStream             = next_push_stream
         ,_sessionRole                = session_role
+        ,_startTime                  = start_time
+        ,_peerAddress                = maybe_hashable_addr
         }
 
     let
+
+        new_session :: NewSessionCallback
+        new_session a b c = case maybe_callback of
+            Just callback -> callback a b c
+            Nothing -> return ()
+          where
+            maybe_callback =
+                (sessions_context ^. (sessionsConfig . sessionsCallbacks . newSessionCallback_SC) )
+
         io_exc_handler :: SessionComponent -> E.BlockedIndefinitelyOnMVar -> IO ()
         io_exc_handler _component _e = do
            case session_role of
@@ -511,6 +543,18 @@ http2Session session_role aware_worker client_state session_id sessions_context 
     -- stuff coming from all the workers. This function is also in charge of closing streams
     _ <- forkIOExc "s2f3" $ exc_guard SessionDataOutputThread_HTTP2SessionComponent
            $ dataOutputThread frame_size_ioref data_output session_output_mvar
+
+    -- New session!
+    case maybe_hashable_addr of
+         Just hashable_addr ->
+             new_session
+                hashable_addr
+                (Whole_SGH session_data)
+                session_data
+
+         Nothing ->
+             putStrLn "Warning, created session without registering it"
+
 
     -- If I'm a client, I also need a thread to poll for requests
     when (session_role == Client_SR) $ do
@@ -894,6 +938,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
     current_session_id        <- view sessionIdAtSession
     session_input             <- view sessionInput
     stream2workerthread       <- view stream2WorkerThread
+    maybe_hashable_addr       <- view peerAddress
 
     if opens_stream
       then {-# SCC gpAb #-} do
@@ -1010,7 +1055,8 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                       _streamId_Pr = stream_id,
                       _sessionId_Pr = current_session_id,
                       _protocol_Pr = Http2_HPV,
-                      _anouncedProtocols_Pr = Nothing
+                      _anouncedProtocols_Pr = Nothing,
+                      _peerAddress_Pr = maybe_hashable_addr
                       }
                   request' = Request {
                       _headers_RQ = header_list_after,
@@ -1271,9 +1317,13 @@ closeConnectionBecauseIsInvalid error_code = do
         -- Notify the framer that the session is closing, so
         -- that it stops accepting frames from connected sources
         -- (Streams?)
-        session_output <- takeMVar session_output_mvar
-        writeChan session_output $ TT.Command_StFB (TT.SpecificTerminate_SOC last_good_stream error_code)
-        putMVar session_output_mvar session_output
+        withMVar session_output_mvar $ \ session_output -> do
+            writeChan session_output $
+                TT.Command_StFB
+                   (
+                       TT.SpecificTerminate_SOC last_good_stream error_code
+                   )
+            putMVar session_output_mvar session_output
 
         -- And unwind the input thread in the session, so that the
         -- exception handler runs....
@@ -1285,7 +1335,6 @@ closeConnectionBecauseIsInvalid error_code = do
 -- Sends a GO_AWAY frame and closes everything, without being too drastic
 quietlyCloseConnection :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
 quietlyCloseConnection error_code = do
-    -- liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput
@@ -1302,9 +1351,11 @@ quietlyCloseConnection error_code = do
         -- Notify the framer that the session is closing, so
         -- that it stops accepting frames from connected sources
         -- (Streams?)
-        session_output <- takeMVar session_output_mvar
-        writeChan session_output $ TT.Command_StFB (TT.SpecificTerminate_SOC last_good_stream error_code)
-        putMVar session_output_mvar session_output
+        withMVar session_output_mvar $ \ session_output ->
+            writeChan session_output $
+                TT.Command_StFB (
+                     TT.SpecificTerminate_SOC last_good_stream error_code
+                )
 
     -- It never gets here
     return ()
@@ -1325,17 +1376,6 @@ closeConnectionForClient error_code = do
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput
     stream2workerthread <- view stream2WorkerThread
-    -- sendOutFrame
-    --     (NH2.EncodeInfo
-    --         NH2.defaultFlags
-    --         0
-    --         Nothing
-    --     )
-    --     (NH2.GoAwayFrame
-    --         last_good_stream
-    --         error_code
-    --         ""
-    --     )
 
     client_is_closed_mvar <- view (simpleClient . clientIsClosed_ClS )
 

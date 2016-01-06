@@ -42,7 +42,11 @@ import           Data.Maybe                             (fromMaybe)
 import qualified Network.HTTP2                          as NH2
 
 import qualified Data.HashTable.IO                      as H
-import           System.Clock                           (Clock(..),getTime)
+import           System.Clock                           (
+                                                          Clock(..)
+                                                        , getTime
+                                                        , TimeSpec
+                                                        )
 -- import           System.Mem.Weak
 
 import           SecondTransfer.Sessions.Internal       (
@@ -156,16 +160,21 @@ data SessionPayload =
     |ClientState_SP ClientState  -- I'm a client
 
 
+newtype SimpleSessionControl  = SimpleSessionControl (TimeSpec, IO () )
+
+
+instance ActivityMeteredSession SimpleSessionControl where
+    sessionLastActivity (SimpleSessionControl (t,_button)) = return t
+
+
 wrapSession :: SessionPayload -> SessionsContext -> Attendant
-wrapSession session_payload sessions_context io_callbacks = do
+wrapSession session_payload sessions_context connection_info io_callbacks = do
 
     let
         session_id_mvar = view nextSessionId sessions_context
         push_action = io_callbacks ^. pushAction_IOC
         pull_action = io_callbacks ^. pullAction_IOC
         close_action = io_callbacks ^. closeAction_IOC
-        -- best_effort_pull_action = io_callbacks ^. bestEffortPullAction_IOC
-
 
     new_session_id <- modifyMVarMasked
         session_id_mvar $
@@ -173,6 +182,7 @@ wrapSession session_payload sessions_context io_callbacks = do
 
     (session_input, session_output) <- case session_payload of
         AwareWorker_SP aware_worker ->  http2ServerSession
+                                            connection_info
                                             aware_worker
                                             new_session_id
                                             sessions_context

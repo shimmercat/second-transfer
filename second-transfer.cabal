@@ -115,6 +115,7 @@ library
                   , SecondTransfer.TLS.Botan
                   , SecondTransfer.Sessions.Internal
                   , SecondTransfer.Sessions.Tidal
+                  , SecondTransfer.Sessions.HashableSockAddr
                   , SecondTransfer.Http2.Session
                   , SecondTransfer.Http2.Framer
                   , SecondTransfer.MainLoop.ClientPetitioner

@@ -45,6 +45,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , streamId_Pr
     , sessionId_Pr
     , anouncedProtocols_Pr
+    , peerAddress_Pr
     , protocol_Pr
     , fragmentDeliveryCallback_Ef
     , priorityEffect_Ef
@@ -65,6 +66,7 @@ import           Data.Foldable                         (find)
 import           System.Clock                          (TimeSpec)
 
 import           SecondTransfer.MainLoop.Protocol      (HttpProtocolVersion)
+import           SecondTransfer.Sessions.Config        (HashableSockAddr)
 
 
 -- | The name part of a header
@@ -102,8 +104,10 @@ data Perception = Perception {
     _startedTime_Pr       :: TimeSpec,
     -- | Which protocol is serving the request
     _protocol_Pr          :: HttpProtocolVersion,
-    -- | For new connections, probably a list of anounced protocols
-    _anouncedProtocols_Pr :: Maybe [B.ByteString]
+    -- | For new connections, probably a list of announced protocols
+    _anouncedProtocols_Pr :: Maybe [B.ByteString],
+    -- | tuple with something like the IPv4 number for the requesting host
+    _peerAddress_Pr       :: Maybe HashableSockAddr
   }
 
 makeLenses ''Perception

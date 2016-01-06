@@ -9,11 +9,8 @@ module SecondTransfer.IOCallbacks.Types (
                , PullAction
                , BestEffortPullAction
                , Attendant
-               , ControllableAttendant
                , CloseAction
                , IOCallbacks        (..)
-               , MonoDisruptible    (..)
-               , makeAttendantDisruptible
 
                , pushAction_IOC
                , pullAction_IOC
@@ -28,6 +25,8 @@ module SecondTransfer.IOCallbacks.Types (
                , TLSServerIO
                , TLSClientIO
                , SOCKS5Preface
+               , ConnectionData     (..)
+               , addr_CnD
 
                -- * Utility functions
                , PullActionWrapping
@@ -45,7 +44,7 @@ import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
 import qualified Data.ByteString.Builder                      as Bu
 
-import           SecondTransfer.MainLoop.Disruptible          (  Disruptible(..), MonoDisruptible(..) )
+import           SecondTransfer.Sessions.HashableSockAddr     (HashableSockAddr)
 
 -- | Callback type to push data to a channel. Part of this
 --   interface is the abstract exception type IOProblem. Throw an
@@ -200,36 +199,13 @@ instance IOChannels TLSServer where
 instance TLSEncryptedIO TLSServer
 instance TLSServerIO TLSServer
 
+-- | Some context  related to a connection
+newtype ConnectionData = ConnectionData { _addr_CnD :: Maybe HashableSockAddr }
+
+makeLenses ''ConnectionData
 
 -- | An Attendant is an entity that can speak a protocol, given
 --   the presented I/O callbacks. It's work is to spawn a set
 --   of threads to handle a client's session, and then return to
 --   the caller. It shouldn'r busy the calling thread.
-type Attendant = IOCallbacks -> IO ()
-
--- | After forking an attendant, it is sometimes useful to return
---   a controller type that can be used for e.g. shutdown the client's
---   session from outside.
---
---  TODO: should we rescind of this functionality? Maybe it is a good thing
---  to do so, since network connections are assumed to be reliable. So, breaking
---  an IOCallbacks in the worst possible way tests the software using them
---  for robustness.
-type ControllableAttendant controller = IOCallbacks -> IO controller
-
--- | The Damocles Attendant is disruptible in a very bad way...
-newtype Damocles = Damocles IOCallbacks
-
-instance Disruptible Damocles where
-    disrupt (Damocles io_callbacks) = ( io_callbacks ^. closeAction_IOC )
-
-
--- | This makes a normal boring attendant disruptible by invoking the "close"
---   action in the underlying IOCallbacks.
-makeAttendantDisruptible :: Attendant -> ControllableAttendant Damocles
-makeAttendantDisruptible normal =
-    \ io_callbacks -> do
-        let
-            disruptor = Damocles io_callbacks
-        normal io_callbacks
-        return  disruptor
+type Attendant = ConnectionData -> IOCallbacks -> IO ()

@@ -43,30 +43,60 @@ import qualified SecondTransfer.Utils.HTTPHeaders        as He
 
 -- import           Debug.Trace                             (traceShow)
 
+-- | Used to report metrics of the session for Http/1.1
+newtype SimpleSessionMetrics  = SimpleSessionMetrics TimeSpec
+
+
+instance ActivityMeteredSession SimpleSessionMetrics where
+    sessionLastActivity (SimpleSessionMetrics t) = return t
+
 
 -- | Session attendant that speaks HTTP/1.1
 --
 http11Attendant :: SessionsContext -> AwareWorker -> Attendant
-http11Attendant sessions_context coherent_worker attendant_callbacks
+http11Attendant sessions_context coherent_worker connection_info attendant_callbacks
     =
     do
         new_session_tag <- acquireNewSessionTag sessions_context
+        started_time <- getTime Monotonic
         -- infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
-        _ <- forkIOExc "Http1Go" $ go new_session_tag (Just "") 1
+        _ <- forkIOExc "Http1Go" $ do
+            let
+               handle = SimpleSessionMetrics started_time
+            case maybe_hashable_addr of
+                 Just hashable_addr ->
+                     new_session
+                        hashable_addr
+                        (Partial_SGH handle attendant_callbacks)
+                        push_action
+
+                 Nothing ->
+                     putStrLn "Warning, created session without registering it"
+
+            go started_time new_session_tag (Just "") 1
         return ()
   where
+    maybe_hashable_addr = connection_info ^. addr_CnD
+
     push_action = attendant_callbacks ^. pushAction_IOC
     -- pull_action = attendant_callbacks ^. pullAction_IOC
     close_action = attendant_callbacks ^. closeAction_IOC
     best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
 
-    go :: Int -> Maybe B.ByteString -> Int -> IO ()
-    go session_tag (Just leftovers) reuse_no = do
-        -- infoM "Session.Session_HTTP11" $ "(Re)Using session with tag: " ++ (show session_tag)
-        maybe_leftovers <- add_data newIncrementalHttp1Parser leftovers session_tag reuse_no
-        go session_tag maybe_leftovers (reuse_no + 1)
+    new_session :: NewSessionCallback
+    new_session a b c = case maybe_callback of
+        Just callback -> callback a b c
+        Nothing -> return ()
+      where
+        maybe_callback =
+            (sessions_context ^. (sessionsConfig . sessionsCallbacks . newSessionCallback_SC) )
 
-    go _ Nothing _  =
+    go :: TimeSpec -> Int -> Maybe B.ByteString -> Int -> IO ()
+    go started_time session_tag (Just leftovers) reuse_no = do
+        maybe_leftovers <- add_data newIncrementalHttp1Parser leftovers session_tag reuse_no
+        go started_time session_tag maybe_leftovers (reuse_no + 1)
+
+    go _ _ Nothing _  =
         return ()
 
     -- This function will invoke itself as long as data is coming for the currently-being-parsed
@@ -102,7 +132,6 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                         return Nothing
                     ) :: IOProblem -> IO (Maybe B.ByteString) )
 
-
             OnlyHeaders_H1PC headers leftovers -> do
                 -- putStrLn $ "OnlyHeaders_H1PC " ++ (show leftovers)
                 -- Ready for action...
@@ -121,7 +150,8 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                           _streamId_Pr          = reuse_no,
                           _sessionId_Pr         = session_tag,
                           _protocol_Pr          = Http11_HPV,
-                          _anouncedProtocols_Pr = Nothing
+                          _anouncedProtocols_Pr = Nothing,
+                          _peerAddress_Pr       = maybe_hashable_addr
                         }
                     }
                 answer_by_principal_stream principal_stream leftovers
@@ -154,7 +184,8 @@ http11Attendant sessions_context coherent_worker attendant_callbacks
                           _streamId_Pr          = reuse_no,
                           _sessionId_Pr         = session_tag,
                           _protocol_Pr          = Http11_HPV,
-                          _anouncedProtocols_Pr = Nothing
+                          _anouncedProtocols_Pr = Nothing,
+                          _peerAddress_Pr       = maybe_hashable_addr
                         }
                     }
                 answer_by_principal_stream principal_stream recv_leftovers
