@@ -321,7 +321,8 @@ data SessionData = SessionData {
     -- received.
     ,_lastGoodStream             :: MVar GlobalStreamId
 
-    -- Used for decoding the headers
+    -- Used for decoding the headers... actually, this dictionary should
+    -- even contain just one entry... BIG TODO!!!
     ,_stream2HeaderBlockFragment :: Stream2HeaderBlockFragment
 
     -- Used for worker threads... this is actually a pre-filled template

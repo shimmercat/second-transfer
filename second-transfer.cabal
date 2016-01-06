@@ -114,6 +114,7 @@ library
                   -- TODO: Most of these should be moved back to "other-modules"
                   , SecondTransfer.TLS.Botan
                   , SecondTransfer.Sessions.Internal
+                  , SecondTransfer.Sessions.Tidal
                   , SecondTransfer.Http2.Session
                   , SecondTransfer.Http2.Framer
                   , SecondTransfer.MainLoop.ClientPetitioner
@@ -174,7 +175,7 @@ library
                  http2 >= 1.0.2,
                  hashable >= 1.2,
                  attoparsec >= 0.12,
-                 clock >= 0.4,
+                 clock >= 0.6,
                  SafeSemaphore >= 0.10,
                  pqueue >= 1.3.0,
                  stm >= 2.3,

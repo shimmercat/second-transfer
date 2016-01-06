@@ -210,6 +210,11 @@ type Attendant = IOCallbacks -> IO ()
 -- | After forking an attendant, it is sometimes useful to return
 --   a controller type that can be used for e.g. shutdown the client's
 --   session from outside.
+--
+--  TODO: should we rescind of this functionality? Maybe it is a good thing
+--  to do so, since network connections are assumed to be reliable. So, breaking
+--  an IOCallbacks in the worst possible way tests the software using them
+--  for robustness.
 type ControllableAttendant controller = IOCallbacks -> IO controller
 
 -- | The Damocles Attendant is disruptible in a very bad way...

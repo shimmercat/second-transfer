@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell, OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell, OverloadedStrings, GADTs, DeriveGeneric #-}
 {- | Configuration and settings for the server. All constructor names are
      exported, but notice that they start with an underscore.
      They also have an equivalent lens without the
@@ -10,8 +10,11 @@ module SecondTransfer.Sessions.Config(
                , defaultSessionsEnrichedHeaders
                , sessionsCallbacks
                , sessionsEnrichedHeaders
+
                , reportErrorCallback_SC
                , dataDeliveryCallback_SC
+               , newSessionCallback_SC
+
                , dataFrameSize
                , addUsedProtocol
                , pushEnabled
@@ -24,16 +27,31 @@ module SecondTransfer.Sessions.Config(
                , SessionsCallbacks                      (..)
                , SessionsEnrichedHeaders                (..)
                , SessionsConfig                         (..)
+               , SessionGenericHandle                   (..)
+
                , ErrorCallback
                , DataFrameDeliveryCallback
-     ) where
+               , NewSessionCallback
+               , HashableSockAddr                       (..)
+
+               , ActivityMeteredSession                 (..)
+               , CleanlyPrunableSession                 (..)
+
+       ) where
 
 
 -- import           Control.Concurrent.MVar (MVar)
 import           Control.Exception                      (SomeException)
 import           Control.Lens                           (makeLenses)
+
+import           GHC.Generics (Generic)
+import           Data.Hashable
+import           Data.Word                              (Word8)
+
+--import           System.Mem.Weak                        (Weak)
 import           System.Clock                           (TimeSpec)
 
+import           SecondTransfer.IOCallbacks.Types       (IOCallbacks)
 
 -- | Information used to identify a particular session.
 newtype SessionCoordinates = SessionCoordinates  Int
@@ -76,19 +94,58 @@ data SessionComponent =
 --   session.
 type ErrorCallback = (SessionComponent, SessionCoordinates, SomeException) -> IO ()
 
+
+-- | Sessions follow this class, so that they can be rescinded on inactivity
+class ActivityMeteredSession a where
+    sessionLastActivity :: a -> IO TimeSpec
+
+-- | Clean-cut of sessions
+class CleanlyPrunableSession a where
+    cleanlyCloseSession :: a -> IO ()
+
+
 -- | Used by the session engine to report delivery of each data frame. Keep this callback very
 --   light, it runs in the main sending thread. It is called as
 --   f session_id stream_id ordinal when_delivered
 type DataFrameDeliveryCallback =  Int -> Int -> Int -> TimeSpec ->  IO ()
 
+
+-- | An object with information about a new session, wrapped in a weak pointer. At the time the
+--   newSessionCallback_SC is invoked, the reference inside the weak pointer is guranteed to be alive.
+--   It may die later though.
+data SessionGenericHandle where
+    Whole_SGH :: (ActivityMeteredSession a, CleanlyPrunableSession a) => a -> SessionGenericHandle
+    Partial_SGH :: (ActivityMeteredSession a) => a -> IOCallbacks -> SessionGenericHandle
+
+instance ActivityMeteredSession SessionGenericHandle where
+    sessionLastActivity (Whole_SGH a) = sessionLastActivity a
+    sessionLastActivity (Partial_SGH a _) = sessionLastActivity a
+
+
+-- | Since SockAddr is not hashable, we need our own. TODO: IPv6.
+newtype HashableSockAddr = HashableSockAddr (Word8, Word8, Word8, Word8)
+    deriving (Eq, Show, Generic)
+
+instance  Hashable HashableSockAddr
+
+-- | Callback to be invoked when a  client establishes a new session. The first parameter
+--   is the address of the client, and the second parameter is a controller that can be used to
+--   reduce the number of connections from time to time, the third parameter is a key on which
+--   the second paramter should be made a weak pointer
+type NewSessionCallback =  HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
+
 -- | Callbacks that you can provide your sessions to notify you
 --   of interesting things happening in the server.
 data SessionsCallbacks = SessionsCallbacks {
-    -- Callback used to report errors during this session
-    _reportErrorCallback_SC  :: Maybe ErrorCallback,
-    -- Callback used to report delivery of individual data frames
-    _dataDeliveryCallback_SC :: Maybe DataFrameDeliveryCallback
-}
+    -- | Used to report errors during this session
+    _reportErrorCallback_SC  :: Maybe ErrorCallback
+    -- | Used to report delivery of individual data frames
+  ,  _dataDeliveryCallback_SC :: Maybe DataFrameDeliveryCallback
+    -- | Used to notify the session manager of new sessions, so
+    --   that the session manager registers them (in a weak map)
+    --   if need comes
+  , _newSessionCallback_SC  :: Maybe NewSessionCallback
+  }
 
 makeLenses ''SessionsCallbacks
 
@@ -156,7 +213,8 @@ defaultSessionsConfig :: SessionsConfig
 defaultSessionsConfig = SessionsConfig {
      _sessionsCallbacks = SessionsCallbacks {
             _reportErrorCallback_SC = Nothing,
-            _dataDeliveryCallback_SC = Nothing
+            _dataDeliveryCallback_SC = Nothing,
+            _newSessionCallback_SC = Nothing
         }
   , _sessionsEnrichedHeaders = defaultSessionsEnrichedHeaders
   , _dataFrameSize = 16*1024
