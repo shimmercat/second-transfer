@@ -472,9 +472,9 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
 
     let
 
-        new_session :: NewSessionCallback
+        new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
         new_session a b c = case maybe_callback of
-            Just callback -> callback a b c
+            Just (NewSessionCallback callback) -> callback a b c
             Nothing -> return ()
           where
             maybe_callback =

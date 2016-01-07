@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, RankNTypes #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http1.Session(
     http11Attendant
@@ -83,9 +83,9 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     close_action = attendant_callbacks ^. closeAction_IOC
     best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
 
-    new_session :: NewSessionCallback
+    new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
     new_session a b c = case maybe_callback of
-        Just callback -> callback a b c
+        Just (NewSessionCallback callback) -> callback a b c
         Nothing -> return ()
       where
         maybe_callback =
