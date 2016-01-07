@@ -677,7 +677,7 @@ sessionInputThread  = do
         MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             is_iddle <- streamIsIdle stream_id
-            if ( stream_id == 0 || is_iddle )
+            if ( stream_id == 0 || (is_iddle && odd stream_id ) )
               then do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
@@ -793,6 +793,7 @@ sessionInputThread  = do
 
         MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame settings_list))
           | frameLength frame_header `mod` 6 /= 0 -> do
+            liftIO . putStrLn $ "FrameSizeError"
             closeConnectionBecauseIsInvalid NH2.FrameSizeError
             return ()
 
@@ -806,13 +807,13 @@ sessionInputThread  = do
 
           | otherwise  -> do
             -- Frame was received by the peer, do nothing here...
+            liftIO . putStrLn $ "SettingsHasWrongSize"
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
         MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
-                liftIO $ putStrLn $ "quietly close conn"
                 quietlyCloseConnection NH2.NoError
                 return ()
 
@@ -1300,7 +1301,6 @@ validateIncomingHeadersClient headers_editor = do
 -- thread of the session.
 closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
 closeConnectionBecauseIsInvalid error_code = do
-    -- liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput
