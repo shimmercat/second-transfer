@@ -209,22 +209,11 @@ whenAddingConnection sock_addr handle key =
             connection_count = length current_connections
         return connection_count
 
-    -- liftIO . putStrLn . show $ connection_count
-
     when (connection_count >= highwater_mark) $ do
         -- Take measures!
-        --liftIO . putStrLn  $ "REACHING WATERMARK"
         pruneSameHost
         pruneOldestConnections (highwater_mark `div` 3)
 
-    -- connection_count2 <- liftIO . withMVar connections_mvar $ \ current_connections  -> do
-    --     let
-    --         c' = length current_connections
-    --     return c'
-
-    --liftIO . putStrLn $ "connection count after: " ++ (show connection_count2)
-    -- And then, of course add the connection
-    -- Maybe that behaviour needs to be changed
     justRegisterNewConnection sock_addr key handle
 
 
