@@ -81,7 +81,6 @@ createAndBindListeningSocket hostname portnumber = do
     NS.setSocketOption the_socket NS.NoDelay 1
     NS.bind the_socket host_address
     NS.listen the_socket 20
-    putStrLn "LISTEN JUST CALLED"
     -- bound <- NS.isBound the_socket
     return the_socket
 
