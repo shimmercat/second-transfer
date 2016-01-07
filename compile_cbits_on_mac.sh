@@ -25,7 +25,7 @@ libname=libsecond_transfer__enable_tls.dylib
 iplace=/usr/local/shimmercat-build/
 
 pushd $THIS_DIR/..
-placement_path=`stack path --local-install-root`/lib/x86_64-osx-ghc-7.10.2/
+placement_path=`stack path --local-install-root`/lib/x86_64-osx-ghc-7.10.3/
 popd
 echo PLACEMENT: $placement_path
 
