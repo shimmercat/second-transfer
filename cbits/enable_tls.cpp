@@ -81,6 +81,8 @@ public:
         result.push_back("AEAD");
         result.push_back("SHA-384");
         result.push_back("SHA-256");
+        //
+        result.push_back("SHA-1");
         return result;
     }
 
@@ -95,6 +97,7 @@ public:
         result.push_back("AES-256/CCM");
         // For use with old browsers....
         result.push_back("AES-256");
+        result.push_back("3DES");
         return result;
     }
 
@@ -104,6 +107,7 @@ public:
         result.push_back("ECDH");
         result.push_back("DH");
         result.push_back("RSA");
+        result.push_back("EDCHE");
         return result;
     }
 
