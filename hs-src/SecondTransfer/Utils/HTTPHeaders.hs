@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, Rank2Types, GeneralizedNewtypeDeriving, DeriveGeneric  #-}
+{-# LANGUAGE OverloadedStrings, Rank2Types, GeneralizedNewtypeDeriving, DeriveGeneric, TemplateHaskell  #-}
 {-|
 
 Utilities for working with headers.
@@ -33,13 +33,22 @@ module SecondTransfer.Utils.HTTPHeaders (
     ,headerIsPseudo
     ,combineAuthorityAndHost
     ,removeConnectionHeaders
+    ,fusionHeaders
+
+    , PrettyPrintHeadersConfig        (..)
+    , indentSpace_PPHC
+    , prettyPrintHeaders
+    , defaultPrettyPrintHeadersConfig
     ) where
 
 import qualified Control.Lens                           as L
 import           Control.Lens                           ( (^.) )
+import           Control.DeepSeq                        (deepseq)
 import           GHC.Generics                           (Generic)
 
 import qualified Data.ByteString                        as B
+import qualified Data.ByteString.Lazy                   as LB
+import qualified Data.ByteString.Builder                as Bu
 import           Data.ByteString.Char8                  (pack)
 import           Data.Char                              (isUpper)
 import           Data.List                              (find)
@@ -371,3 +380,76 @@ removeConnectionHeaders headers =
                (h /= "transfer-encoding") &&
                (h /= "upgrade")
            ) headers
+
+
+-- | Fusion values for a specific header, using a provided separator.
+fusionHeaders :: HeaderName -> B.ByteString -> Headers -> Headers
+fusionHeaders header_name separator headers =
+  let
+     (before_first_cookie, after_first_cookie, all_cookie_values) = go False headers
+     new_cookie_header =
+         if length all_cookie_values > 0 then
+           LB.toStrict . Bu.toLazyByteString $
+               (Bu.byteString . head $ all_cookie_values)
+                   `mappend` (mconcat $ map (\ v ->
+                                               Bu.byteString separator `mappend` Bu.byteString v
+                                            )
+                                            (tail all_cookie_values)
+                             )
+         else
+           ""
+
+     go ::  Bool -> Headers -> ( (Headers -> Headers), (Headers->Headers), [B.ByteString]  )
+     go  _seen_first_cookie [] =
+         (id, id, [])
+     go False ((hh,hv):moreheaders)
+       | hh == header_name
+         = let
+               new_values = hv:morevalues
+               (before, after, morevalues) = go True moreheaders
+           in (before, after , new_values)
+
+       | otherwise
+         = let
+               (retrans, otherheaders, morevalues) = go False moreheaders
+               newfun = \ x -> ( (hh, hv) : (retrans x))
+           in (newfun, otherheaders, morevalues)
+
+     go True ((hh, hv):moreheaders)
+       | hh == header_name
+         = let
+               new_values = hv:morevalues
+               (retrans, otherheaders, morevalues) = go True moreheaders
+           in (retrans, otherheaders , new_values)
+
+       | otherwise
+         = let
+               (retrans, otherheaders, morevalues) = go True moreheaders
+               after = \ x -> ( (hh, hv) : (otherheaders x))
+           in (retrans, after, morevalues)
+     result =  before_first_cookie ( (header_name, new_cookie_header): after_first_cookie [])
+  in
+     result `deepseq` result
+
+
+
+data PrettyPrintHeadersConfig = PrettyPrintHeadersConfig {
+    _indentSpace_PPHC       :: Int
+    }
+
+L.makeLenses ''PrettyPrintHeadersConfig
+
+
+defaultPrettyPrintHeadersConfig :: PrettyPrintHeadersConfig
+defaultPrettyPrintHeadersConfig = PrettyPrintHeadersConfig {
+    _indentSpace_PPHC       = 8
+    }
+
+prettyPrintHeaders :: PrettyPrintHeadersConfig -> Headers -> B.ByteString
+prettyPrintHeaders config headers =
+    LB.toStrict . Bu.toLazyByteString . mconcat $ map (\ (h,v) ->
+                    space `mappend` Bu.byteString h `mappend` ": " `mappend` Bu.byteString v `mappend` "\n"
+                )
+                headers
+  where
+     space = Bu.byteString . pack . take (config ^. indentSpace_PPHC) . repeat $ ' '
