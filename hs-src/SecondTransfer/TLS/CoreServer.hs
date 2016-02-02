@@ -1,4 +1,3 @@
-
 {-# LANGUAGE RankNTypes,
              FunctionalDependencies,
              PartialTypeSignatures,
@@ -22,6 +21,7 @@ module SecondTransfer.TLS.CoreServer (
                , tlsServeWithALPNNSSockAddr_Prepare
                , tlsServeWithALPNNSSockAddr_Do
                , Socks5Hold
+
                , tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
                , tlsServeWithALPNUnderSOCKS5SockAddr_Do
 
@@ -38,6 +38,7 @@ module SecondTransfer.TLS.CoreServer (
 
 import           Control.Concurrent
 import           Control.Monad.IO.Class                                    (liftIO)
+import           Control.Monad                                             (when)
 import           Control.Lens                                              ( (^.), makeLenses, over, set )
 
 import           Data.Conduit
@@ -49,6 +50,7 @@ import           Data.Maybe                                                (from
 import qualified Data.ByteString                                           as B
 import           Data.ByteString.Char8                                     (pack, unpack)
 import           Data.Int                                                  (Int64)
+import           Data.IORef
 
 --import qualified Data.ByteString.Lazy                                      as LB
 --import qualified Data.ByteString.Builder                                   as Bu
@@ -235,8 +237,10 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
           let new_conn_id = s ^. nextConnId_S
               live_now_ = (s ^. liveSessions_S) + 1
               new_s = over nextConnId_S ( + 1 ) s
-              new_new_s = set liveSessions_S live_now_ s
+              new_new_s = set liveSessions_S live_now_ new_s
           return $  new_new_s `seq` (new_new_s, (new_conn_id, live_now_) )
+
+      putStrLn $ "Got new connection " ++ (show new_conn_id)
 
       connection_callbacks <- withMVar session_handler_state_mvar $ \ s -> do
           return $ s ^. connCallbacks_S
@@ -255,10 +259,15 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
       session <- unencryptTLSServerIO ctx encrypted_io
       plaintext_io_callbacks_u <- handshake session :: IO IOCallbacks
 
+      close_reported <- newIORef False
+
       let
           instr = do
               (plaintext_io_callbacks_u ^. closeAction_IOC)
-              log_event (Ended_CoEv wconn_id)
+              close_reported_x <- readIORef close_reported
+              when (not close_reported_x) $ do
+                  log_event (Ended_CoEv wconn_id)
+                  writeIORef close_reported True
           plaintext_io_callbacks = set closeAction_IOC instr plaintext_io_callbacks_u
 
       maybe_sel_prot <- getSelectedProtocol session

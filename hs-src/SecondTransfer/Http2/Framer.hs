@@ -624,10 +624,13 @@ outputGatherer session_output = do
 
                case_ -> error $ "Error: case not spefified " ++ (show case_)
 
-    -- We start by sending a settings frame
+    -- We start by sending a settings frame... NOTICE that this settings frame
+    -- should be configurable TODO!!
     pushControlFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
-        (NH2.SettingsFrame [])
+        (NH2.SettingsFrame [
+              (NH2.SettingsMaxConcurrentStreams, 100)
+                           ])
 
     -- And then we continue...
     loopPart

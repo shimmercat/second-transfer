@@ -339,6 +339,10 @@ extern "C" botan_tls_context_t* iocba_make_tls_context(
     };
 }
 
+// Oh Gods, forgive me
+pthread_mutex_t new_ctx_mutex = PTHREAD_MUTEX_INITIALIZER ;
+pthread_mutex_t new_channel_mutex = PTHREAD_MUTEX_INITIALIZER ;
+
 extern "C" botan_tls_context_t* iocba_make_tls_context_from_memory(
     const uint8_t* cert_data,
     uint32_t cert_data_length,
@@ -346,6 +350,8 @@ extern "C" botan_tls_context_t* iocba_make_tls_context_from_memory(
     uint32_t key_data_length
 )
 {
+    // printf("New tls context from memory\n");
+    pthread_mutex_lock(&new_ctx_mutex);
     Botan::AutoSeeded_RNG* rng=new Botan::AutoSeeded_RNG();
     std::vector< std::string > protocols;
 
@@ -353,7 +359,7 @@ extern "C" botan_tls_context_t* iocba_make_tls_context_from_memory(
     protocols.push_back("h2");
     protocols.push_back("http/1.1");
 
-    return new botan_tls_context_t{
+    botan_tls_context_t* result = new botan_tls_context_t{
         second_transfer::HereCredentialsManager(
             cert_data,
             cert_data_length,
@@ -365,6 +371,8 @@ extern "C" botan_tls_context_t* iocba_make_tls_context_from_memory(
         protocols,
         second_transfer::HereTLSPolicy()
     };
+    pthread_mutex_unlock(&new_ctx_mutex);
+    return result;
 }
 
 
@@ -380,6 +388,8 @@ extern "C" void* iocba_new_tls_server_channel (
        void* botan_pad_ref,
        botan_tls_context_t* ctx)
 {
+    //printf("New tls server channel\n");
+    pthread_mutex_lock(&new_channel_mutex);
     auto* server =
         new Botan::TLS::Server(
             std::bind(second_transfer::output_dn_cb, botan_pad_ref, std::placeholders::_1, std::placeholders::_2),
@@ -392,6 +402,7 @@ extern "C" void* iocba_new_tls_server_channel (
             *(ctx->rng),
             std::bind(second_transfer::defaultProtocolSelector, botan_pad_ref, std::placeholders::_1)
         );
+    pthread_mutex_unlock(&new_channel_mutex);
     return server;
 }
 

@@ -814,6 +814,7 @@ sessionInputThread  = do
         MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
+                liftIO . putStrLn $ "Received GoAway frame"
                 quietlyCloseConnection NH2.NoError
                 return ()
 
@@ -847,6 +848,9 @@ sessionInputThread  = do
         let
             enable_push = lookup NH2.SettingsEnablePush _settings_list
             max_frame_size = lookup NH2.SettingsMaxFrameSize _settings_list
+
+            -- Needed because of curl and nghttp2 bug
+            max_concurrent_streams = 100
 
             -- Handled by the framer, but errors should be reported here.
             max_flow_control_size = lookup NH2.SettingsInitialWindowSize _settings_list
@@ -1301,6 +1305,7 @@ validateIncomingHeadersClient headers_editor = do
 -- thread of the session.
 closeConnectionBecauseIsInvalid :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
 closeConnectionBecauseIsInvalid error_code = do
+    liftIO $ putStrLn "CloseConnectionBecauseIsInvalid-- Called"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput
@@ -1335,6 +1340,7 @@ closeConnectionBecauseIsInvalid error_code = do
 -- Sends a GO_AWAY frame and closes everything, without being too drastic
 quietlyCloseConnection :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
 quietlyCloseConnection error_code = do
+    liftIO $ putStrLn "QuietlyClosesConnection -- Called"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput
@@ -1366,12 +1372,12 @@ quietlyCloseConnection error_code = do
 -- an exception of type ClientSessionAbortedException
 closeConnectionForClient :: NH2.ErrorCodeId -> ReaderT SessionData IO a
 closeConnectionForClient error_code = do
+    liftIO $ putStrLn "closeConnectionForClient -- Called"
     let
         use_reason = case error_code of
             NH2.NoError -> NormalTermination_CCR
             _           -> ProtocolError_CCR
 
-    -- liftIO $ errorM "HTTP2.Session" "closeConnectionBecauseIsInvalid called!"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
     session_output_mvar <- view sessionOutput

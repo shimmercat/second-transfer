@@ -207,7 +207,8 @@ library
       cc-options: -O0 -g3 -std=c++11
       ld-options: -g3
   else
-      cc-options: -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
+      -- -g3 temporarily set
+      cc-options: -g3 -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
   if os(linux)
       ghc-options: -pgmPcpphs "-pgmc g++"  -optP--cpp
   if os(darwin)

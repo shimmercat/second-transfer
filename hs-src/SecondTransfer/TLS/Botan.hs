@@ -29,6 +29,8 @@ import           Control.Lens                                              ( (^.
                                                                              --set, Lens'
                                                                            )
 
+import           System.IO.Unsafe                                          (unsafePerformIO)
+
 -- Import all of it!
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception                                  (
@@ -93,6 +95,10 @@ withBotanPad :: BotanPadRef -> (BotanPad -> IO a) -> IO a
 withBotanPad siocb cb = do
     botan_pad <- deRefStablePtr siocb
     cb botan_pad
+
+dontMultiThreadBotan :: MVar ()
+{-# NOINLINE dontMultiThreadBotan #-}
+dontMultiThreadBotan = unsafePerformIO (newMVar ())
 
 -- withBotanPadReadLock :: BotanPadRef -> (BotanPad -> IO () ) -> IO ()
 -- withBotanPadReadLock = withBotanPadLock readLock_BP
@@ -234,7 +240,7 @@ botanPushData botan_pad datum = do
         case mp of
             Nothing ->
                 Un.unsafeUseAsCStringLen strict_datum $ \ (pch, len) -> do
-                  withForeignPtr channel $ \ c -> do
+                  withForeignPtr channel $ \ c -> withMVar dontMultiThreadBotan . const $  do
                      iocba_cleartext_push c pch len
 
             Just _ -> do
@@ -261,8 +267,8 @@ pullAvailableData botan_pad can_wait = do
             takeMVar data_came_mvar
             maybe_problem <- tryReadMVar io_problem_mvar
             case maybe_problem of
-                Nothing -> do
-                    pullAvailableData botan_pad True
+                Nothing ->
+                        pullAvailableData botan_pad True
 
                 Just () -> do
                     -- avail_data' <- atomicModifyIORef' avail_data_iorref $ \ bu -> (mempty, bu)
@@ -351,10 +357,15 @@ unencryptChannelData botan_ctx tls_data  = do
 
         tls_pull_data_action = tls_io_callbacks ^. bestEffortPullAction_IOC
 
+        destructor =
+            -- withMVar dontMultiThreadBotan . const $
+               iocba_delete_tls_server_channel
+
     botan_pad_stable_ref <- newStablePtr new_botan_pad
 
     tls_channel_ptr <- withForeignPtr fctx $ \ x -> iocba_new_tls_server_channel botan_pad_stable_ref x
-    tls_channel_fptr <- newForeignPtr iocba_delete_tls_server_channel tls_channel_ptr
+
+    tls_channel_fptr <- newForeignPtr destructor tls_channel_ptr
 
     let
 
@@ -378,8 +389,10 @@ unencryptChannelData botan_ctx tls_data  = do
                         maybe_problem <- tryReadMVar problem_mvar
                         case maybe_problem of
                             Nothing -> do
-                                engine_result <- Un.unsafeUseAsCStringLen new_data $ \ (pch, len) -> do
-                                    iocba_receive_data tls_channel_ptr pch (fromIntegral len)
+                                engine_result <-
+                                    Un.unsafeUseAsCStringLen new_data $ \ (pch, len) ->
+                                        withMVar dontMultiThreadBotan . const $
+                                            iocba_receive_data tls_channel_ptr pch (fromIntegral len)
                                 if engine_result < 0
                                   then do
                                     _ <- tryPutMVar problem_mvar ()
@@ -428,7 +441,8 @@ closeBotan botan_pad =
             Just _ -> do
                 -- Cleanly close tls, if nobody else is writing there
                 withMVar (botan_pad ^. writeLock_BP) $ \ _ -> do
-                    iocba_close tls_channel_ptr
+                    withMVar dontMultiThreadBotan . const $
+                        iocba_close tls_channel_ptr
                     _ <- tryPutMVar (botan_pad ^. problem_BP) ()
                     _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
                     return ()
