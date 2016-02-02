@@ -34,6 +34,7 @@ module SecondTransfer.Http2.Session(
 -- System grade utilities imports
 import           Control.Concurrent                     (ThreadId)
 import           Control.Concurrent.Chan
+import qualified Control.Concurrent.BoundedChan         as BC
 import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
 import           Control.Monad                          (
@@ -179,21 +180,22 @@ sendFirstFrameToSession (SessionInput chan) frame = writeChan chan $ FirstFrame_
 sendCommandToSession :: SessionInput  -> SessionInputCommand -> IO ()
 sendCommandToSession (SessionInput chan) command = writeChan chan command
 
-newtype SessionOutputChannelAbstraction = SOCA (Chan TT.SessionOutputPacket)
+newtype SessionOutputChannelAbstraction = SOCA (BC.BoundedChan TT.SessionOutputPacket)
 
 sendOutputToFramer :: SessionOutputChannelAbstraction -> TT.SessionOutputPacket -> IO ()
-sendOutputToFramer (SOCA chan) p =  writeChan chan p
+sendOutputToFramer (SOCA chan) p =  BC.writeChan chan p
 
 newSessionOutput :: IO SessionOutputChannelAbstraction
 newSessionOutput =
   do
-    chan <- newChan
+    -- TODO: Make the number below configurable!!!
+    chan <- BC.newBoundedChan 4
     return . SOCA $ chan
 
 -- From outside, one can only read from this one
 type SessionOutput = SessionOutputChannelAbstraction
 getFrameFromSession :: SessionOutput -> IO TT.SessionOutputPacket
-getFrameFromSession (SOCA chan) = readChan chan
+getFrameFromSession (SOCA chan) = BC.readChan chan
 
 
 type HashTable k v = H.CuckooHashTable k v
