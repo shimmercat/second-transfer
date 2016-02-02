@@ -237,7 +237,7 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
           let new_conn_id = s ^. nextConnId_S
               live_now_ = (s ^. liveSessions_S) + 1
               new_s = over nextConnId_S ( + 1 ) s
-              new_new_s = set liveSessions_S live_now_ new_s
+              new_new_s = live_now_ `seq` set liveSessions_S live_now_ new_s
           return $  new_new_s `seq` (new_new_s, (new_conn_id, live_now_) )
 
       putStrLn $ "Got new connection " ++ (show new_conn_id)
@@ -259,15 +259,23 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
       session <- unencryptTLSServerIO ctx encrypted_io
       plaintext_io_callbacks_u <- handshake session :: IO IOCallbacks
 
-      close_reported <- newIORef False
+      close_reported <- newMVar False
 
       let
           instr = do
               (plaintext_io_callbacks_u ^. closeAction_IOC)
-              close_reported_x <- readIORef close_reported
-              when (not close_reported_x) $ do
-                  log_event (Ended_CoEv wconn_id)
-                  writeIORef close_reported True
+              modifyMVar_ close_reported $ \ close_reported_x -> do
+                  if (not close_reported_x) then  do
+                      log_event (Ended_CoEv wconn_id)
+                      modifyMVar_ session_handler_state_mvar $ \ s -> do
+                          let new_conn_id = s ^. nextConnId_S
+                              live_now_ = (s ^. liveSessions_S) - 1
+                              new_new_s = set liveSessions_S live_now_ s
+                          new_new_s `seq` return new_new_s
+                      return True
+                    else
+                      return close_reported_x
+
           plaintext_io_callbacks = set closeAction_IOC instr plaintext_io_callbacks_u
 
       maybe_sel_prot <- getSelectedProtocol session

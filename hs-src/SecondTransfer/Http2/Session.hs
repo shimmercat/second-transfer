@@ -179,12 +179,21 @@ sendFirstFrameToSession (SessionInput chan) frame = writeChan chan $ FirstFrame_
 sendCommandToSession :: SessionInput  -> SessionInputCommand -> IO ()
 sendCommandToSession (SessionInput chan) command = writeChan chan command
 
-type SessionOutputChannelAbstraction = Chan TT.SessionOutputPacket
+newtype SessionOutputChannelAbstraction = SOCA (Chan TT.SessionOutputPacket)
+
+sendOutputToFramer :: SessionOutputChannelAbstraction -> TT.SessionOutputPacket -> IO ()
+sendOutputToFramer (SOCA chan) p =  writeChan chan p
+
+newSessionOutput :: IO SessionOutputChannelAbstraction
+newSessionOutput =
+  do
+    chan <- newChan
+    return . SOCA $ chan
 
 -- From outside, one can only read from this one
-newtype SessionOutput = SessionOutput SessionOutputChannelAbstraction
+type SessionOutput = SessionOutputChannelAbstraction
 getFrameFromSession :: SessionOutput -> IO TT.SessionOutputPacket
-getFrameFromSession (SessionOutput chan) = readChan chan
+getFrameFromSession (SOCA chan) = readChan chan
 
 
 type HashTable k v = H.CuckooHashTable k v
@@ -393,7 +402,7 @@ http2ClientSession client_state session_id sctx =
 http2Session :: Maybe ConnectionData -> SessionRole -> AwareWorker -> ClientState  -> Int -> SessionsContext -> IO Session
 http2Session maybe_connection_data session_role aware_worker client_state session_id sessions_context =   do
     session_input             <- newChan
-    session_output            <- newChan
+    session_output            <- newSessionOutput
     session_output_mvar       <- newMVar session_output
 
 
@@ -568,7 +577,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
     -- socket.
 
     return ( (SessionInput session_input),
-             (SessionOutput session_output) )
+             session_output )
 
 
 -- TODO: Some ill clients can break this thread with exceptions. Make these paths a bit
@@ -1229,26 +1238,24 @@ sendOutPriorityTrain :: NH2.EncodeInfo -> NH2.FramePayload  -> ReaderT SessionDa
 sendOutPriorityTrain encode_info payload = do
     session_output_mvar <- view sessionOutput
 
-    session_output <- liftIO $ takeMVar session_output_mvar
-    liftIO $ writeChan session_output $ TT.PriorityTrain_StFB [(
-      encode_info,
-      payload,
-      -- Not sending effects in this frame, since it is not related...
-      error "sendOutFrameNotFor")]
-    liftIO $ putMVar session_output_mvar session_output
+    liftIO $ withMVar session_output_mvar $ \ session_output ->
+      sendOutputToFramer session_output  $ TT.PriorityTrain_StFB [(
+          encode_info,
+          payload,
+          -- Not sending effects in this frame, since it is not related...
+          error "sendOutFrameNotFor")]
+
 
 sendOutPriorityTrainMany :: [(NH2.EncodeInfo , NH2.FramePayload)]  -> ReaderT SessionData IO ()
 sendOutPriorityTrainMany many = do
     session_output_mvar <- view sessionOutput
 
-    session_output <- liftIO $ takeMVar session_output_mvar
-    liftIO $
-        writeChan session_output  $
-        TT.PriorityTrain_StFB $
-        map
-            (\(encode_info, payload) -> (encode_info, payload, error "no-effect"))
-        many
-    liftIO $ putMVar session_output_mvar session_output
+    liftIO $ withMVar session_output_mvar $ \ session_output ->
+        sendOutputToFramer session_output $
+            TT.PriorityTrain_StFB $
+            map
+                (\(encode_info, payload) -> (encode_info, payload, error "no-effect"))
+                many
 
 
 -- TODO: Close connection on unexepcted pseudo-headers
@@ -1323,12 +1330,12 @@ closeConnectionBecauseIsInvalid error_code = do
         -- that it stops accepting frames from connected sources
         -- (Streams?)
         withMVar session_output_mvar $ \ session_output -> do
-            writeChan session_output $
+            sendOutputToFramer session_output $
                 TT.Command_StFB
                    (
                        TT.SpecificTerminate_SOC last_good_stream error_code
                    )
-            putMVar session_output_mvar session_output
+            -- putMVar session_output_mvar session_output
 
         -- And unwind the input thread in the session, so that the
         -- exception handler runs....
@@ -1358,7 +1365,7 @@ quietlyCloseConnection error_code = do
         -- that it stops accepting frames from connected sources
         -- (Streams?)
         withMVar session_output_mvar $ \ session_output ->
-            writeChan session_output $
+            sendOutputToFramer session_output $
                 TT.Command_StFB (
                      TT.SpecificTerminate_SOC last_good_stream error_code
                 )
@@ -1396,9 +1403,8 @@ closeConnectionForClient error_code = do
         -- Notify the framer that the session is closing, so
         -- that it stops accepting frames from connected sources
         -- (Streams?)
-        session_output <- takeMVar session_output_mvar
-        writeChan session_output . TT.Command_StFB . TT.SpecificTerminate_SOC  last_good_stream $ error_code
-        putMVar session_output_mvar session_output
+        withMVar session_output_mvar $ \ session_output ->
+            sendOutputToFramer session_output . TT.Command_StFB . TT.SpecificTerminate_SOC  last_good_stream $ error_code
 
         -- Let's also mark the session as closed from the client side, so that
         -- any further requests end with the correct exception
@@ -1822,7 +1828,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             liftIO $ bs_chunks `deepseq` withMVar session_output_mvar $ \ session_output -> do
                     let
                         header_frames = headerFrames stream_id bs_chunks effect
-                    writeChan session_output $ TT.PriorityTrain_StFB header_frames
+                    sendOutputToFramer session_output $ TT.PriorityTrain_StFB header_frames
                     putMVar headers_ready_mvar HeadersSent
 
 
@@ -1830,10 +1836,8 @@ headersOutputThread input_chan session_output_mvar = forever $ do
            -- This is in charge of sending an interrupt message to the framer
            let
                message = TT.Command_StFB (TT.SpecificTerminate_SOC stream_id NH2.NoError)
-           liftIO . withMVar session_output_mvar $
-               (\session_output -> do
-                   writeChan session_output message
-               )
+           liftIO . withMVar session_output_mvar $ \ session_output -> do
+                   sendOutputToFramer session_output message
 
         PushPromise_HM (parent_stream_id, child_stream_id, promise_headers, effect) -> do
 
@@ -1847,17 +1851,10 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             bs_chunks <- return $! bytestringChunk use_chunk_length data_to_send
 
             -- And send the chunks through while locking the output place....
-            liftIO $ E.bracket
-                (takeMVar session_output_mvar)
-                (putMVar session_output_mvar )
-                (\ session_output -> do
+            liftIO $ withMVar session_output_mvar $ \ session_output ->  do
                     let
                         pp_frames = pushPromiseFrames parent_stream_id child_stream_id bs_chunks effect
-                    writeChan session_output $ TT.PriorityTrain_StFB pp_frames
-                    -- No notification here... but since everyhing headers is serialized here and the next
-                    -- piece of information corresponding to the child stream is a headers sequence, we shouldn't
-                    -- need any other tricks here
-                    )
+                    sendOutputToFramer session_output $ TT.PriorityTrain_StFB pp_frames
 
   where
 
@@ -1973,10 +1970,10 @@ dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = fore
     case maybe_contents of
         Nothing -> do
             liftIO $ do
-                withLockedSessionOutput
+                withMVar session_output_mvar
                     (\ session_output ->  do
                            -- Write an empty data-frame with the right flags
-                           writeChan session_output $ TT.DataFrame_StFB ( NH2.EncodeInfo {
+                           sendOutputToFramer session_output $ TT.DataFrame_StFB ( NH2.EncodeInfo {
                                  NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
                                 ,NH2.encodeStreamId  = stream_id
                                 ,NH2.encodePadding   = Nothing },
@@ -1984,7 +1981,7 @@ dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = fore
                                 effect
                                 )
                            -- And then write an-end-of-stream command
-                           writeChan session_output $ TT.Command_StFB . TT.FinishStream_SOC $ stream_id
+                           sendOutputToFramer session_output $ TT.Command_StFB . TT.FinishStream_SOC $ stream_id
                         )
 
         Just contents -> do
@@ -1996,15 +1993,11 @@ dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = fore
 
   where
 
-    withLockedSessionOutput = E.bracket
-        (takeMVar session_output_mvar)
-        (putMVar session_output_mvar) -- <-- There is an implicit argument there!!
-
     writeContinuations :: [B.ByteString] -> GlobalStreamId -> Effect  -> IO ()
     writeContinuations fragments stream_id effect = do
       -- payload_max_length <- DIO.readIORef payload_max_length_ioref
       mapM_ (\ fragment ->
-                  withLockedSessionOutput
+                  withMVar session_output_mvar
                       (\ session_output -> do
                              -- TODO: This probably should be configurable or better tuned.
                              -- However, we are going to send frequent pings to keep a chart
@@ -2021,7 +2014,7 @@ dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = fore
                                  --     NH2.PingFrame "talk  on",
                                  --     effect )
 
-                             writeChan session_output $ TT.DataFrame_StFB (
+                             sendOutputToFramer session_output $ TT.DataFrame_StFB (
                                  NH2.EncodeInfo {
                                      NH2.encodeFlags     = NH2.defaultFlags
                                      ,NH2.encodeStreamId = stream_id
