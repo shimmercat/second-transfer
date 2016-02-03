@@ -183,13 +183,13 @@ sendCommandToSession (SessionInput chan) command = writeChan chan command
 newtype SessionOutputChannelAbstraction = SOCA (BC.BoundedChan TT.SessionOutputPacket)
 
 sendOutputToFramer :: SessionOutputChannelAbstraction -> TT.SessionOutputPacket -> IO ()
-sendOutputToFramer (SOCA chan) p =  BC.writeChan chan p
+sendOutputToFramer (SOCA chan) p =  p `seq` BC.writeChan chan p
 
 newSessionOutput :: IO SessionOutputChannelAbstraction
 newSessionOutput =
   do
     -- TODO: Make the number below configurable!!!
-    chan <- BC.newBoundedChan 4
+    chan <- BC.newBoundedChan 1000
     return . SOCA $ chan
 
 -- From outside, one can only read from this one
