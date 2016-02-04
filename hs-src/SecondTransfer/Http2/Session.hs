@@ -94,6 +94,7 @@ import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import qualified SecondTransfer.Http2.TransferTypes     as TT
 #ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging        (logit)
+
 #endif
 
 --import           Debug.Trace
@@ -109,9 +110,6 @@ type InputFrame  = NH2.Frame
 -- Singleton instance used for concurrency
 data HeadersSent = HeadersSent
 
--- All streams put their data bits here. A "Nothing" value signals
--- end of data. Middle value is delay in microseconds
-type DataOutputToConveyor = (GlobalStreamId, Maybe B.ByteString, Effect)
 
 -- What to do regarding headers
 data HeaderOutputMessage =
@@ -139,16 +137,14 @@ makeLenses ''SessionSettings
 -- this is to make refactoring easier, but not strictly needed.
 data WorkerThreadEnvironment = WorkerThreadEnvironment {
     -- What's the header stream id?
-    _streamId                     :: GlobalStreamId
+    _streamId_WTE                 :: GlobalStreamId
 
-    -- A full block of headers can come here... the mvar in the middle should
-    -- be populate to signal end of headers transmission. A thread will be suspended
-    -- waiting for that
-    , _headersOutput              :: Chan HeaderOutputMessage
+    -- For high priority headers information
+    , _headersOutput_WTE          :: Chan HeaderOutputMessage
 
     -- And regular contents can come this way and thus be properly mixed
     -- with everything else.... for now...
-    ,_dataOutput                  :: MVar DataOutputToConveyor
+    ,_streamBytesSink_WTE         :: MVar TT.DataAndEffect
 
     ,_streamsCancelled_WTE        :: MVar NS.IntSet
 
@@ -188,8 +184,8 @@ sendOutputToFramer (SOCA chan) p =  p `seq` BC.writeChan chan p
 newSessionOutput :: IO SessionOutputChannelAbstraction
 newSessionOutput =
   do
-    -- TODO: Make the number below configurable!!!
-    chan <- BC.newBoundedChan 1000
+    -- It could be length 1, but 8 will give it a bit more of space...
+    chan <- BC.newBoundedChan 8
     return . SOCA $ chan
 
 -- From outside, one can only read from this one
@@ -315,6 +311,9 @@ data SessionData = SessionData {
 
     -- We need to lock this channel occassionally so that we can order multiple
     -- header frames properly....that's the reason for the outer MVar
+    --
+    --  TODO: This outer MVar is no longer needed, since multi-headers and
+    --  and such are handled specially now . REMOVE!
     ,_sessionOutput              :: MVar SessionOutputChannelAbstraction
 
     -- Use to encode
@@ -421,7 +420,6 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
     -- These ones need independent threads taking care of sending stuff
     -- their way...
     headers_output            <- newChan :: IO (Chan HeaderOutputMessage)
-    data_output               <- newEmptyMVar :: IO (MVar DataOutputToConveyor)
 
     stream2postinputmechanism <- H.new
     stream2workerthread       <- H.new
@@ -444,14 +442,14 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
 
     let
         for_worker_thread = WorkerThreadEnvironment {
-        _streamId = error "NotInitialized"
-        ,_headersOutput = headers_output
-        ,_dataOutput = data_output
-        ,_streamsCancelled_WTE = cancelled_streams_mvar
-        ,_sessionSettings_WTE = session_settings
-        ,_nextPushStream_WTE = next_push_stream
-        ,_resetStreamButton_WTE = error "Not initialized"
-        ,_childResetStreamButton_WTE = error "Not initialized"
+             _streamId_WTE = error "NotInitialized"
+          ,  _headersOutput_WTE = headers_output
+          ,  _streamsCancelled_WTE = cancelled_streams_mvar
+          ,  _sessionSettings_WTE = session_settings
+          ,  _nextPushStream_WTE = next_push_stream
+          ,  _resetStreamButton_WTE = error "Not initialized"
+          ,  _childResetStreamButton_WTE = error "Not initialized"
+          ,  _streamBytesSink_WTE = error "Not initialized"
         }
 
         maybe_hashable_addr = case maybe_connection_data of
@@ -549,11 +547,6 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
     -- Create a thread that captures headers and sends them down the tube
     _ <- forkIOExc "s2f2" $ exc_guard SessionHeadersOutputThread_HTTP2SessionComponent
            $ runReaderT (headersOutputThread headers_output session_output_mvar) session_data
-
-    -- Create a thread that captures data and sends it down the tube. This is waiting for
-    -- stuff coming from all the workers. This function is also in charge of closing streams
-    _ <- forkIOExc "s2f3" $ exc_guard SessionDataOutputThread_HTTP2SessionComponent
-           $ dataOutputThread frame_size_ioref data_output session_output_mvar
 
     -- New session!
     case maybe_hashable_addr of
@@ -955,6 +948,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
     session_input             <- view sessionInput
     stream2workerthread       <- view stream2WorkerThread
     maybe_hashable_addr       <- view peerAddress
+    session_output_mvar       <- view sessionOutput
 
     if opens_stream
       then {-# SCC gpAb #-} do
@@ -999,19 +993,26 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
             (\ _ -> return Nothing )
         -- Lets get a time
         headers_arrived_time      <- liftIO $ getTime Monotonic
-        -- Let's decode the headers
+
+        -- This is where the bytes of the stream will end up .
+        stream_bytes <- liftIO newEmptyMVar
+
         let
             reset_button  = writeChan session_input (InternalAbortStream_SIC stream_id)
             child_reset_button = \stream_id' -> writeChan session_input  (InternalAbortStream_SIC stream_id')
             -- Prepare the environment for the new working thread
             for_worker_thread     =
-                (set streamId stream_id)
+                (set streamId_WTE stream_id)
+                .
+                (set streamBytesSink_WTE stream_bytes)
                 .
                 (set resetStreamButton_WTE reset_button)
                 .
                 (set childResetStreamButton_WTE child_reset_button)
                 $
                 for_worker_thread_uns
+
+        -- Let's decode the headers
         headers_bytes             <- getHeaderBytes stream_id
         dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
         maybe_table <- liftIO $
@@ -1079,6 +1080,10 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                       _inputData_RQ = post_data_source,
                       _perception_RQ = perception
                       }
+
+                -- Notify the framer of the new channel of stream data
+                session_output <- liftIO $ readMVar session_output_mvar
+                liftIO $ sendOutputToFramer session_output (TT.StartDataOutput_StFB (stream_id, stream_bytes))
 
                 -- TODO: Handle the cases where a request tries to send data
                 -- even if the method doesn't allow for data.
@@ -1534,8 +1539,8 @@ sendPrimitive500Error =
 workerThread :: Request -> AwareWorker -> WorkerMonad ()
 workerThread req aware_worker =
     ignoreCancels $  do
-        headers_output <- view headersOutput
-        stream_id      <- view streamId
+        headers_output <- view headersOutput_WTE
+        stream_id      <- view streamId_WTE
         --session_settings <- view sessionSettings_WTE
         --next_push_stream_mvar <-  view nextPushStream_WTE
 
@@ -1581,8 +1586,8 @@ workerThread req aware_worker =
 
 normallyHandleStream :: PrincipalStream -> WorkerMonad ()
 normallyHandleStream principal_stream = do
-    headers_output <- view headersOutput
-    stream_id      <- view streamId
+    headers_output <- view headersOutput_WTE
+    stream_id      <- view streamId_WTE
     session_settings <- view sessionSettings_WTE
     next_push_stream_mvar <-  view nextPushStream_WTE
     reset_button <- view resetStreamButton_WTE
@@ -1680,7 +1685,7 @@ normallyHandleStream principal_stream = do
 pusherThread :: GlobalStreamId -> Headers -> DataAndConclusion -> Effect  -> WorkerMonad ()
 pusherThread child_stream_id response_headers pushed_data_and_conclusion effects =
   do
-    headers_output <- view headersOutput
+    headers_output <- view headersOutput_WTE
     -- session_settings <- view sessionSettings_WTE
     pushed_reset_button <- view childResetStreamButton_WTE
 
@@ -1729,34 +1734,34 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
 --                                                       v-- comp. monad.
 sendDataOfStream :: GlobalStreamId -> MVar HeadersSent -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
 sendDataOfStream stream_id headers_sent effect = do
-    data_output <- view dataOutput
+    data_output <- view streamBytesSink_WTE
     -- Wait for all headers sent
     _ <- liftIO $ takeMVar headers_sent
+    -- Send a special command to the framer to notify it that Data frames are
+    -- coming on this stream ...
+
     consumer data_output
   where
-    --delay = effect ^. middlePauseForDelivery_Ef
     consumer data_output = do
         maybe_bytes <- await
         use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
         use_size <- liftIO $ DIO.readIORef use_size_ioref
-        -- liftIO $ putStrLn $ "Usesize: " ++ show use_size
         case maybe_bytes of
-            Nothing ->
+
+            Nothing -> do
                 -- This is how we finish sending data
-                liftIO $ putMVar data_output (stream_id, Nothing, effect)
+                liftIO $ putMVar data_output ( "", effect)
+
             Just bytes
-                | lng <- B.length bytes, lng > 0 && lng < use_size  -> do
+                | lng <- B.length bytes, lng > 0   -> do
+
                     liftIO $ do
-                        putMVar data_output (stream_id, Just bytes, effect)
+                        putMVar data_output (bytes, effect)
                     consumer data_output
-                | lng <- B.length bytes, lng >= use_size -> do
-                    let
-                      fragments =  bytestringChunk use_size  bytes
-                    liftIO $ mapM_ (\ fragment -> putMVar data_output (stream_id, Just fragment, effect)) fragments
-                    consumer data_output
-                | otherwise ->
+
+                | otherwise -> do
                     -- Finish sending data, finish in general
-                    liftIO $ putMVar data_output (stream_id, Nothing, effect)
+                    liftIO $ putMVar data_output ("", effect)
 
 
 -- Returns if the frame is the first in the stream
@@ -1952,83 +1957,6 @@ bytestringChunk len s = h:(bytestringChunk len xs)
     (h, xs) = B.splitAt len s
 
 
--- This thread is for the entire session, not for each stream. The thread should
--- die while waiting for input in a garbage-collected mvar.
--- TODO: This function does non-optimal chunking for the case where responses are
---       actually streamed.... in those cases we need to keep state for frames in
---       some other format....
--- TODO: Right now, we are transmitting an empty last frame with the end-of-stream
---       flag set. I'm afraid that the only
---       way to avoid that is by holding a frame or by augmenting the end-user interface
---       so that the user can signal which one is the last frame. The first approach
---       restricts responsiviness, the second one clutters things.
-dataOutputThread :: DIO.IORef Int
-                    -> MVar DataOutputToConveyor
-                    -> MVar SessionOutputChannelAbstraction
-                    -> IO ()
-dataOutputThread payload_max_length_ioref  input_chan session_output_mvar = forever $ do
-    (stream_id, maybe_contents, effect) <- takeMVar input_chan
-    payload_max_length <- DIO.readIORef payload_max_length_ioref
-    case maybe_contents of
-        Nothing -> do
-            liftIO $ do
-                withMVar session_output_mvar
-                    (\ session_output ->  do
-                           -- Write an empty data-frame with the right flags
-                           sendOutputToFramer session_output $ TT.DataFrame_StFB ( NH2.EncodeInfo {
-                                 NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
-                                ,NH2.encodeStreamId  = stream_id
-                                ,NH2.encodePadding   = Nothing },
-                                NH2.DataFrame "",
-                                effect
-                                )
-                           -- And then write an-end-of-stream command
-                           sendOutputToFramer session_output $ TT.Command_StFB . TT.FinishStream_SOC $ stream_id
-                        )
-
-        Just contents -> do
-            -- And now just simply output it...
-            let bs_chunks = bytestringChunk payload_max_length contents
-            -- And send the chunks through while locking the output place....
-            bs_chunks `deepseq` writeContinuations bs_chunks stream_id effect
-            return ()
-
-  where
-
-    writeContinuations :: [B.ByteString] -> GlobalStreamId -> Effect  -> IO ()
-    writeContinuations fragments stream_id effect = do
-      -- payload_max_length <- DIO.readIORef payload_max_length_ioref
-      mapM_ (\ fragment ->
-                  withMVar session_output_mvar
-                      (\ session_output -> do
-                             -- TODO: This probably should be configurable or better tuned.
-                             -- However, we are going to send frequent pings to keep a chart
-                             -- of latency.
-                             --when (B.length fragment == payload_max_length) $ do
-                                 -- Force tons and tons of ping frames to see if we get less delays due to
-                                 -- congestion...
-                                 -- writeChan session_output $ Right (
-                                 --     NH2.EncodeInfo {
-                                 --         NH2.encodeFlags     = NH2.defaultFlags
-                                 --         ,NH2.encodeStreamId = 0
-                                 --         ,NH2.encodePadding  = Nothing
-                                 --         },
-                                 --     NH2.PingFrame "talk  on",
-                                 --     effect )
-
-                             sendOutputToFramer session_output $ TT.DataFrame_StFB (
-                                 NH2.EncodeInfo {
-                                     NH2.encodeFlags     = NH2.defaultFlags
-                                     ,NH2.encodeStreamId = stream_id
-                                     ,NH2.encodePadding  = Nothing
-                                     },
-                                 NH2.DataFrame fragment,
-                                 effect )
-                      )
-             )
-             fragments
-
-
 -- This function works for HTTP/2 client sessions only...
 sessionPollThread :: SessionData -> Chan HeaderOutputMessage -> IO ()
 sessionPollThread  session_data headers_output = do
@@ -2043,7 +1971,11 @@ sessionPollThread  session_data headers_output = do
 
     new_stream_id <- modifyMVar client_next_stream_mvar (\ n -> return (n + 1, n) )
     let
-        worker_environment = set streamId new_stream_id for_worker_thread
+        worker_environment =
+            set
+               streamId_WTE
+               new_stream_id
+               for_worker_thread
         effects = defaultEffects
 
     -- Store the response place

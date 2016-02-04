@@ -56,7 +56,10 @@ import           SecondTransfer.Sessions.Internal       (
                                                          SessionsContext)
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Http2.Session
-import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker, fragmentDeliveryCallback_Ef, priorityEffect_Ef)
+import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker,
+                                                         Effect,
+                                                         fragmentDeliveryCallback_Ef,
+                                                         priorityEffect_Ef)
 import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Utils                   (Word24, word24ToInt)
@@ -69,7 +72,7 @@ import           SecondTransfer.Http2.OutputTray
 import           SecondTransfer.MainLoop.Logging        (logit)
 #endif
 
---import           Debug.Trace                            (trace)
+import           Debug.Trace                            (trace)
 
 
 http2PrefixLength :: Int
@@ -103,13 +106,6 @@ data FramerSessionData = FramerSessionData {
 
     -- A dictionary (protected by a lock) from stream id to flow control command.
     _stream2flow           :: MVar Stream2AvailSpace
-
-    -- Two members below: the place where you put data which is going to be flow-controlled,
-    -- and the place with the ordinal
-    -- Flow control dictionary. It goes from stream id to the stream data-output gate (an-mvar)
-    -- and to a mutable register for the ordinal. The ordinal for packets inside a stream is used
-    -- for priority and reporting
-    , _stream2outputBytes    :: MVar ( HashTable GlobalStreamId (MVar LB.ByteString, MVar Int) )
 
     -- The default flow-control window advertised by the peer (e.g., the browser)
     , _defaultStreamWindow   :: MVar Int
@@ -200,8 +196,6 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
     -- TODO : Add type annotations....
     s2f                       <- H.new
     stream2flow_mvar          <- newMVar s2f
-    s2o                       <- H.new
-    stream2output_bytes_mvar  <- newMVar s2o
     default_stream_size_mvar  <- newMVar 65536
     last_stream_id            <- newMVar 0
     -- last_output_stream_id     <- newMVar 0
@@ -217,7 +211,6 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
     -- We need some shared state
     let framer_session_data = FramerSessionData {
         _stream2flow          = stream2flow_mvar
-        ,_stream2outputBytes  = stream2output_bytes_mvar
         ,_defaultStreamWindow = default_stream_size_mvar
         ,_maxRecvSize         = max_recv_frame_size
         ,_pushAction          = push_action
@@ -340,14 +333,6 @@ finishFlowControlForStream stream_id =
                     liftIO $
                         H.delete table stream_id
                     return ()
-        table2_mvar <- view stream2outputBytes
-        liftIO . withMVar table2_mvar $ \ table -> do
-          val <- H.lookup table stream_id
-          case val of
-              Nothing -> return ()
-
-              Just _ ->
-                 liftIO $ H.delete table stream_id
 
 
 readNextFrame ::
@@ -360,7 +345,6 @@ readNextFrame max_acceptable_size pull_action  = do
     case either_frame_header_bs :: Either IOProblem B.ByteString of
 
         Left _ -> do
-            -- liftIO $ putStrLn "CloseCondition"
             return ()
 
         Right frame_header_bs -> do
@@ -378,18 +362,15 @@ readNextFrame max_acceptable_size pull_action  = do
                 either_payload_bs <- lift $ E.try (pull_action payload_length)
                 case either_payload_bs :: Either IOProblem B.ByteString of
                     Left _ -> do
-                        -- liftIO $ putStrLn "TerminatingSession"
                         return ()
                     Right payload_bs
                       | B.length payload_bs == 0 && payload_length > 0 -> do
-                        -- liftIO $ putStrLn "TerminatingSessionX"
                         return ()
 
                       | otherwise -> do
                         -- Return the entire frame, or raise an exception...
                         let
                             either_frame = NH2.decodeFramePayload frame_type_id frame_header payload_bs
-                        -- liftIO . putStrLn . show $ B.length payload_bs
                         case either_frame of
                             Right frame_payload -> do
                                 yield . Just $ NH2.Frame frame_header frame_payload
@@ -521,8 +502,9 @@ inputGatherer pull_action session_input = do
                 -- We may as well exit this thread
                return ()
 
+type DeliveryNotifyCallback =  GlobalStreamId -> Effect -> Int  -> FramerSession  ()
 
--- All the output frames come this way first
+-- | All the output frames come this way first
 outputGatherer :: SessionOutput -> FramerSession ()
 outputGatherer session_output = do
 
@@ -539,6 +521,25 @@ outputGatherer session_output = do
        dataDeliveryCallback_SC
 
     session_id <- view sessionIdAtFramer
+
+    let
+       delivery_notify :: GlobalStreamId -> Effect -> Int  -> FramerSession  ()
+       delivery_notify stream_id effect ordinal =
+           liftIO $ do
+               case (frame_sent_report_callback, effect ^. fragmentDeliveryCallback_Ef ) of
+                   (Just c1, Just c2) -> liftIO $ do
+                       -- Here we invoke the client's callback.
+                       when_delivered <- getTime Monotonic
+                       c1 session_id stream_id ordinal when_delivered
+                       c2 ordinal when_delivered
+                   (Nothing, Just c2) -> liftIO $ do
+                       when_delivered <- getTime Monotonic
+                       c2 ordinal when_delivered
+                   (Just c1, Nothing) -> liftIO $ do
+                       when_delivered <- getTime Monotonic
+                       c1 session_id stream_id ordinal when_delivered
+                   (Nothing, Nothing) -> return ()
+
     let
 
        dataForFrame p1 p2 =
@@ -566,52 +567,11 @@ outputGatherer session_output = do
                    sendSpecificTerminateGoAway last_stream_id error_code
                    releaseFramer
 
-               Command_StFB (FinishStream_SOC stream_id ) -> do
-                   -- Session knows that we are done with the given stream, and that we can release
-                   -- the flow control structures
-                   finishFlowControlForStream stream_id
-                   cont
-
-               DataFrame_StFB ( p1@(NH2.EncodeInfo _ stream_idii _), p2@(NH2.DataFrame _datum), ef ) -> do
+               StartDataOutput_StFB (stream_id, stream_bytes_mvar)  -> do
                    -- This frame is flow-controlled... I may be unable to send this frame in
                    -- some circumstances...
-                   let
-                       stream_id = stream_idii
-                       priority = fromMaybe stream_id $ ef ^. priorityEffect_Ef
-
-                   startStreamOutputQueueIfNotExists stream_id $ priority
-
-                   stream2output_mvar <- view stream2outputBytes
-                   lookup_result <- liftIO $ withMVar stream2output_mvar $ \ s2o -> H.lookup s2o stream_id
-                   --
-                   --liftIO . putStrLn $ " fsz " ++ (show $ B.length _datum)
-                   --
-                   (stream_bytes_chan, frame_ordinal_mvar) <- case lookup_result of
-                       Nothing ->
-                           error "It is the end of the world at Framer.hs"
-                       Just x -> return x
-
-                   -- All the dance below is to avoid a system call if there is no need
-                   case (frame_sent_report_callback, ef ^. fragmentDeliveryCallback_Ef ) of
-                       (Just c1, Just c2) -> liftIO $ do
-                           -- Here we invoke the client's callback.
-                           when_delivered <- getTime Monotonic
-                           ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
-                           c1 session_id stream_id ordinal when_delivered
-                           c2 ordinal when_delivered
-                       (Nothing, Just c2) -> liftIO $ do
-                           when_delivered <- getTime Monotonic
-                           ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
-                           c2 ordinal when_delivered
-                       (Just c1, Nothing) -> liftIO $ do
-                           when_delivered <- getTime Monotonic
-                           ordinal <- modifyMVar frame_ordinal_mvar $ \ o -> return (o+1, o)
-                           c1 session_id stream_id ordinal when_delivered
-                       (Nothing, Nothing) -> return ()
-
-                   liftIO $ putMVar stream_bytes_chan $! dataForFrame p1 p2
+                   startStreamOutputQueue stream_bytes_mvar stream_id delivery_notify
                    cont
-
 
                PriorityTrain_StFB frames -> do
                    -- Serialize the entire train
@@ -622,7 +582,7 @@ outputGatherer session_output = do
                    -- and continue
                    cont
 
-               case_ -> error $ "Error: case not spefified " ++ (show case_)
+               case_ -> error $ "Error: case not spefified "
 
     -- We start by sending a settings frame... NOTICE that this settings frame
     -- should be configurable TODO!!
@@ -641,26 +601,13 @@ updateLastInputStream stream_id = do
     last_stream_id_mvar <- view lastInputStream
     liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
 
-
 -- updateLastOutputStream :: GlobalStreamId  -> FramerSession ()
 -- updateLastOutputStream stream_id = do
 --     last_stream_id_mvar <- view lastOutputStream
 --     liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
 
 
-startStreamOutputQueueIfNotExists :: GlobalStreamId -> Int -> FramerSession ()
-startStreamOutputQueueIfNotExists stream_id priority = do
-    table_mvar <- view stream2outputBytes
-    val <- liftIO . withMVar table_mvar  $ \ table -> H.lookup table stream_id
-    case val of
-        Nothing | stream_id /= 0 -> do
-            _ <- startStreamOutputQueue stream_id priority
-            return ()
-
-        _ ->
-            return ()
-
--- Sometimes the browser gives capacity before we even have seen the first
+-- | Sometimes the browser gives capacity before we even have seen the first
 -- data frame going back from here from the server, so the  flow control
 -- command place should be started first...
 startStreamOutputComandQueueIfNeeded :: Int -> FramerSession (Chan FlowControlCommand)
@@ -679,16 +626,19 @@ startStreamOutputComandQueueIfNeeded stream_id =
               return command_chan
 
 
--- Handles only Data frames.
-startStreamOutputQueue :: Int -> Int -> FramerSession (MVar LB.ByteString, Chan FlowControlCommand)
-startStreamOutputQueue stream_id priority = do
+-- | Handles only Data frames.
+startStreamOutputQueue :: MVar DataAndEffect ->  GlobalStreamId  -> DeliveryNotifyCallback -> FramerSession ()
+startStreamOutputQueue stream_bytes_mvar stream_id delivery_notify  = do
+
     -- New thread for handling outputs of this stream is needed
-    bytes_chan   <- liftIO newEmptyMVar
     ordinal_num  <- liftIO $ newMVar 0
 
-    s2o_mvar <- view stream2outputBytes
+    -- s2o_mvar <- view stream2outputBytes
 
-    liftIO . withMVar s2o_mvar $ {-# SCC e1  #-}  \ s2o ->  H.insert s2o stream_id (bytes_chan, ordinal_num)
+    -- liftIO . withMVar s2o_mvar $
+    --     {-# SCC hashtable_e1  #-}  \ s2o ->  H.insert s2o stream_id (stream_bytes_mvar, ordinal_num)
+
+    -- Some commands come before the output of the stream itself, so this may exist already
     command_chan <- startStreamOutputComandQueueIfNeeded stream_id
 
     --
@@ -718,17 +668,17 @@ startStreamOutputQueue stream_id priority = do
     _ <- liftIO $ forkIOExc "streamOutputQueue"
            $ ignoreException blockedIndefinitelyOnMVar  ()
            $ close_on_error session_id' sessions_context
-           $ runReaderT (flowControlOutput stream_id priority initial_cap 0 "" command_chan bytes_chan)
+           $ runReaderT (flowControlOutput stream_id initial_cap 0 "" command_chan stream_bytes_mvar delivery_notify (error "noeffectyet"))
              read_state
 
-    return (bytes_chan , command_chan)
+    return ()
 
 
 pushPrefix :: FramerSession ()
 pushPrefix = do
     let bs = LB.fromStrict NH2.connectionPreface
     -- We will send the data, mixing as needed, with the incredible priority
-    -- of -2
+    -- of -20
     withPrioritySend_ (-20) 0 0 0 bs
 
 
@@ -759,44 +709,118 @@ sendBytesN bs = do
     liftIO $ push_action bs
 
 
--- A thread in charge of doing flow control transmission....This sends already
--- formatted frames (ByteStrings), not the frames themselves. And it doesn't
--- mess with the structure of the packets.
+-- | A thread in charge of doing flow control transmission....This
+-- Reads payload data and formats it to DataFrames...
 --
--- There is one of these for each stream
+-- There is one of these for each stream.
+--
+-- This function will read from an MVar (and block on that), and will write to
+-- the output tray (and occassionally also block on that, if the output tray
+-- doesn't have enough space).
 --
 flowControlOutput :: Int
                      -> Int
                      -> Int
-                     -> Int
                      ->  LB.ByteString
                      -> Chan FlowControlCommand
-                     -> MVar LB.ByteString
+                     -> MVar DataAndEffect
+                     -> DeliveryNotifyCallback
+                     -> Effect
                      ->  FramerSession ()
-flowControlOutput stream_id priority capacity ordinal leftovers commands_chan bytes_chan =
+flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan delivery_notify last_effect =
     ordinal `seq` if leftovers == ""
       then {-# SCC fcOBranch1  #-} do
         -- Get more data (possibly block waiting for it)... there will be an
         -- exception here from time to time...
-        bytes_to_send <- liftIO $ {-# SCC perfectlyHarmlessExceptionPoint #-} takeMVar bytes_chan
-        flowControlOutput stream_id priority capacity ordinal  bytes_to_send commands_chan bytes_chan
+
+        -- TODO: If an exception is raised here (because the thread pulling data fromt he Coherent Worker
+        -- died), it would be a wait on deadlock MVar thingy... in that case take care of ending things
+        -- properly ...
+        (bytes_to_send, effect) <- liftIO $ {-# SCC perfectlyHarmlessExceptionPoint #-} takeMVar bytes_chan
+        if B.length bytes_to_send == 0
+          then do
+            -- Signals end of data on stream, format and exit
+              let
+                  priority = fromMaybe stream_id $ effect ^. priorityEffect_Ef
+                  formatted = LB.fromStrict $ NH2.encodeFrame
+                      (NH2.EncodeInfo {
+                         NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
+                        ,NH2.encodeStreamId  = stream_id
+                        ,NH2.encodePadding   = Nothing })
+                      (NH2.DataFrame "")
+              withNormalPrioritySend priority stream_id ordinal formatted
+              delivery_notify stream_id effect ordinal
+              -- And just before returning, be sure to release the structures related to this
+              -- stream
+              finishFlowControlForStream stream_id
+          else
+              flowControlOutput
+                  stream_id
+                  capacity
+                  ordinal
+                  (LB.fromStrict bytes_to_send)
+                  commands_chan
+                  bytes_chan
+                  delivery_notify
+                  effect
       else {-# SCC fcOBranch2  #-}  do
         -- Length?
-        let amount = fromIntegral  (LB.length leftovers - 9)
-        if  amount <= capacity
+        let
+            amount = fromIntegral $  LB.length leftovers
+
+            -- TODO: This hacks forbids the session to handle out larger frames, even if
+            -- the peer would allow them.
+            -- The correct way goes through pulling some data from the session:
+            --
+            --        use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
+            --        use_size <- liftIO $ DIO.readIORef use_size_ioref
+            --
+            (use_amount, new_leftover, to_send) =
+                if amount > 16384
+                  then (16384, LB.drop 16384 leftovers, LB.take 16384 leftovers)
+                  else (amount, "", leftovers)
+
+        if  use_amount <= capacity
           then do
-            -- Is
-            -- I can send ... if no headers are in process....
-            -- liftIO . logit $ "set-priority (stream_id, prio, ordinal) " `mappend` (pack . show) (__stream_id, priority, ordinal)
-            withNormalPrioritySend priority stream_id ordinal leftovers
-            flowControlOutput  stream_id priority (capacity - amount) (ordinal+1 ) "" commands_chan bytes_chan
+            -- Can send, but must format first...
+            let
+                priority = fromMaybe stream_id $ last_effect ^. priorityEffect_Ef
+                formatted =  LB.fromStrict $ NH2.encodeFrame
+                    (NH2.EncodeInfo {
+                       NH2.encodeFlags     = NH2.defaultFlags
+                      ,NH2.encodeStreamId  = stream_id
+                      ,NH2.encodePadding   = Nothing
+                      }
+                    )
+                    (NH2.DataFrame $ LB.toStrict to_send)
+            withNormalPrioritySend priority stream_id ordinal formatted
+            -- Notify any interested party about the frame being "delivered" (but it may still be at
+            -- the latest queue)
+            delivery_notify stream_id last_effect ordinal
+            flowControlOutput
+                stream_id
+                (capacity - use_amount)
+                (ordinal+1 )
+                new_leftover
+                commands_chan
+                bytes_chan
+
+                delivery_notify
+                last_effect
           else do
             -- I can not send because flow-control is full, wait for a command instead
-            -- liftIO $ putStrLn "GoingToBlock"
             command <- liftIO $ {-# SCC t2 #-} readChan commands_chan
             case  {-# SCC t3 #-} command of
                 AddBytes_FCM delta_cap -> do
-                    flowControlOutput stream_id priority (capacity + delta_cap) ordinal leftovers commands_chan bytes_chan
+                    flowControlOutput
+                        stream_id
+                        (capacity + delta_cap)
+                        ordinal
+                        leftovers
+                        commands_chan
+                        bytes_chan
+                        delivery_notify
+                        last_effect
 
 
 releaseFramer :: FramerSession ()
@@ -807,11 +831,16 @@ releaseFramer =
     return ()
 
 
+-- | Puts output wagons in the tray. This function blocks if there is not
+--  enough space in the tray.
+--
 -- This prioritizes DATA packets, in some rudimentary way.
 -- This code will be replaced in due time for something compliant.
 --
+--
 --   System priority:
 --        -20 : the prefix, absolutely most important guy
+--        -2 : PING frame
 --        -1 : All packets except data  packets
 --         0 : data packets.
 withPrioritySend_ :: Int -> Int -> Int -> Int -> LB.ByteString -> FramerSession ()
@@ -845,10 +874,12 @@ withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
     liftIO $ attempt
 
 
+-- | Blocks if there is not enough space in the tray
 withNormalPrioritySend ::  Int -> Int -> Int -> LB.ByteString -> FramerSession ()
 withNormalPrioritySend = withPrioritySend_ 0
 
 
+-- | Blocks if there is not enough space in the tray.
 withHighPrioritySend :: LB.ByteString -> FramerSession ()
 withHighPrioritySend  datum = withPrioritySend_ (-1) 0 0 0 datum
 
