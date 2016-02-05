@@ -16,7 +16,7 @@ module SecondTransfer.Http2.Session(
     ,CoherentSession
     ,SessionInput(..)
     ,SessionInputCommand(..)
-    ,SessionOutput(..)
+    ,SessionOutput
     ,SessionCoordinates(..)
     ,SessionComponent(..)
     ,SessionsCallbacks(..)
@@ -98,7 +98,7 @@ import           SecondTransfer.MainLoop.Logging        (logit)
 
 #endif
 
---import           Debug.Trace
+import           Debug.Trace                            (traceStack)
 
 
 type InputFrame  = NH2.Frame
@@ -515,7 +515,6 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
                         Just (ClientSessionAbortedException reason) -> do
                             clientSideTerminate client_state reason
 
-
                         Nothing ->
                             if isJust maybe_protocol_error
                                 then
@@ -621,7 +620,7 @@ sessionInputThread  = do
             -- to the framer.
             --
             -- This message is normally got from the Framer
-            -- liftIO $ putStrLn "cc2"
+            liftIO $ putStrLn "cc2"
             liftIO $ do
                 H.mapM_
                     (\ (_, thread_id) -> do
@@ -813,7 +812,7 @@ sessionInputThread  = do
         MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
-                liftIO . putStrLn $ "Received GoAway frame"
+                --liftIO . putStrLn $ "Received GoAway frame"
                 quietlyCloseConnection NH2.NoError
                 return ()
 
@@ -848,9 +847,6 @@ sessionInputThread  = do
             enable_push = lookup NH2.SettingsEnablePush _settings_list
             max_frame_size = lookup NH2.SettingsMaxFrameSize _settings_list
 
-            -- Needed because of curl and nghttp2 bug
-            max_concurrent_streams = 100
-
             -- Handled by the framer, but errors should be reported here.
             max_flow_control_size = lookup NH2.SettingsInitialWindowSize _settings_list
 
@@ -875,7 +871,7 @@ sessionInputThread  = do
                        Just n | n < 16384 || n > 16777215
                                    -> do
                                       -- liftIO $ putStrLn "Wild max frame size"
-                                      closeConnectionBecauseIsInvalid NH2.ProtocolError
+                                      closeConnectionBecauseIsInvalid NH2.FrameSizeError
                                       return False
 
                               | otherwise
@@ -943,7 +939,6 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
     session_input             <- view sessionInput
     stream2workerthread       <- view stream2WorkerThread
     maybe_hashable_addr       <- view peerAddress
-    session_output_mvar       <- view sessionOutput
 
     if opens_stream
       then {-# SCC gpAb #-} do
@@ -1313,63 +1308,23 @@ closeConnectionBecauseIsInvalid error_code = do
     liftIO $ putStrLn "CloseConnectionBecauseIsInvalid-- Called"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
-    session_output_mvar <- view sessionOutput
-    stream2workerthread <- view stream2WorkerThread
 
-    _ <- liftIO $ do
-        -- Close all active threads for this session
-        H.mapM_
-            ( \(_stream_id, thread_id) ->
-                    throwTo thread_id StreamCancelledException
-            )
-            stream2workerthread
-
-        -- Notify the framer that the session is closing, so
-        -- that it stops accepting frames from connected sources
-        -- (Streams?)
-        withMVar session_output_mvar $ \ session_output -> do
-            sendOutputToFramer session_output $
-                TT.Command_StFB
-                   (
-                       TT.SpecificTerminate_SOC last_good_stream error_code
-                   )
-            -- putMVar session_output_mvar session_output
-
-        -- And unwind the input thread in the session, so that the
-        -- exception handler runs....
-        E.throw HTTP2ProtocolException
-
+    cancellAllStreams
+    requestTermination last_good_stream error_code
+    _ <- liftIO $  E.throw HTTP2ProtocolException
     -- It never gets here
     return ()
+
 
 -- Sends a GO_AWAY frame and closes everything, without being too drastic
 quietlyCloseConnection :: NH2.ErrorCodeId -> ReaderT SessionData IO ()
 quietlyCloseConnection error_code = do
-    liftIO $ putStrLn "QuietlyClosesConnection -- Called"
+    -- liftIO $ putStrLn "quietlyCloseConnection"
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
-    session_output_mvar <- view sessionOutput
-    stream2workerthread <- view stream2WorkerThread
 
-    _ <- liftIO $ do
-        -- Close all active threads for this session
-        H.mapM_
-            ( \(_stream_id, thread_id) ->
-                    throwTo thread_id StreamCancelledException
-            )
-            stream2workerthread
-
-        -- Notify the framer that the session is closing, so
-        -- that it stops accepting frames from connected sources
-        -- (Streams?)
-        withMVar session_output_mvar $ \ session_output ->
-            sendOutputToFramer session_output $
-                TT.Command_StFB (
-                     TT.SpecificTerminate_SOC last_good_stream error_code
-                )
-
-    -- It never gets here
-    return ()
+    cancellAllStreams
+    requestTermination last_good_stream error_code
 
 
 -- Sends a GO_AWAY frame and raises an exception, effectively terminating the input
@@ -1377,7 +1332,6 @@ quietlyCloseConnection error_code = do
 -- an exception of type ClientSessionAbortedException
 closeConnectionForClient :: NH2.ErrorCodeId -> ReaderT SessionData IO a
 closeConnectionForClient error_code = do
-    liftIO $ putStrLn "closeConnectionForClient -- Called"
     let
         use_reason = case error_code of
             NH2.NoError -> NormalTermination_CCR
@@ -1385,24 +1339,11 @@ closeConnectionForClient error_code = do
 
     last_good_stream_mvar <- view lastGoodStream
     last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
-    session_output_mvar <- view sessionOutput
-    stream2workerthread <- view stream2WorkerThread
 
     client_is_closed_mvar <- view (simpleClient . clientIsClosed_ClS )
-
+    requestTermination last_good_stream error_code
+    cancellAllStreams
     liftIO $ do
-        -- Close all active threads for this session
-        H.mapM_
-            ( \(_stream_id, thread_id) ->
-                    throwTo thread_id StreamCancelledException
-            )
-            stream2workerthread
-
-        -- Notify the framer that the session is closing, so
-        -- that it stops accepting frames from connected sources
-        -- (Streams?)
-        withMVar session_output_mvar $ \ session_output ->
-            sendOutputToFramer session_output . TT.Command_StFB . TT.SpecificTerminate_SOC  last_good_stream $ error_code
 
         -- Let's also mark the session as closed from the client side, so that
         -- any further requests end with the correct exception
@@ -1411,6 +1352,29 @@ closeConnectionForClient error_code = do
         -- And unwind the input thread in the session, so that the
         -- exception handler runs....
         E.throw $ ClientSessionAbortedException use_reason
+
+
+cancellAllStreams :: ReaderT SessionData IO ()
+cancellAllStreams =
+  do
+    stream2workerthread <- view stream2WorkerThread
+    liftIO $ do
+        -- Close all active threads for this session
+        H.mapM_
+            ( \(_stream_id, thread_id) ->
+                    throwTo thread_id StreamCancelledException
+            )
+            stream2workerthread
+
+
+requestTermination :: GlobalStreamId -> NH2.ErrorCodeId -> ReaderT SessionData IO ()
+requestTermination stream_id error_code =
+  do
+    session_output_mvar <- view sessionOutput
+    let
+        message = TT.Command_StFB (TT.SpecificTerminate_SOC stream_id error_code)
+    liftIO . withMVar session_output_mvar $ \ session_output -> do
+        sendOutputToFramer session_output message
 
 
 frameEndsStream :: InputFrame -> Bool
@@ -1622,7 +1586,6 @@ normallyHandleStream principal_stream = do
         return []
 
     -- Now I send the headers, if that's possible at all
-    headers_sent <- liftIO  newEmptyMVar
     data_output <- view streamBytesSink_WTE
     liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers, effects, data_output)
 
@@ -1728,13 +1691,13 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
 
 --                                                       v-- comp. monad.
 sendDataOfStream :: GlobalStreamId -> MVar TT.DataAndEffect -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
-sendDataOfStream stream_id data_output effect = do
-    consumer data_output
+sendDataOfStream _stream_id data_output effect = do
+    consumer
   where
-    consumer data_output = do
+    consumer  = do
         maybe_bytes <- await
-        use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
-        use_size <- liftIO $ DIO.readIORef use_size_ioref
+        -- use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
+        -- use_size <- liftIO $ DIO.readIORef use_size_ioref
         case maybe_bytes of
 
             Nothing -> do
@@ -1746,7 +1709,7 @@ sendDataOfStream stream_id data_output effect = do
 
                     liftIO $ do
                         putMVar data_output (bytes, effect)
-                    consumer data_output
+                    consumer
 
                 | otherwise -> do
                     -- Finish sending data, finish in general
@@ -1769,6 +1732,7 @@ appendHeaderFragmentBlock global_stream_id bytes = do
 
     liftIO $ H.insert ht global_stream_id new_block
     return new_stream
+
 
 getHeaderBytes :: GlobalStreamId -> ReaderT SessionData IO B.ByteString
 getHeaderBytes global_stream_id = do
@@ -1828,10 +1792,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
 
         GoAway_HM (stream_id, _effect) -> do
            -- This is in charge of sending an interrupt message to the framer
-           let
-               message = TT.Command_StFB (TT.SpecificTerminate_SOC stream_id NH2.NoError)
-           liftIO . withMVar session_output_mvar $ \ session_output -> do
-                   sendOutputToFramer session_output message
+           requestTermination stream_id NH2.NoError
 
         PushPromise_HM (parent_stream_id, child_stream_id, promise_headers, effect) -> do
 

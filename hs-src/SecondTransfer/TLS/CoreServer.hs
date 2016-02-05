@@ -263,9 +263,10 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
 
       let
           instr = do
-              traceStack "close-called" $ (plaintext_io_callbacks_u ^. closeAction_IOC)
               modifyMVar_ close_reported $ \ close_reported_x -> do
                   if (not close_reported_x) then  do
+                      -- We can close just once
+                      plaintext_io_callbacks_u ^. closeAction_IOC
                       log_event (Ended_CoEv wconn_id)
                       modifyMVar_ session_handler_state_mvar $ \ s -> do
                           let new_conn_id = s ^. nextConnId_S

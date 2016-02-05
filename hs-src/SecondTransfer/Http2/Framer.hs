@@ -72,7 +72,7 @@ import           SecondTransfer.Http2.OutputTray
 import           SecondTransfer.MainLoop.Logging        (logit)
 #endif
 
---import           Debug.Trace                            (trace)
+import           Debug.Trace                            (traceStack)
 
 
 http2PrefixLength :: Int
@@ -372,6 +372,7 @@ readNextFrame max_acceptable_size pull_action  = do
             let
                 (frame_type_id, frame_header) = NH2.decodeFrameHeader frame_header_bs
                 NH2.FrameHeader payload_length _ _ =  frame_header
+            -- liftIO . putStrLn $ "payload length: " ++ (show payload_length) ++ " max sz " ++ show max_acceptable_size
             if payload_length + 9 > max_acceptable_size
               then do
                 liftIO $ putStrLn "Frame too big"
@@ -440,7 +441,8 @@ inputGatherer pull_action session_input = do
           sendMiddleFrameToSession session_input frame
 
     abortSession :: Sink a FramerSession ()
-    abortSession =
+    abortSession = do
+      liftIO $ putStrLn  "Framer called Abort Session"
       lift $ do
         sendGoAwayFrame NH2.ProtocolError
         -- Inform the session that it can tear down itself
