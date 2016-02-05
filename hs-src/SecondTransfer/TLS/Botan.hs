@@ -439,6 +439,8 @@ closeBotan botan_pad =
         maybe_gotit <- tryTakeMVar (botan_pad ^. active_BP)
         case maybe_gotit of
             Just _ -> do
+                -- Let's forbid libbotan for sending more output
+                _ <- tryPutMVar (botan_pad ^. problem_BP) ()
                 -- Cleanly close tls, if nobody else is writing there
                 withMVar (botan_pad ^. writeLock_BP) $ \ _ -> do
                     withMVar dontMultiThreadBotan . const $
@@ -456,7 +458,6 @@ closeBotan botan_pad =
             Nothing ->
                 -- Thing already closed, don't do it again
                 return ()
-
 
 
 instance IOChannels BotanSession where
