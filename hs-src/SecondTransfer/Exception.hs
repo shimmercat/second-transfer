@@ -40,6 +40,7 @@ module SecondTransfer.Exception (
     , noMoreDataException
     , ioProblem
     , gatewayAbortedException
+    , ioException
     ) where
 
 import           Control.Exception
@@ -310,3 +311,6 @@ forkIOExc msg comp = forkIO $ keyedReportExceptions msg  comp
 
 blockedIndefinitelyOnMVar :: Proxy BlockedIndefinitelyOnMVar
 blockedIndefinitelyOnMVar = Proxy
+
+ioException :: Proxy IOException
+ioException = Proxy
