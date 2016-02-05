@@ -26,8 +26,6 @@ import qualified Network.Socket.ByteString                          as NSB
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception
 
-#include "instruments.cpphs"
-
 -- | IOCallbacks around an active socket
 data SocketIOCallbacks = SocketIOCallbacks {
     _socket_SS    :: NS.Socket
@@ -82,14 +80,10 @@ socketIOCallbacks socket = do
                    return datum
 
         -- Exceptions on close are possible
-        close_action = E.catch ( do
-            REPORT_EVENT("socket-close-called")
-            NS.shutdown socket NS.ShutdownBoth
-            REPORT_EVENT("socket-shutdown-executed")
-            NS.close socket
-            REPORT_EVENT("socket-close-executed")
-            return ()
-            ) (( \ _ -> return () ) :: E.SomeException -> IO () )
+        close_action = E.finally
+            (ignoreException ioException () $ NS.shutdown socket NS.ShutdownBoth)
+            (ignoreException ioException () $ NS.close socket)
+
     pull_action_wrapping <- newPullActionWrapping  best_effort_pull_action
     let
         pull_action = pullFromWrapping' pull_action_wrapping
