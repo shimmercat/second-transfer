@@ -45,7 +45,8 @@ type DataAndEffect = (B.ByteString, Effect)
 data SessionToFramerBlock =
     Command_StFB         !SessionOutputCommand
   | PriorityTrain_StFB   [OutputFrame]
-  | StartDataOutput_StFB (GlobalStreamId, MVar DataAndEffect )  -- ^ An empty string shall signal end of data
+  | HeadersTrain_StFB (GlobalStreamId, [OutputFrame], MVar DataAndEffect) -- stream id, the headers of the response, the mvar where data is put.
+--  | StartDataOutput_StFB (GlobalStreamId, MVar DataAndEffect )  -- ^ An empty string shall signal end of data
 
 
 type SessionOutputPacket = SessionToFramerBlock

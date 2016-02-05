@@ -81,7 +81,7 @@ socketIOCallbacks socket = do
                 else do
                    return datum
 
-        -- Exceptions are close are possible
+        -- Exceptions on close are possible
         close_action = E.catch ( do
             REPORT_EVENT("socket-close-called")
             NS.shutdown socket NS.ShutdownBoth

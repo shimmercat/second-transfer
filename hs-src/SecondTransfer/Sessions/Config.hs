@@ -214,6 +214,11 @@ defaultSessionsConfig = SessionsConfig {
   , _dataFrameSize = 16*1024
   , _pushEnabled = True
   , _firstPushStream = 8
-  , _networkChunkSize = 12*1024
-  , _trayMaxSize = 128
+  , _networkChunkSize = 18*1024
+  -- Max number of packets that can be waiting to exit. A big number here
+  -- is desirable, but counts towards the memory consumption when the network is slow...
+  -- so for now let's make it a little bit lower. In the future we may want to adjust
+  -- this number dynamically.
+  -- , _trayMaxSize = 128
+  , _trayMaxSize = 16
     }

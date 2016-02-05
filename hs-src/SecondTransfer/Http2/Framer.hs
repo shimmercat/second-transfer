@@ -72,7 +72,7 @@ import           SecondTransfer.Http2.OutputTray
 import           SecondTransfer.MainLoop.Logging        (logit)
 #endif
 
-import           Debug.Trace                            (trace)
+--import           Debug.Trace                            (trace)
 
 
 http2PrefixLength :: Int
@@ -163,6 +163,12 @@ instance ActivityMeteredSession SimpleSessionControl where
     sessionLastActivity (SimpleSessionControl (t,_button)) = return t
 
 
+-- | This is a special "mark" priority that when used causes the connection
+--   to be closed. It is used because is clean.
+goAwayPriority :: Int
+goAwayPriority = (-15)
+
+
 wrapSession :: SessionPayload -> SessionsContext -> Attendant
 wrapSession session_payload sessions_context connection_info io_callbacks = do
 
@@ -243,6 +249,19 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
                 )
                 close_action
 
+        dont_close_on_error session_id session_context comp =
+            E.catch
+                (
+                    E.catch
+                        comp
+                        (exc_handler session_id session_context)
+                )
+                (io_exc_handler session_id session_context)
+
+        ensure_close :: IO a -> IO a
+        ensure_close c = E.finally c close_action
+
+        -- Invokes the specialized error callbacks configured in the session.
         -- TODO:  I don't think much is being done here
         exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
@@ -250,24 +269,25 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
         io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
-        io_exc_handler _x _y _e =
+        io_exc_handler _x _y _e = do
+            -- putStrLn $ show _e
             modifyMVar_ output_is_forbidden (\ _ -> return True)
             -- !!! These exceptions are way too common for we to care....
             -- errorM "HTTP2.Framer" "Exception went up"
             -- sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
     _ <- forkIOExc "inputGathererHttp2"
-        $ close_on_error new_session_id sessions_context
+        $ {-# SCC inputGatherer  #-} dont_close_on_error new_session_id sessions_context
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (inputGatherer pull_action session_input ) framer_session_data
     _ <- forkIOExc "outputGathererHttp2"
-        $ close_on_error new_session_id sessions_context
+        $ {-# SCC outputGatherer  #-} dont_close_on_error new_session_id sessions_context
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (outputGatherer session_output ) framer_session_data
     -- Actual data is reordered before being sent
     _ <- forkIOExc "sendReorderingHttp2"
-        $ close_on_error new_session_id sessions_context
-        $ ignoreException blockedIndefinitelyOnMVar ()
+        $ ensure_close
+        $ {-# SCC sendReordering  #-} close_on_error new_session_id sessions_context
         $ runReaderT sendReordering framer_session_data
 
     return ()
@@ -542,8 +562,8 @@ outputGatherer session_output = do
 
     let
 
-       dataForFrame p1 p2 =
-           LB.fromStrict $ NH2.encodeFrame p1 p2
+       -- dataForFrame p1 p2 =
+       --     LB.fromStrict $ NH2.encodeFrame p1 p2
 
        cont = loopPart
 
@@ -567,7 +587,11 @@ outputGatherer session_output = do
                    sendSpecificTerminateGoAway last_stream_id error_code
                    releaseFramer
 
-               StartDataOutput_StFB (stream_id, stream_bytes_mvar)  -> do
+               HeadersTrain_StFB (stream_id, frames, stream_bytes_mvar)  -> do
+                   let
+                       bs = serializeMany frames
+                   -- Send the headers first
+                   withHighPrioritySend bs
                    -- This frame is flow-controlled... I may be unable to send this frame in
                    -- some circumstances...
                    startStreamOutputQueue stream_bytes_mvar stream_id delivery_notify
@@ -582,7 +606,7 @@ outputGatherer session_output = do
                    -- and continue
                    cont
 
-               case_ -> error $ "Error: case not spefified "
+               -- case_ -> error $ "Error: case not spefified "
 
     -- We start by sending a settings frame... NOTICE that this settings frame
     -- should be configurable TODO!!
@@ -591,7 +615,6 @@ outputGatherer session_output = do
         (NH2.SettingsFrame [
               (NH2.SettingsMaxConcurrentStreams, 100)
                            ])
-
     -- And then we continue...
     loopPart
 
@@ -599,7 +622,7 @@ outputGatherer session_output = do
 updateLastInputStream :: GlobalStreamId  -> FramerSession ()
 updateLastInputStream stream_id = do
     last_stream_id_mvar <- view lastInputStream
-    liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> return $ max x stream_id)
+    liftIO $ modifyMVar_ last_stream_id_mvar (\ x -> let y =  max x stream_id in y `seq` return y)
 
 -- updateLastOutputStream :: GlobalStreamId  -> FramerSession ()
 -- updateLastOutputStream stream_id = do
@@ -629,9 +652,6 @@ startStreamOutputComandQueueIfNeeded stream_id =
 -- | Handles only Data frames.
 startStreamOutputQueue :: MVar DataAndEffect ->  GlobalStreamId  -> DeliveryNotifyCallback -> FramerSession ()
 startStreamOutputQueue stream_bytes_mvar stream_id delivery_notify  = do
-
-    -- New thread for handling outputs of this stream is needed
-    ordinal_num  <- liftIO $ newMVar 0
 
     -- s2o_mvar <- view stream2outputBytes
 
@@ -832,7 +852,9 @@ releaseFramer =
 
 
 -- | Puts output wagons in the tray. This function blocks if there is not
---  enough space in the tray.
+--  enough space in the tray and the system priority is not negative.
+--  For negative system priority, the packets are always queued, so that
+--  then can be sent as soon as possible.
 --
 -- This prioritizes DATA packets, in some rudimentary way.
 -- This code will be replaced in due time for something compliant.
@@ -840,7 +862,8 @@ releaseFramer =
 --
 --   System priority:
 --        -20 : the prefix, absolutely most important guy
---        -2 : PING frame
+--        -15 : A request to close the connection
+--        -10 : PING frame
 --        -1 : All packets except data  packets
 --         0 : data packets.
 withPrioritySend_ :: Int -> Int -> Int -> Int -> LB.ByteString -> FramerSession ()
@@ -857,7 +880,7 @@ withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
         attempt =  do
             could_add <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
                 _ <- tryTakeMVar (pss ^. spaceReady_PSS)
-                if (ot1 ^. filling_OuT) < (ot1 ^. maxLength_OuT)
+                if ( (ot1 ^. filling_OuT) < (ot1 ^. maxLength_OuT) ) -- || (system_priority < (-1) )
                   then do
                     let new_ot = addEntry ot1 new_entry
                     return (new_ot, True)
@@ -883,8 +906,11 @@ withNormalPrioritySend = withPrioritySend_ 0
 withHighPrioritySend :: LB.ByteString -> FramerSession ()
 withHighPrioritySend  datum = withPrioritySend_ (-1) 0 0 0 datum
 
+-- Just be sure to send it with some specific priority
 goAwaySend :: LB.ByteString -> FramerSession ()
-goAwaySend  datum = withPrioritySend_ (-2) 0 0 0 datum
+goAwaySend  datum =
+  do
+    withPrioritySend_ goAwayPriority 0 0 0 datum
 
 
 serializeMany :: [OutputFrame] -> LB.ByteString
@@ -907,8 +933,15 @@ pushGoAwayFrame frame_encode_info frame_payload =
     goAwaySend datum
 
 
--- In charge of actually sending the  frames, in a special thread (create said thread
--- in the caller)
+-- | In charge of actually sending the  frames, in a special thread (create said thread
+-- in the caller).
+--
+-- This thread invokes the data push action, so IOCallbacks problems will bubble as
+-- exceptions through this thread.
+--
+-- As long as all the pipes connecting components of the system are bound, terminating
+-- this function and it's thread should propagate as blocked-indefinitely errors to
+-- all the other threads to pipes.
 sendReordering :: FramerSession ()
 sendReordering = do
     pss <- view prioritySendState
@@ -916,11 +949,12 @@ sendReordering = do
     use_size <- view (sessionsContext . sessionsConfig . networkChunkSize)
     -- Get a set of packets (that is, their reprs) to send
     let
+
         get_sendable_data = do
             maybe_entries <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
                 _ <- tryTakeMVar (pss ^. dataReady_PSS)
                 if (ot1 ^. filling_OuT) <= 0
-                  then
+                  then do
                     return (ot1 ,Nothing)
                   else do
                     let
@@ -930,15 +964,16 @@ sendReordering = do
             case maybe_entries of
                 Just entries -> do
                     -- The entries vector is already sorted by priority. if the first entry
-                    -- has priority -2, it means that we should only send that one and lcose
+                    -- has priority goAwayPriority, it means that we should only send that one and close
                     -- the connection immediately....
                     --
                     -- Also, this code should guarantee that no empty vector is ever seen
                     -- here (look for the (ot1 ^. filling_OuT) line above)
+                    -- liftIO $ putStrLn $ "sent " ++ (show . length $ entries )
                     _ <- tryPutMVar (pss ^. spaceReady_PSS) ()
                     let
                       first_entry = head entries
-                    if first_entry ^. systemPriority_TyE == ( -2 )
+                    if first_entry ^. systemPriority_TyE == goAwayPriority
                       then
                         return . Left $ first_entry ^. payload_TyE
                       else
@@ -954,4 +989,5 @@ sendReordering = do
 
         Left entries_data -> do
            sendBytesN entries_data
+           liftIO $ putStrLn "AboutToProduceCleanClose"
            liftIO close_action

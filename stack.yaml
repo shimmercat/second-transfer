@@ -10,4 +10,4 @@ flags:
         fastc: true
 ghc-options:
     second-transfer: "-pgmc g++"
-resolver: nightly-2015-10-13
+resolver: nightly-2016-01-02

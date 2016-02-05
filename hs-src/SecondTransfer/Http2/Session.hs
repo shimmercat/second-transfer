@@ -77,6 +77,7 @@ import           System.Clock                            ( getTime
                                                          , TimeSpec
                                                          )
 
+
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
@@ -107,14 +108,10 @@ type InputFrame  = NH2.Frame
 -- useChunkLength = 2048
 
 
--- Singleton instance used for concurrency
-data HeadersSent = HeadersSent
-
-
 -- What to do regarding headers
 data HeaderOutputMessage =
     -- Send the headers of the principal stream
-    NormalResponse_HM (GlobalStreamId, MVar HeadersSent, Headers, Effect)
+    NormalResponse_HM (GlobalStreamId,  Headers, Effect, MVar TT.DataAndEffect)
     -- Send a push-promise
     |PushPromise_HM   (GlobalStreamId, GlobalStreamId, Headers, Effect)
     -- Send a reset stream notification for the stream given below
@@ -289,8 +286,6 @@ handleRequest headers input_data = do
                Right message -> return message
        )
        ( ( \ _ -> E.throw $ ClientSessionAbortedException SessionAlreadyClosed_CCR ):: E.BlockedIndefinitelyOnMVar -> IO Message )
-
-
 
 
 instance ClientPetitioner ClientState where
@@ -985,7 +980,7 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
 
             Nothing -> error "InternalError, this should be set"
 
-    if frameEndsHeaders frame then {-# SCC gpNNAk #-}
+    if frameEndsHeaders frame then
       do
         -- Ok, let it be known that we are not receiving more headers
         liftIO $ modifyMVar_
@@ -1080,10 +1075,6 @@ serverProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
                       _inputData_RQ = post_data_source,
                       _perception_RQ = perception
                       }
-
-                -- Notify the framer of the new channel of stream data
-                session_output <- liftIO $ readMVar session_output_mvar
-                liftIO $ sendOutputToFramer session_output (TT.StartDataOutput_StFB (stream_id, stream_bytes))
 
                 -- TODO: Handle the cases where a request tries to send data
                 -- even if the method doesn't allow for data.
@@ -1534,8 +1525,9 @@ sendPrimitive500Error =
     )
 
 
--- Invokes the Coherent worker. Data is sent through pipes to
--- the output thread here in this session.
+-- | Invokes the Coherent worker, and interacts with the rest of
+--   the session and the Framer so that data is sent and received by
+--   the peer following the protocol.
 workerThread :: Request -> AwareWorker -> WorkerMonad ()
 workerThread req aware_worker =
     ignoreCancels $  do
@@ -1631,7 +1623,8 @@ normallyHandleStream principal_stream = do
 
     -- Now I send the headers, if that's possible at all
     headers_sent <- liftIO  newEmptyMVar
-    liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers_sent, headers, effects)
+    data_output <- view streamBytesSink_WTE
+    liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers, effects, data_output)
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
@@ -1648,7 +1641,7 @@ normallyHandleStream principal_stream = do
         either_err_or_candies <- CMC.try . runConduit $
              transPipe liftIO data_and_conclusion
             `fuseBothMaybe`
-             sendDataOfStream stream_id headers_sent effects
+             sendDataOfStream stream_id data_output effects
 
         case either_err_or_candies :: Either HTTP500PrecursorException (Maybe Footers, ()) of
              Left _e -> do
@@ -1661,6 +1654,9 @@ normallyHandleStream principal_stream = do
 
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
         -- will need to be changed.
+
+        -- AFTER sending the data of the main stream, start sending the data of the
+        -- pushed streams...
 
         -- Now, time to fork threads for the pusher streams
         -- we send those pushers even if the main stream is cancelled...
@@ -1694,12 +1690,11 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
     --       and should be dropped? That could happen in a couple of occassions,
     --       but really most cases should be handled here in this file...
     -- (headers, _, data_and_conclussion)
+    pusher_data_output <- liftIO $ newEmptyMVar
 
-
-    -- Now I send the headers, if that's possible at all
-    headers_sent <- liftIO  newEmptyMVar
+    -- Now I send the headers, if that's possible at all. These are classes as "Normal response"
     liftIO . writeChan headers_output
-        $ NormalResponse_HM (child_stream_id, headers_sent, response_headers, effects)
+        $ NormalResponse_HM (child_stream_id,  response_headers, effects, pusher_data_output)
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
@@ -1716,7 +1711,7 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
         either_err_or_candies <- CMC.try . runConduit $
              transPipe liftIO pushed_data_and_conclusion
             `fuseBothMaybe`
-             sendDataOfStream child_stream_id headers_sent effects
+             sendDataOfStream child_stream_id pusher_data_output effects
 
         case either_err_or_candies :: Either HTTP500PrecursorException (Maybe Footers, ()) of
              Left _e -> do
@@ -1732,14 +1727,8 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
 
 
 --                                                       v-- comp. monad.
-sendDataOfStream :: GlobalStreamId -> MVar HeadersSent -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
-sendDataOfStream stream_id headers_sent effect = do
-    data_output <- view streamBytesSink_WTE
-    -- Wait for all headers sent
-    _ <- liftIO $ takeMVar headers_sent
-    -- Send a special command to the framer to notify it that Data frames are
-    -- coming on this stream ...
-
+sendDataOfStream :: GlobalStreamId -> MVar TT.DataAndEffect -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
+sendDataOfStream stream_id data_output effect = do
     consumer data_output
   where
     consumer data_output = do
@@ -1817,7 +1806,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
 
     header_output_request <- {-# SCC input_chan  #-} liftIO $ readChan input_chan
     {-# SCC case_ #-} case header_output_request of
-        NormalResponse_HM (stream_id, headers_ready_mvar, headers, effect)  -> do
+        NormalResponse_HM (stream_id, headers, effect, data_output)  -> do
 
             -- First encode the headers using the table
             encode_dyn_table_mvar <- view toEncodeHeaders
@@ -1835,9 +1824,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             liftIO $ bs_chunks `deepseq` withMVar session_output_mvar $ \ session_output -> do
                     let
                         header_frames = headerFrames stream_id bs_chunks effect
-                    sendOutputToFramer session_output $ TT.PriorityTrain_StFB header_frames
-                    putMVar headers_ready_mvar HeadersSent
-
+                    sendOutputToFramer session_output $ TT.HeadersTrain_StFB (stream_id, header_frames, data_output)
 
         GoAway_HM (stream_id, _effect) -> do
            -- This is in charge of sending an interrupt message to the framer
@@ -1981,13 +1968,16 @@ sessionPollThread  session_data headers_output = do
     -- Store the response place
     new_stream_id `seq` H.insert response2waiter new_stream_id response_mvar
 
+
+    -- NON-tested code
+    output_mvar <- newEmptyMVar
+
     -- Start by sending the headers of the request
-    headers_sent <- liftIO  newEmptyMVar
-    liftIO $ writeChan headers_output $ NormalResponse_HM (new_stream_id, headers_sent, headers, effects)
+    liftIO $ writeChan headers_output $ NormalResponse_HM (new_stream_id, headers, effects, output_mvar)
 
     _ <- liftIO . forkIOExc "s2f6" $ do
         either_e0 <- E.try $ runReaderT
-            (clientWorkerThread new_stream_id effects headers_sent input_data_stream )
+            (clientWorkerThread new_stream_id effects output_mvar input_data_stream )
             worker_environment
         case either_e0 :: Either HTTP500PrecursorException () of
             Left _ -> writeChan session_input $ InternalAbortStream_SIC new_stream_id
@@ -2009,13 +1999,13 @@ sessionPollThread  session_data headers_output = do
     sessionPollThread session_data headers_output
 
 
-clientWorkerThread :: GlobalStreamId -> Effect -> MVar HeadersSent -> InputDataStream -> WorkerMonad ()
-clientWorkerThread stream_id effects headers_sent input_data_stream = do
+clientWorkerThread :: GlobalStreamId -> Effect -> MVar TT.DataAndEffect -> InputDataStream -> WorkerMonad ()
+clientWorkerThread stream_id effects output_mvar input_data_stream = do
     -- And now work on sending the data, if any...
     _ <- runConduit $
         transPipe liftIO input_data_stream
         `fuseBothMaybe`
-        sendDataOfStream stream_id headers_sent effects
+        sendDataOfStream stream_id output_mvar effects
     return ()
 
 

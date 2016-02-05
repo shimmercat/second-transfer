@@ -68,6 +68,8 @@ import           SecondTransfer.Exception                                  (fork
 
 import           SecondTransfer.Sessions.HashableSockAddr                  (hashableSockAddrFromNSSockAddr)
 
+import           Debug.Trace                                               (traceStack)
+
 
 data SessionHandlerState = SessionHandlerState {
     _liveSessions_S    ::  !Int64
@@ -240,8 +242,6 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
               new_new_s = live_now_ `seq` set liveSessions_S live_now_ new_s
           return $  new_new_s `seq` (new_new_s, (new_conn_id, live_now_) )
 
-      putStrLn $ "Got new connection " ++ (show new_conn_id)
-
       connection_callbacks <- withMVar session_handler_state_mvar $ \ s -> do
           return $ s ^. connCallbacks_S
       let
@@ -263,7 +263,7 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
 
       let
           instr = do
-              (plaintext_io_callbacks_u ^. closeAction_IOC)
+              traceStack "close-called" $ (plaintext_io_callbacks_u ^. closeAction_IOC)
               modifyMVar_ close_reported $ \ close_reported_x -> do
                   if (not close_reported_x) then  do
                       log_event (Ended_CoEv wconn_id)
