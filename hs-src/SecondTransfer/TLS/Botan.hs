@@ -421,7 +421,6 @@ unencryptChannelData botan_ctx tls_data  = do
     result <- newIORef new_botan_pad
 
     _ <- mkWeakIORef result $ do
-        -- REPORT_EVENT("stable-pointer-freed")
         closeBotan new_botan_pad
         freeStablePtr botan_pad_stable_ref
 

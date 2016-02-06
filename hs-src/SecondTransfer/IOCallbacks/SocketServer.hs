@@ -124,7 +124,6 @@ tcpItcli listen_socket =
     -- of them shows up, we have hit a new abnormal condition that should
     -- be learn from
     do
-        LIO_REPORT_EVENT("listening")
         let
           report_abnormality = do
               putStrLn "ERROR: TCP listen abstraction undone!!"
@@ -133,12 +132,10 @@ tcpItcli listen_socket =
               either_x <- liftIO . E.try $ NS.accept listen_socket
               case either_x of
                   Left e  | ioeGetErrorString e  == "resource exhausted" -> do
-                              LIO_REPORT_EVENT("resource-exhausted")
                               liftIO $ threadDelay  (1000 * 1000)
                               iterate'
                           | ioeGetErrorString e == "signal" -> do
                               -- TODO: Some signals here should be processed differently, most likely!!
-                              LIO_REPORT_EVENT("tcp-exit-on-signal")
                               return ()
                           | otherwise                                                                  -> liftIO $ do
                               -- TODO: Handle other interesting types of IOErrors in the loop above...

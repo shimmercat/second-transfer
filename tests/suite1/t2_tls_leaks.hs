@@ -35,7 +35,6 @@ simpleEcho ctx pre_callbacks =  do
             push = cb ^. pushAction_IOC
             on_finish :: IOProblem -> IO (Maybe B.ByteString)
             on_finish _ = do
-                REPORT_EVENT("well-closed")
                 return Nothing
             on_another :: SomeException -> IO (Maybe B.ByteString)
             on_another e = do
