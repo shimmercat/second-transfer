@@ -568,7 +568,11 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
     return ( (SessionInput session_input),
              session_output )
 
-
+-- | Takes frames from the Framer and starts streams mini-workers to make sense
+-- of them.
+--
+-- TODO: Really limit the number of streams that a single client is allowed to have active.
+--
 -- TODO: Some ill clients can break this thread with exceptions. Make these paths a bit
 --- more robust.
 sessionInputThread :: ReaderT SessionData IO ()
