@@ -6,15 +6,19 @@ module SecondTransfer.Http1.Session(
 
 
 import           Control.Lens
-import           Control.Exception                       (catch, try)
+import           Control.Exception                       (catch, try, throwIO)
 --import           Control.Concurrent                      (forkIO)
-import           Control.Monad.IO.Class                  (liftIO)
+import           Control.Monad.IO.Class                  (liftIO, MonadIO)
 import           Control.Monad                           (when)
+import qualified Control.Monad.Trans.Resource            as ReT
+import           Control.Monad.Morph                     (hoist, lift)
 
 import qualified Data.ByteString                         as B
-import qualified Data.ByteString.Lazy                   as LB
-import           Data.ByteString.Char8                  (unpack, pack)
-import qualified Data.ByteString.Builder                as Bu
+import qualified Data.ByteString.Lazy                    as LB
+import           Data.ByteString.Char8                   (unpack,
+                                                          -- pack
+                                                         )
+import qualified Data.ByteString.Builder                 as Bu
 import           Data.Foldable                           (find)
 import           Data.Conduit
 import qualified Data.Conduit.List                       as CL
@@ -35,6 +39,7 @@ import           SecondTransfer.Http1.Parse
 import           SecondTransfer.Exception                (
                                                          IOProblem,
                                                          NoMoreDataException,
+                                                         HTTP11SyntaxException  (..),
                                                          forkIOExc
                                                          )
 import           SecondTransfer.Sessions.Config
@@ -53,6 +58,7 @@ instance ActivityMeteredSession SimpleSessionMetrics where
 
 -- | Session attendant that speaks HTTP/1.1
 --
+-- This attendant should be OK with keep-alive, but not with pipelining.
 http11Attendant :: SessionsContext -> AwareWorker -> Attendant
 http11Attendant sessions_context coherent_worker connection_info attendant_callbacks
     =
@@ -110,7 +116,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             RequestIsMalformed_H1PC _msg -> do
                 --putStrLn $ "Syntax Error: " ++ msg
-                -- This is a syntactic error..., so just close the connectin
+                -- This is a syntactic error..., so just close the connection
                 close_action
                 -- We exit by returning nothing
                 return Nothing
@@ -132,7 +138,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         return Nothing
                     ) :: IOProblem -> IO (Maybe B.ByteString) )
 
-            OnlyHeaders_H1PC headers leftovers -> do
+            OnlyHeaders_H1PC headers _leftovers -> do
                 -- putStrLn $ "OnlyHeaders_H1PC " ++ (show leftovers)
                 -- Ready for action...
                 -- ATTENTION: Not use for pushed streams here....
@@ -154,23 +160,24 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _peerAddress_Pr       = maybe_hashable_addr
                         }
                     }
-                answer_by_principal_stream principal_stream leftovers
+                ReT.runResourceT $ answer_by_principal_stream principal_stream
+                -- Will discard leftovers, but can continue
+                return $ Just ""
 
-            -- We close the connection of any of the delimiting headers could not be parsed.
+            -- We close the connection if any of the delimiting headers could not be parsed.
             HeadersAndBody_H1PC _headers SemanticAbort_BSC _recv_leftovers -> do
                 close_action
                 return Nothing
 
             HeadersAndBody_H1PC headers stopcondition recv_leftovers -> do
-                -- putStrLn $ "HeadersAndBody_H1PC " ++ (show recv_leftovers)
                 let
                     modified_headers = addExtraHeaders sessions_context headers
                 started_time <- getTime Monotonic
                 set_leftovers <- newIORef ""
 
                 let
-                    source :: Source IO B.ByteString
-                    source = case stopcondition of
+                    source :: Source AwareWorkerStack B.ByteString
+                    source = hoist  lift $ case stopcondition of
                         UseBodyLength_BSC n -> counting_read recv_leftovers n set_leftovers
                         ConnectionClosedByPeer_BSC -> readforever recv_leftovers
                         Chunked_BSC -> readchunks recv_leftovers
@@ -188,7 +195,9 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _peerAddress_Pr       = maybe_hashable_addr
                         }
                     }
-                answer_by_principal_stream principal_stream recv_leftovers
+                ReT.runResourceT $ answer_by_principal_stream principal_stream
+                return $ Just ""
+
 
     counting_read :: B.ByteString -> Int -> IORef B.ByteString -> Source IO B.ByteString
     counting_read leftovers n set_leftovers = do
@@ -257,19 +266,20 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                            return ()
         gorc leftovers (Ap.parse chunkParser)
 
-    maybepushtext :: LB.ByteString -> IO Bool
-    maybepushtext txt =  catch
-        (do
-            push_action txt
-            return True
-        )
-        ((\ _e -> do
-            -- debugM "Session.HTTP1" "Session abandoned"
-            close_action
-            return False
-        ) :: IOProblem -> IO Bool )
+    maybepushtext :: MonadIO m => LB.ByteString -> m Bool
+    maybepushtext txt =  liftIO $
+        catch
+            (do
+                push_action txt
+                return True
+            )
+            ((\ _e -> do
+                -- debugM "Session.HTTP1" "Session abandoned"
+                close_action
+                return False
+            ) :: IOProblem -> IO Bool )
 
-    piecewiseconsume :: Sink LB.ByteString IO Bool
+    piecewiseconsume :: MonadIO m => Sink LB.ByteString m Bool
     piecewiseconsume = do
         maybe_text <- await
         case maybe_text of
@@ -283,7 +293,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             Nothing -> return True
 
-    piecewiseconsumecounting :: Int -> Sink LB.ByteString IO Bool
+    piecewiseconsumecounting :: MonadIO m => Int -> Sink LB.ByteString m Bool
     piecewiseconsumecounting n
       | n > 0 = do
         maybe_text <- await
@@ -304,8 +314,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
       | otherwise =
             return True
 
-
-    answer_by_principal_stream principal_stream leftovers = do
+    answer_by_principal_stream :: PrincipalStream ->  AwareWorkerStack ()
+    answer_by_principal_stream principal_stream  = do
         let
             data_and_conclusion = principal_stream ^. dataAndConclusion_PS
             response_headers    = principal_stream ^. headers_PS
@@ -313,73 +323,41 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
             cnt_length_header = find (\ x -> (fst x) == "content-length" )    response_headers
             headers_text_as_lbs = Bu.toLazyByteString $ headerListToHTTP1ResponseText response_headers  `mappend` "\r\n"
 
+        close_release_key <- ReT.register close_action
         case (transfer_encoding, cnt_length_header) of
 
             (Just (_, enc), _ )
               | transferEncodingIsChunked enc -> do
                   -- TODO: Take care of footers
-                  push_action headers_text_as_lbs
-                  (_maybe_footers, did_ok) <- runConduit  $ data_and_conclusion `fuseBothMaybe` (CL.map wrapChunk =$= piecewiseconsume)
-                  if did_ok
-                    then do
-                      -- Don't forget the zero-length terminating chunk...
-                      didok' <- maybepushtext $ wrapChunk ""
-                      if didok'
-                        then
-                          return $ Just leftovers
-                        else
-                          return Nothing
-                    else do
-                      close_action
-                      return Nothing
+                  liftIO $ push_action headers_text_as_lbs
+                  -- Will run the conduit. If it fails, the connection will be closed.
+                  (_maybe_footers, _did_ok) <- runConduit  $ data_and_conclusion `fuseBothMaybe` (CL.map wrapChunk =$= piecewiseconsume)
+                  -- Don't forget the zero-length terminating chunk...
+                  _ <- maybepushtext $ wrapChunk ""
+                  -- If I got to this point, I can keep the connection alive for a future request
+                  _ <- ReT.unprotect close_release_key
+                  return ()
 
               | otherwise -> do
                 -- This is a pretty bad condition, I don't know how to use
                 -- any other encoding...
-                  putStrLn "ISawTransferEncodingICouldntHandle/ClosingConnection"
-                  close_action
-                  return Nothing
+                  liftIO . throwIO .  HTTP11SyntaxException $ "UnhandledTransferEncoding"
 
             (Nothing, (Just (_,content_length_str))) -> do
                 -- Use the provided chunks, as naturally as possible
                 let
                     content_length :: Int
                     content_length = read . unpack $ content_length_str
-                push_action headers_text_as_lbs
-                (_maybe_footers, did_ok) <- runConduit $ data_and_conclusion `fuseBothMaybe` (CL.map LB.fromStrict =$= piecewiseconsumecounting content_length)
-                if did_ok
-                  then
-                    return $ Just leftovers
-                  else do
-                    close_action
-                    return Nothing
+                liftIO $ push_action headers_text_as_lbs
+                (_maybe_footers, _did_ok) <- runConduit $ data_and_conclusion `fuseBothMaybe` (CL.map LB.fromStrict =$= piecewiseconsumecounting content_length)
+                -- Got here, keep the connection open
+                _ <- ReT.unprotect close_release_key
+                return ()
 
             (Nothing, Nothing) -> do
-                (_, fragments) <- runConduit $ fuseBoth data_and_conclusion CL.consume
-                let
-                    response_text =
-                        Bu.toLazyByteString . mconcat . map Bu.byteString $ fragments
-                    content_length_str = pack . show . LB.length $ response_text
-                    h2 = He.fromList response_headers
-                    h3 =
-                        (set $ He.headerLens "content-length" )
-                        (Just content_length_str)
-                        h2
-                    h4 = He.toList h3
-                    headers_text_as_lbs' = Bu.toLazyByteString $ headerListToHTTP1ResponseText h4  `mappend` "\r\n"
+                -- What?
+                liftIO . throwIO $ HTTP11SyntaxException "ApplicationMustProvideContentLengthOrSpecifiyTransferEncoding"
 
-                push_action headers_text_as_lbs'
-
-                catch
-                    (do
-                        push_action response_text
-                        return $ Just leftovers
-                    )
-                    ((\ _e -> do
-                        -- debugM "Session.HTTP1" "Session abandoned"
-                        close_action
-                        return Nothing
-                    ) :: IOProblem -> IO (Maybe B.ByteString) )
 
 addExtraHeaders :: SessionsContext -> Headers -> Headers
 addExtraHeaders sessions_context headers =
