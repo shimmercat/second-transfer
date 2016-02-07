@@ -20,6 +20,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , Perception(..)
     , Effect(..)
     , AwareWorker
+    , AwareWorkerStack
     , PrincipalStream(..)
     , PushedStreams
     , PushedStream(..)
@@ -60,6 +61,8 @@ module SecondTransfer.MainLoop.CoherentWorker(
 
 
 import           Control.Lens
+import           Control.Monad.Trans.Resource
+
 import qualified Data.ByteString                       as B
 import           Data.Conduit
 import           Data.Foldable                         (find)
@@ -86,9 +89,18 @@ type Header = (HeaderName, HeaderValue)
 -- for responses.
 type Headers = [Header]
 
+-- | Has kind * -> *
+--   Used to allow for registered cleanup functions to be safely
+--   called, even/specially in the event of a Browser/User hanging-up the
+--   connection before the worker has finished doing its work.
+--   Alleviates the need for handling async. execeptions.
+type AwareWorkerStack = ResourceT IO
+
+
 -- |This is a Source conduit (see Haskell Data.Conduit library from Michael Snoyman)
 -- that you can use to retrieve the data sent by the peer piece-wise.
-type InputDataStream = Source IO B.ByteString
+--
+type InputDataStream = Source AwareWorkerStack B.ByteString
 
 
 -- | Data related to the request
@@ -139,10 +151,11 @@ type Footers = FinalizationHeaders
 --   streams are not going to be sent to the client.
 type PushedStreams = [ IO PushedStream ]
 
+
 -- | A source-like conduit with the data returned in the response. The
 --   return value of the conduit is a list of footers. For now that list can
 --   be anything (even bottom), I'm not handling it just yet.
-type DataAndConclusion = ConduitM () B.ByteString IO Footers
+type DataAndConclusion = ConduitM () B.ByteString AwareWorkerStack Footers
 
 
 -- | A pushed stream, represented by a list of request headers,
@@ -274,7 +287,7 @@ getHeaderFromFlatList unvl bs =
 
 -- | If you want to skip the footers, i.e., they are empty, use this
 --   function to convert an ordinary Source to a DataAndConclusion.
-nullFooter :: Source IO B.ByteString -> DataAndConclusion
+nullFooter :: Source AwareWorkerStack B.ByteString -> DataAndConclusion
 nullFooter s = s =$= go
   where
     go = do
