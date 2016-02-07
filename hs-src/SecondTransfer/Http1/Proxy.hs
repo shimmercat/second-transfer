@@ -33,6 +33,7 @@ import           SecondTransfer.Http1.Parse                                (
                                                                             , IncrementalHttp1Parser
                                                                             , Http1ParserCompletion(..)
                                                                             , addBytes
+                                                                            , unwrapChunks
                                                                             , BodyStopCondition(..)
                                                                             )
 import           SecondTransfer.IOCallbacks.Types
@@ -43,8 +44,8 @@ import           SecondTransfer.Exception                                  (
                                                                             , IOProblem (..)
                                                                             , GatewayAbortedException (..)
                                                                             , keyedReportExceptions
-                                                                            , ignoreException
-                                                                            , ioProblem
+                                                                            -- , ignoreException
+                                                                            -- , ioProblem
                                                                            )
 
 #include "instruments.cpphs"
@@ -56,11 +57,17 @@ instance Http1CycleController IO IOCallbacksConn where
     releaseResponseResources (IOCallbacksConn conn) = (conn ^. closeAction_IOC)
 
 
+fragmentMaxLength :: Int
+fragmentMaxLength = 16384
+
+
 -- | Takes an IOCallbacksConn (not straight IOCallbacks since we plan on adding controllabiility)
 --   features on top of this type), and serializes a request (encoded HTTP/2 style in headers and streams)
 --   on top of the callback, waits for the results, and returns the response. Notice that this proxy
 --   may fail for any reason, do take measures and handle exceptions. Also, must headers manipulations
---   (e.g. removing the "Connection" header) are left to the upper layers
+--   (e.g. removing the "Connection" header) are left to the upper layers. And this doesn't include
+--   managing any kind of pipelining in the http/1.1 connection, however, close is not done, so
+--   keep-alive (not pipelineing) should be OK.
 ioProxyToConnection :: IOCallbacksConn -> HttpRequest IO -> IO (HttpResponse IO, IOCallbacksConn)
 ioProxyToConnection c@(IOCallbacksConn ioc) request =
   do
@@ -112,26 +119,48 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                -- In any other case, just return
                a -> return a
 
+        pumpout :: B.ByteString -> Int -> Source IO B.ByteString
         pumpout fragment n = do
             when (B.length fragment > 0) $  yield fragment
             when (n > 0 ) $ pull n
 
-       -- ATTENTION: This is letting data to accumulate in this side,
-       -- buffering it!! TODO: Fix that to decrease server memory
-       -- usage!
-       -- (but should be ok for relatively small responses)
         pull :: Int -> Source IO B.ByteString
-        pull n = do
-            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "pll-" $ E.try  $ (ioc ^. pullAction_IOC ) n
+        pull n
+          | n > fragmentMaxLength = do
+
+            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "pll-" $ E.try  $ (ioc ^. pullAction_IOC ) fragmentMaxLength
             s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
                 Right datum -> return datum
-            -- After getting all that sweet data close the connection
-            -- TODO: KEEP alive connections won't appreciate this!!
-            liftIO $ ignoreException ioProblem () (ioc ^. closeAction_IOC)
+            yield s
+            pull ( n - fragmentMaxLength )
+
+          | otherwise = do
+
+            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "pla-" $ E.try  $ (ioc ^. pullAction_IOC ) n
+            s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
+                Left _exc -> liftIO $ E.throwIO GatewayAbortedException
+                Right datum -> return datum
+            yield s
+            -- and finish...
+
+        pull_forever :: Source IO B.ByteString
+        pull_forever = do
+            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "plc-" $ E.try  $ (ioc ^. bestEffortPullAction_IOC ) True
+            s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
+                Left _exc -> liftIO $ E.throwIO GatewayAbortedException
+                Right datum -> return datum
             yield s
 
+        unwrapping_chunked :: B.ByteString -> Source IO B.ByteString
+        unwrapping_chunked leftovers =
+            (do
+                yield leftovers
+                pull_forever
+            ) =$= unwrapChunks
+
         pump_until_exception fragment = do
+
             if B.length fragment > 0
               then do
                 yield fragment
@@ -140,8 +169,6 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 s <- liftIO $ keyedReportExceptions "ue-" $ E.try $ (ioc ^. bestEffortPullAction_IOC) True
                 case (s :: Either NoMoreDataException B.ByteString) of
                     Left _ -> do
-                        -- Just ensure a close
-                        liftIO $ ignoreException ioProblem () (ioc ^. closeAction_IOC)
                         return ()
 
                     Right datum -> do
@@ -173,6 +200,27 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                     _headers_Rp = headers
                   , _body_Rp = return ()
                     }, c)
+
+
+        HeadersAndBody_H1PC headers Chunked_BSC  leftovers -> do
+            --  HEADs must be handled differently!
+            if methodHasResponseBody method
+              then
+                return (HttpResponse {
+                    _headers_Rp = headers
+                  , _body_Rp = unwrapping_chunked leftovers
+                    }, c)
+              else
+                return (HttpResponse {
+                    _headers_Rp = headers
+                  , _body_Rp = return ()
+                    }, c)
+
+
+        HeadersAndBody_H1PC _headers SemanticAbort_BSC  _leftovers -> do
+            --  HEADs must be handled differently!
+            E.throwIO $ HTTP11SyntaxException "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
+
 
         HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC leftovers -> do
             -- The parser will assume that most responses have a body in the absence of

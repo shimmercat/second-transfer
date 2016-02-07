@@ -17,6 +17,7 @@ module SecondTransfer.Http1.Parse(
     ,chunkParser
     ,transferEncodingIsChunked
     ,wrapChunk
+    ,unwrapChunks
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
@@ -25,7 +26,7 @@ module SecondTransfer.Http1.Parse(
 
 
 
---import           Control.Exception                      (throw)
+import           Control.Exception                      (throw)
 -- import           Control.Lens
 import qualified Control.Lens                           as L
 import           Control.Applicative
@@ -48,13 +49,15 @@ import qualified Data.Attoparsec.ByteString.Char8       as Ap8
 import           Data.Foldable                          (find)
 import           Data.Word                              (Word8)
 import qualified Data.Map                               as M
+import           Data.Conduit
+
 import           Text.Read                              (readEither)
 
 import qualified Network.URI                            as U
 
 import qualified SecondTransfer.Utils.HTTPHeaders       as E
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
---import           SecondTransfer.Exception
+import           SecondTransfer.Exception
 import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 import qualified SecondTransfer.ConstantsAndLimits      as Constant
@@ -300,6 +303,7 @@ splitByColon  = L.over L._2 (B.tail) . Ch8.break (== ':')
 transferEncodingIsChunked :: B.ByteString -> Bool
 transferEncodingIsChunked x = x == "chunked"
 
+
 verifyHeaderName :: B.ByteString -> Bool
 verifyHeaderName =
   B.all ( \ w8 ->
@@ -480,6 +484,43 @@ wrapChunk bs = let
     a0 = Bu.byteString . pack $ lng_str
     a1 = Bu.byteString bs
     in Bu.toLazyByteString $ a0 `mappend` "\r\n" `mappend` a1 `mappend` "\r\n"
+
+
+unwrapChunks :: Monad m => Conduit B.ByteString m B.ByteString
+unwrapChunks =
+    do
+      input <- await
+      case input of
+          Nothing -> return ()
+          Just bs ->
+              let
+                  parse_result = Ap.parse chunkParser bs
+              in onresult parse_result
+  where
+    onresult parse_result =
+        case parse_result of
+            Ap.Fail  _ _  _ -> throw $ HTTP11SyntaxException "ChunkedParsingFailed"
+            Ap.Partial fn -> go fn
+            Ap.Done leftovers payload -> do
+                payload `seq` yield payload
+                if (B.length payload > 0)
+                  then
+                    restart leftovers
+                  else
+                    leftover leftovers
+    go fn = do
+      input <- await
+      case input of
+          Nothing -> throw $ HTTP11SyntaxException "ChunkedParsingLeftUnfinished"
+
+          Just bs ->
+              let
+                  parse_result = fn bs
+              in onresult parse_result
+    restart leftovers =
+        let
+            parse_result = Ap.parse chunkParser leftovers
+        in onresult parse_result
 
 
 -- This is a serialization function: it goes from content to string
