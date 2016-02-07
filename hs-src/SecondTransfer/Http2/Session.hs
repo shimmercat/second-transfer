@@ -176,7 +176,7 @@ sendCommandToSession (SessionInput chan) command = writeChan chan command
 newtype SessionOutputChannelAbstraction = SOCA (BC.BoundedChan TT.SessionOutputPacket)
 
 sendOutputToFramer :: SessionOutputChannelAbstraction -> TT.SessionOutputPacket -> IO ()
-sendOutputToFramer (SOCA chan) p =  p `seq` BC.writeChan chan p
+sendOutputToFramer (SOCA chan) p = {-# SCC serial #-}  p `seq` BC.writeChan chan p
 
 newSessionOutput :: IO SessionOutputChannelAbstraction
 newSessionOutput =
@@ -1510,7 +1510,7 @@ workerThread req aware_worker =
         --
         -- TODO: Can we add debug information in a header here?
         principal_stream <-
-            liftIO $ E.catch
+            liftIO $ {-# SCC wTer1  #-} E.catch
                 (
                     aware_worker  req
                 )
@@ -1529,7 +1529,7 @@ workerThread req aware_worker =
         case interrupt_maybe of
 
             Nothing -> do
-                normallyHandleStream principal_stream
+                {-# SCC nHS #-} normallyHandleStream principal_stream
 
             Just (InterruptConnectionAfter_IEf) -> do
                 normallyHandleStream principal_stream
@@ -1591,7 +1591,7 @@ normallyHandleStream principal_stream = do
 
     -- Now I send the headers, if that's possible at all
     data_output <- view streamBytesSink_WTE
-    liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers, effects, data_output)
+    headers `seq` ( liftIO $ writeChan headers_output $ NormalResponse_HM (stream_id, headers, effects, data_output) )
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
@@ -1692,13 +1692,17 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
         return ()
 
 
-
 --                                                       v-- comp. monad.
 sendDataOfStream :: GlobalStreamId -> MVar TT.DataAndEffect -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
-sendDataOfStream _stream_id data_output effect = do
+sendDataOfStream _stream_id data_output effect =
+  do
     consumer
   where
-    consumer  = do
+    channel_broken_handler :: E.BlockedIndefinitelyOnMVar ->  Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
+    channel_broken_handler _e = do
+        -- liftIO . putStrLn $ "channel broken, discarding output"
+        return ()
+    consumer  = CMC.handle channel_broken_handler $  do
         maybe_bytes <- await
         -- use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
         -- use_size <- liftIO $ DIO.readIORef use_size_ioref

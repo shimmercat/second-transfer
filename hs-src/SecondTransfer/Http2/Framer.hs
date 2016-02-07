@@ -236,7 +236,8 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
 
 
     let
-        -- TODO: Dodgy exception handling here...
+
+        close_on_error :: Int -> SessionsContext -> IO () -> IO ()
         close_on_error session_id session_context comp =
             E.finally (
                 E.catch
@@ -249,14 +250,15 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
                 )
                 close_action
 
-        dont_close_on_error session_id session_context comp =
-            E.catch
-                (
-                    E.catch
-                        comp
-                        (exc_handler session_id session_context)
-                )
-                (io_exc_handler session_id session_context)
+        -- dont_close_on_error :: Int -> SessionsContext -> IO () -> IO ()
+        -- dont_close_on_error session_id session_context comp =
+        --     E.catch
+        --         (
+        --             E.catch
+        --                 comp
+        --                 (exc_handler session_id session_context)
+        --         )
+        --         (io_exc_handler session_id session_context)
 
         ensure_close :: IO a -> IO a
         ensure_close c = E.finally c close_action
@@ -272,16 +274,14 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         io_exc_handler _x _y _e = do
             -- putStrLn $ show _e
             modifyMVar_ output_is_forbidden (\ _ -> return True)
-            -- !!! These exceptions are way too common for we to care....
-            -- errorM "HTTP2.Framer" "Exception went up"
-            -- sessionExceptionHandler Framer_HTTP2SessionComponent x y e
+
 
     _ <- forkIOExc "inputGathererHttp2"
-        $ {-# SCC inputGatherer  #-} dont_close_on_error new_session_id sessions_context
+        $ {-# SCC inputGatherer  #-} close_on_error new_session_id sessions_context
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (inputGatherer pull_action session_input ) framer_session_data
     _ <- forkIOExc "outputGathererHttp2"
-        $ {-# SCC outputGatherer  #-} dont_close_on_error new_session_id sessions_context
+        $ {-# SCC outputGatherer  #-} close_on_error new_session_id sessions_context
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (outputGatherer session_output ) framer_session_data
     -- Actual data is reordered before being sent
@@ -945,7 +945,7 @@ pushGoAwayFrame frame_encode_info frame_payload =
 -- this function and it's thread should propagate as blocked-indefinitely errors to
 -- all the other threads to pipes.
 sendReordering :: FramerSession ()
-sendReordering = do
+sendReordering = {-# SCC sndReo  #-} do
     pss <- view prioritySendState
     close_action <- view closeAction
     use_size <- view (sessionsContext . sessionsConfig . networkChunkSize)

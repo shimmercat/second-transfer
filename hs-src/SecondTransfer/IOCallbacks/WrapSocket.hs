@@ -63,12 +63,17 @@ socketIOCallbacks socket = do
                                E.throwIO NoMoreDataException
                     ) :: E.IOException -> IO a )
 
-        push_action lazy_bs = keyedReportExceptions "pushAtSocket" $
+        -- A socket is closed inmediately upon finding an exception.
+        -- The close action will be called many more times, of course,
+        -- since the entire program is very, very overzealous of
+        -- open sockets.
+
+        -- We, of course, want exceptions to bubble from here.
+        push_action lazy_bs = -- keyedReportExceptions "pushAtSocket" $
             E.catch
                 (NSB.sendMany socket . LB.toChunks $ lazy_bs)
                 uhandler
-        -- Unfortunately we are forced to totally rely on sockets blocking or not nature
-        -- TODO:  Check if ignoring the flag here becomes a problem.
+
         best_effort_pull_action _ = do
             datum <- E.catch (NSB.recv socket 4096) uhandler
             if B.length datum == 0

@@ -37,20 +37,21 @@ module SecondTransfer.TLS.CoreServer (
        ) where
 
 import           Control.Concurrent
-import           Control.Monad.IO.Class                                    (liftIO)
-import           Control.Monad                                             (when)
+--import           Control.Monad.IO.Class                                    (liftIO)
+--import           Control.Monad                                             (when)
 import           Control.Lens                                              ( (^.), makeLenses, over, set )
 
-import           Data.Conduit
+--import           Data.Conduit
 -- import qualified Data.Conduit                                              as Con(yield)
-import qualified Data.Conduit.List                                         as CL
+--import qualified Data.Conduit.List                                         as CL
 import           Data.Typeable                                             (Proxy(..))
 import           Data.List                                                 (elemIndex)
-import           Data.Maybe                                                (fromMaybe, isJust)
+import           Data.Maybe                                                (-- fromMaybe,
+                                                                            isJust)
 import qualified Data.ByteString                                           as B
 import           Data.ByteString.Char8                                     (pack, unpack)
 import           Data.Int                                                  (Int64)
-import           Data.IORef
+-- import           Data.IORef
 
 --import qualified Data.ByteString.Lazy                                      as LB
 --import qualified Data.ByteString.Builder                                   as Bu
@@ -68,7 +69,7 @@ import           SecondTransfer.Exception                                  (fork
 
 import           SecondTransfer.Sessions.HashableSockAddr                  (hashableSockAddrFromNSSockAddr)
 
-import           Debug.Trace                                               (traceStack)
+--import           Debug.Trace                                               (traceStack)
 
 
 data SessionHandlerState = SessionHandlerState {
@@ -232,7 +233,7 @@ tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io, HasSock
        -> IO ()
 tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
     -- Have the handshake happen in another thread
-    forkIOExc "tlsSessionHandler" $ do
+    _ <- forkIOExc "tlsSessionHandler" $ do
 
       -- Get a new connection id
       (new_conn_id, live_now) <- modifyMVar session_handler_state_mvar $ \ s -> do
@@ -269,7 +270,7 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
                       plaintext_io_callbacks_u ^. closeAction_IOC
                       log_event (Ended_CoEv wconn_id)
                       modifyMVar_ session_handler_state_mvar $ \ s -> do
-                          let new_conn_id = s ^. nextConnId_S
+                          let
                               live_now_ = (s ^. liveSessions_S) - 1
                               new_new_s = set liveSessions_S live_now_ s
                           new_new_s `seq` return new_new_s
