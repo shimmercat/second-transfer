@@ -44,7 +44,8 @@ import           Control.Monad                          (
 --                                                         mapM_,
                                                          forM,
                                                          forM_)
-import           Control.Monad.IO.Class                 (liftIO)
+import           Control.Monad.Morph                     (hoist, lift)
+import           Control.Monad.IO.Class                 (liftIO, MonadIO)
 import           Control.DeepSeq                        (
                                                          --($!!),
                                                         deepseq )
@@ -71,7 +72,7 @@ import           Control.Lens
 import qualified Network.HPACK                          as HP
 import qualified Network.HTTP2                          as NH2
 
-
+import qualified Control.Monad.Trans.Resource           as ReT
 import           System.Clock                            ( getTime
                                                          , Clock(..)
                                                          , TimeSpec
@@ -98,7 +99,7 @@ import           SecondTransfer.MainLoop.Logging        (logit)
 
 #endif
 
-import           Debug.Trace                            (traceStack)
+-- import           Debug.Trace                            (traceStack)
 
 
 type InputFrame  = NH2.Frame
@@ -1405,7 +1406,7 @@ createMechanismForStream :: GlobalStreamId -> ReaderT SessionData IO PostInputMe
 createMechanismForStream stream_id = do
     (chan, source) <- liftIO $ unfoldChannelAndSource
     stream2postinputmechanism <- view stream2PostInputMechanism
-    let pim = PostInputMechanism (chan, source)
+    let pim = PostInputMechanism (chan, hoist lift  source)
     liftIO $ H.insert stream2postinputmechanism stream_id pim
     return pim
 
@@ -1605,19 +1606,13 @@ normallyHandleStream principal_stream = do
         -- This threadlet should block here waiting for the headers to finish going
         -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
         -- are let to bubble and managed in this thread fork point...
-        either_err_or_candies <- CMC.try . runConduit $
-             transPipe liftIO data_and_conclusion
-            `fuseBothMaybe`
-             sendDataOfStream stream_id data_output effects
-
-        case either_err_or_candies :: Either HTTP500PrecursorException (Maybe Footers, ()) of
-             Left _e -> do
-                 -- Exceptions can happen for a number of reason, we just
-                 -- press the reset button for this stream
-                 liftIO reset_button
-
-             Right (_maybe_footers, _) ->
-                 return ()
+        _ <- liftIO . ReT.runResourceT $ do
+            resource_key <- ReT.register reset_button
+            _ <- runConduit $
+               (data_and_conclusion)
+               `fuseBothMaybe`
+               (sendDataOfStream stream_id data_output effects)
+            ReT.unprotect resource_key
 
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
         -- will need to be changed.
@@ -1668,41 +1663,24 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
     -- streams
     is_stream_cancelled <- isStreamCancelled child_stream_id
     unless  is_stream_cancelled $ do
-        -- I have a beautiful source that I can de-construct...
-        -- TODO: Optionally pulling data out from a Conduit ....
-        -- liftIO ( data_and_conclussion $$ (_sendDataOfStream stream_id) )
-        --
-        -- This threadlet should block here waiting for the headers to finish going
-        -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
-        -- are let to bubble and managed in this thread fork point...
-        either_err_or_candies <- CMC.try . runConduit $
-             transPipe liftIO pushed_data_and_conclusion
-            `fuseBothMaybe`
-             sendDataOfStream child_stream_id pusher_data_output effects
-
-        case either_err_or_candies :: Either HTTP500PrecursorException (Maybe Footers, ()) of
-             Left _e -> do
-                 -- Exceptions can happen for a number of reasons, we just
-                 -- press the reset button for this stream
-                 liftIO $ pushed_reset_button child_stream_id
-
-             Right (_maybe_footers, _) ->
-                  return ()
+        _ <- liftIO . ReT.runResourceT $ do
+            k <- ReT.register (pushed_reset_button child_stream_id)
+            _ <- runConduit $
+                 pushed_data_and_conclusion
+                `fuseBothMaybe`
+                sendDataOfStream child_stream_id pusher_data_output effects
+            ReT.unprotect k
 
         return ()
 
 
 --                                                       v-- comp. monad.
-sendDataOfStream :: GlobalStreamId -> MVar TT.DataAndEffect -> Effect -> Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
+sendDataOfStream :: MonadIO m => GlobalStreamId -> MVar TT.DataAndEffect -> Effect -> Sink B.ByteString m ()
 sendDataOfStream _stream_id data_output effect =
   do
     consumer
   where
-    channel_broken_handler :: E.BlockedIndefinitelyOnMVar ->  Sink B.ByteString (ReaderT WorkerThreadEnvironment IO) ()
-    channel_broken_handler _e = do
-        -- liftIO . putStrLn $ "channel broken, discarding output"
-        return ()
-    consumer  = CMC.handle channel_broken_handler $  do
+    consumer  = do
         maybe_bytes <- await
         -- use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
         -- use_size <- liftIO $ DIO.readIORef use_size_ioref
@@ -1971,8 +1949,8 @@ sessionPollThread  session_data headers_output = do
 clientWorkerThread :: GlobalStreamId -> Effect -> MVar TT.DataAndEffect -> InputDataStream -> WorkerMonad ()
 clientWorkerThread stream_id effects output_mvar input_data_stream = do
     -- And now work on sending the data, if any...
-    _ <- runConduit $
-        transPipe liftIO input_data_stream
+    _ <- liftIO . ReT.runResourceT . runConduit $
+        input_data_stream
         `fuseBothMaybe`
         sendDataOfStream stream_id output_mvar effects
     return ()
