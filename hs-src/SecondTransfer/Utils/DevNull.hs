@@ -5,10 +5,10 @@ module SecondTransfer.Utils.DevNull(
      ) where
 
 
-import           Control.Concurrent (forkIO)
 import           Data.Conduit
 
-import           Control.Monad.IO.Class                 (liftIO)
+import           Control.Monad.IO.Class                 (liftIO, MonadIO)
+import qualified Control.Monad.Trans.Resource            as ReT
 
 import SecondTransfer.MainLoop.CoherentWorker
 
@@ -21,11 +21,11 @@ import SecondTransfer.Exception                       (forkIOExc)
 -- use this consumer to drop the data to oblivion. Otherwise it will
 -- remain in an internal queue until the client closes the
 -- stream, and if the client doesn't want to do so....
-dropIncomingData :: Maybe InputDataStream -> AwareWorkerStack ()
+dropIncomingData :: MonadIO m => Maybe InputDataStream -> m ()
 dropIncomingData Nothing = return ()
 dropIncomingData (Just data_source) = do
-    _ <- liftIO . forkIOExc "dropIncomingData"  $
-        data_source $$ awaitForever (\ _ -> do
+    _ <- liftIO . forkIOExc "dropIncomingData" . ReT.runResourceT $
+         data_source $$ awaitForever (\ _ -> do
                                          return () )
     return ()
 
@@ -38,7 +38,7 @@ dropWouldGoData data_source = do
             case x of
                 Nothing -> return ()
                 Just _ -> do_empty
-    _ <- forkIO $ do
-        _ <- runConduit $ fuseBoth data_source  do_empty
+    _ <- forkIOExc "dropWouldGoData" $ do
+        _ <- ReT.runResourceT . runConduit $ fuseBoth data_source  do_empty
         return ()
     return ()
