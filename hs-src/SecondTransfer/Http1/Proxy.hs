@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies #-}
+{-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies, Rank2Types #-}
 module SecondTransfer.Http1.Proxy (
                  ioProxyToConnection
 
@@ -8,7 +8,9 @@ module SecondTransfer.Http1.Proxy (
 import           Control.Lens
 import qualified Control.Exception                                         as E
 import           Control.Monad                                             (when)
-import           Control.Monad.IO.Class                                    (liftIO)
+--import           Control.Monad.Morph                                       (hoist, lift)
+import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
+--import qualified Control.Monad.Trans.Resource                              as ReT
 
 import qualified Data.ByteString                                           as B
 --import           Data.List                                                 (foldl')
@@ -30,7 +32,7 @@ import           SecondTransfer.Http1.Parse                                (
                                                                             , methodHasRequestBody
                                                                             , methodHasResponseBody
                                                                             , newIncrementalHttp1Parser
-                                                                            , IncrementalHttp1Parser
+                                                                            --, IncrementalHttp1Parser
                                                                             , Http1ParserCompletion(..)
                                                                             , addBytes
                                                                             , unwrapChunks
@@ -68,7 +70,7 @@ fragmentMaxLength = 16384
 --   (e.g. removing the "Connection" header) are left to the upper layers. And this doesn't include
 --   managing any kind of pipelining in the http/1.1 connection, however, close is not done, so
 --   keep-alive (not pipelineing) should be OK.
-ioProxyToConnection :: IOCallbacksConn -> HttpRequest IO -> IO (HttpResponse IO, IOCallbacksConn)
+ioProxyToConnection :: forall m . MonadIO m => IOCallbacksConn -> HttpRequest m -> m (HttpResponse m, IOCallbacksConn)
 ioProxyToConnection c@(IOCallbacksConn ioc) request =
   do
     let
@@ -92,7 +94,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
     -- bubble. But the upper layer should deal with it.
     --LB.putStr cnt1_lbz
     --LB.putStr "\n"
-    (ioc ^. pushAction_IOC) cnt1_lbz
+    liftIO $ (ioc ^. pushAction_IOC) cnt1_lbz
 
     -- Send the rest only if the method has something ....
     if methodHasRequestBody method
@@ -108,10 +110,10 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
     let
         incremental_http_parser = newIncrementalHttp1Parser
 
-        pump0 :: IncrementalHttp1Parser -> IO Http1ParserCompletion
+        -- pump0 :: IncrementalHttp1Parser -> m Http1ParserCompletion
         pump0 p =
          do
-            some_bytes <- (ioc ^. bestEffortPullAction_IOC) True
+            some_bytes <- liftIO $ (ioc ^. bestEffortPullAction_IOC) True
             let completion = addBytes p some_bytes
             case completion of
                MustContinue_H1PC new_parser -> pump0 new_parser
@@ -119,12 +121,12 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                -- In any other case, just return
                a -> return a
 
-        pumpout :: B.ByteString -> Int -> Source IO B.ByteString
+        pumpout :: MonadIO m => B.ByteString -> Int -> Source m B.ByteString
         pumpout fragment n = do
             when (B.length fragment > 0) $  yield fragment
             when (n > 0 ) $ pull n
 
-        pull :: Int -> Source IO B.ByteString
+        pull :: MonadIO m => Int -> Source m B.ByteString
         pull n
           | n > fragmentMaxLength = do
 
@@ -144,7 +146,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
             yield s
             -- and finish...
 
-        pull_forever :: Source IO B.ByteString
+        pull_forever :: MonadIO m => Source m B.ByteString
         pull_forever = do
             either_ioproblem_or_s <- liftIO $ keyedReportExceptions "plc-" $ E.try  $ (ioc ^. bestEffortPullAction_IOC ) True
             s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
@@ -152,7 +154,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 Right datum -> return datum
             yield s
 
-        unwrapping_chunked :: B.ByteString -> Source IO B.ByteString
+        unwrapping_chunked :: MonadIO m => B.ByteString -> Source m B.ByteString
         unwrapping_chunked leftovers =
             (do
                 yield leftovers
@@ -219,7 +221,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
 
         HeadersAndBody_H1PC _headers SemanticAbort_BSC  _leftovers -> do
             --  HEADs must be handled differently!
-            E.throwIO $ HTTP11SyntaxException "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
+            liftIO . E.throwIO $ HTTP11SyntaxException "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
 
 
         HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC leftovers -> do
@@ -243,4 +245,4 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
 
         -- TODO: See what happens when this exception passes from place to place.
         RequestIsMalformed_H1PC msg -> do
-            E.throwIO $ HTTP11SyntaxException msg
+            liftIO . E.throwIO $ HTTP11SyntaxException msg

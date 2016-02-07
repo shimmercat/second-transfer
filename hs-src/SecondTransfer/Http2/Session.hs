@@ -44,7 +44,7 @@ import           Control.Monad                          (
 --                                                         mapM_,
                                                          forM,
                                                          forM_)
-import           Control.Monad.Morph                     (hoist, lift)
+import           Control.Monad.Morph                    (hoist, lift)
 import           Control.Monad.IO.Class                 (liftIO, MonadIO)
 import           Control.DeepSeq                        (
                                                          --($!!),

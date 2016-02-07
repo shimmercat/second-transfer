@@ -12,7 +12,7 @@ module SecondTransfer.IOCallbacks.Coupling (
 
 import           Control.Lens
 import           Control.Concurrent
---import           Control.Concurrent.MVar
+import           Control.Monad.IO.Class                       (liftIO, MonadIO)
 import qualified Control.Exception                            as E
 
 import           Data.IORef
@@ -92,18 +92,18 @@ breakCoupling coupling = do
     return ()
 
 
-iocallbacksToSink :: IOCallbacks -> Sink LB.ByteString IO ()
+iocallbacksToSink :: MonadIO m => IOCallbacks -> Sink LB.ByteString m ()
 iocallbacksToSink ioc = DCL.mapM_ (
     \ s -> do
          --putStrLn $ "send: " ++ (show s)
-         ioc ^. pushAction_IOC $ s
+         liftIO $ ioc ^. pushAction_IOC $ s
     )
 
 
 -- | Sends the data coming from the source to the IOCallbacks.
 -- No exceptions are handled here. This consumes the thread until
 -- it finishes. The iocallbacks is not closed.
-sendSourceToIO :: Source IO LB.ByteString -> IOCallbacks -> IO ()
+sendSourceToIO :: MonadIO m => Source m LB.ByteString -> IOCallbacks -> m ()
 sendSourceToIO source ioc =
   source $$ iocallbacksToSink ioc
 
