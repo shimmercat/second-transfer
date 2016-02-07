@@ -5,12 +5,14 @@ module SecondTransfer.Utils.DevNull(
      ) where
 
 
-import Control.Concurrent (forkIO)
-import Data.Conduit
+import           Control.Concurrent (forkIO)
+import           Data.Conduit
+
+import           Control.Monad.IO.Class                 (liftIO)
 
 import SecondTransfer.MainLoop.CoherentWorker
 
-
+import SecondTransfer.Exception                       (forkIOExc)
 
 -- TODO: Handling unnecessary data should be done in some other, less
 -- harmfull way... need to think about that.
@@ -19,10 +21,10 @@ import SecondTransfer.MainLoop.CoherentWorker
 -- use this consumer to drop the data to oblivion. Otherwise it will
 -- remain in an internal queue until the client closes the
 -- stream, and if the client doesn't want to do so....
-dropIncomingData :: Maybe InputDataStream -> IO ()
+dropIncomingData :: Maybe InputDataStream -> AwareWorkerStack ()
 dropIncomingData Nothing = return ()
 dropIncomingData (Just data_source) = do
-    _ <- forkIO $
+    _ <- liftIO . forkIOExc "dropIncomingData"  $
         data_source $$ awaitForever (\ _ -> do
                                          return () )
     return ()
