@@ -177,14 +177,16 @@ library
                  hashable >= 1.2,
                  attoparsec >= 0.12,
                  clock >= 0.6,
-                 SafeSemaphore >= 0.10,
+                 resourcet >= 1.1,
+                 -- SafeSemaphore >= 0.10,
                  BoundedChan >= 1.0.3,
                  pqueue >= 1.3.0,
                  stm >= 2.3,
                  deepseq >= 1.4.1,
                  time >= 1.5.0 && < 1.8,
                  vector >= 0.10,
-                 vector-algorithms >= 0.7
+                 vector-algorithms >= 0.7,
+                 mmorph >= 1.0
 
   if flag(monitoring)
      build-depends: hedis >= 0.6
