@@ -27,7 +27,7 @@ iplace=/usr/local/shimmercat-build/
 pushd $THIS_DIR/..
 placement_path=`stack path --local-install-root`/lib/x86_64-osx-ghc-7.10.3/
 popd
-echo PLACEMENT: $placement_path
+echo placement_path: $placement_path
 
 target_dependent=$placement_path/second-transfer-*-*/libHSsecond-transfer-*-*-ghc*.dylib
 
@@ -48,6 +48,8 @@ g++-5 \
 cp $THIS_DIR/$libname $placement_path
 cp $THIS_DIR/$libname $iplace
 
+echo "#iplace: " $iplace
+echo "#target_dependent: " $target_dependent
 install_name_tool -add_rpath $iplace $target_dependent || echo "Iplace already set"
 rm $THIS_DIR/$libname
 
