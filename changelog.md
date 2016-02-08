@@ -1,3 +1,23 @@
+
+- 0.10.0.0 :
+    * The AwareWorker interface was modified to include prompt resource 
+      termination. That is, AwareWorkers can register finalizers for critical 
+      resources now. But this breaks backward compatibility.
+    * The internals pipe architecture was overhauled to have even less 
+      unbounded chans and more MVar(s) acting as channels. This should result 
+      in better behaviour regarding memory consumption. 
+
+- 0.9.0.0 :
+    * New tidal session manager to keep the number of connections 
+      that clients make in check. 
+    * Added support for loading certs from memory. 
+    * HTTP/1.1 supports chunked transfer-encodings now 
+    * Mac build works
+
+- 0.8.0.0 :
+    * All threads exceptions are reported 
+    * Reverse proxy functionality from HTTP/2 to HTTP/1.1
+
 - 0.7.1.0 :
     * A few important memory leaks got fixed
     * Changed I/O interface to live in IOCallbacks
