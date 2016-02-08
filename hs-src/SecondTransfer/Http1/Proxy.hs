@@ -1,8 +1,6 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies, Rank2Types #-}
 module SecondTransfer.Http1.Proxy (
                  ioProxyToConnection
-
-               , IOCallbacksConn                                          (..)
         ) where
 
 import           Control.Lens
@@ -52,11 +50,6 @@ import           SecondTransfer.Exception                                  (
 
 #include "instruments.cpphs"
 
-newtype IOCallbacksConn = IOCallbacksConn IOCallbacks
-
-
-instance Http1CycleController IO IOCallbacksConn where
-    releaseResponseResources (IOCallbacksConn conn) = (conn ^. closeAction_IOC)
 
 
 fragmentMaxLength :: Int
@@ -70,8 +63,8 @@ fragmentMaxLength = 16384
 --   (e.g. removing the "Connection" header) are left to the upper layers. And this doesn't include
 --   managing any kind of pipelining in the http/1.1 connection, however, close is not done, so
 --   keep-alive (not pipelineing) should be OK.
-ioProxyToConnection :: forall m . MonadIO m => IOCallbacksConn -> HttpRequest m -> m (HttpResponse m, IOCallbacksConn)
-ioProxyToConnection c@(IOCallbacksConn ioc) request =
+ioProxyToConnection :: forall m . MonadIO m => IOCallbacks -> HttpRequest m -> m (HttpResponse m, IOCallbacks)
+ioProxyToConnection ioc request =
   do
     let
        h1 = request ^. headers_Rq
@@ -187,7 +180,7 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
             return (HttpResponse {
                 _headers_Rp = headers
               , _body_Rp = return ()
-                }, c)
+                }, ioc)
 
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
             --  HEADs must be handled differently!
@@ -196,12 +189,12 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 return (HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
-                    }, c)
+                    }, ioc)
               else
                 return (HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = return ()
-                    }, c)
+                    }, ioc)
 
 
         HeadersAndBody_H1PC headers Chunked_BSC  leftovers -> do
@@ -211,12 +204,12 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 return (HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = unwrapping_chunked leftovers
-                    }, c)
+                    },ioc)
               else
                 return (HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = return ()
-                    }, c)
+                    },ioc)
 
 
         HeadersAndBody_H1PC _headers SemanticAbort_BSC  _leftovers -> do
@@ -233,12 +226,12 @@ ioProxyToConnection c@(IOCallbacksConn ioc) request =
                 return (HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = pump_until_exception leftovers
-                    }, c)
+                    },ioc)
               else
                 return (HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = return ()
-                    }, c)
+                    },ioc)
 
         MustContinue_H1PC _ ->
             error "UnexpectedIncompleteParse"
