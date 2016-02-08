@@ -50,7 +50,12 @@ cp $THIS_DIR/$libname $iplace
 
 echo "#iplace: " $iplace
 echo "#target_dependent: " $target_dependent
-install_name_tool -add_rpath $iplace $target_dependent || echo "Iplace already set"
+
+for one_target_dependent in $target_dependent ; do 
+   install_name_tool -add_rpath $iplace $one_target_dependent || echo "Iplace already set"
+done
+  
 rm $THIS_DIR/$libname
+
 
 echo "DON't forget to run tools/fix_mac_dylibs.sh!!!"
