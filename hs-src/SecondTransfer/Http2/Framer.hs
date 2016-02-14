@@ -903,7 +903,19 @@ withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
         attempt =  do
             could_add <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
                 _ <- tryTakeMVar (pss ^. spaceReady_PSS)
-                if ( (ot1 ^. filling_OuT) < (ot1 ^. maxLength_OuT) ) -- || (system_priority < (-1) )
+                let
+
+                    filling_level = ot1 ^. filling_OuT
+                    max_length_out = ot1 ^. maxLength_OuT
+
+                    very_low_priority = priority  >= 512
+                    (_ot2, lowest_calm_value) = lowestCalmValue ot1
+                    can_add = if very_low_priority then
+                        ( (max_length_out - filling_level) >= 4 ) && (lowest_calm_value >= priority )
+                        else
+                        filling_level < max_length_out
+
+                if can_add || (system_priority < (-1) )
                   then do
                     let new_ot = addEntry ot1 new_entry
                     return (new_ot, True)

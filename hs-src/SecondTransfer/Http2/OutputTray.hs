@@ -15,6 +15,7 @@ module SecondTransfer.Http2.OutputTray (
                , newOutputTray
                , splitOverSize
                , addEntry
+               , lowestCalmValue
        ) where
 
 import           Control.Lens
@@ -33,10 +34,14 @@ import qualified Data.ByteString.Lazy                        as LB
 --   assigned here ....
 --
 --
---   Priorities:  0 for data frames
+--   System priorities:  0 for data frames
 --               -1 for header and other HTTP/2 low level
 --               -2 for go-away frame. The deliverer is expected to close
 --                  the connection inmmediately after.
+--               - something_else for the PingFrame (have to look it put)
+--
+--   Stream Ordinary priorities are assigned by the worker.
+--
 data TrayEntry = TrayEntry {
     _systemPriority_TyE           :: !Int
   , _streamPriority_TyE           :: !Int
@@ -86,6 +91,34 @@ addEntry tray entry =
     ot1 = over entries_OuT ( . (entry : ) ) tray
     ot2 = over filling_OuT ( + 1 ) ot1
   in ot2
+
+
+-- Returns the highest value of the calm (aka priority).
+-- Unfortunately fetching this value drops the structure into a concrete
+-- state....
+lowestCalmValue :: OutputTray -> (OutputTray, Int)
+lowestCalmValue output_tray =
+  let
+    entries_list = (output_tray ^. entries_OuT) []
+
+    result = foldl (\ hc entry ->
+              let
+                 stream_priority = entry ^. streamPriority_TyE
+              in if (entry ^. systemPriority_TyE >= 0)
+                 &&
+                 stream_priority < hc
+                 then
+                   stream_priority
+                 else
+                   hc
+          ) ( 4000000000 ) entries_list
+
+    new_tray_fn incoming =
+        foldr (:) incoming entries_list
+
+    new_tray =
+        set entries_OuT new_tray_fn output_tray
+    in (new_tray,  result )
 
 
 splitOverSize :: Int -> OutputTray -> (OutputTray, [TrayEntry])
