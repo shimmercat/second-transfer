@@ -37,7 +37,7 @@ import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Foldable                          (find)
 --import qualified Data.PQueue.Min                        as PQ
-import           Data.Maybe                             (fromMaybe)
+--import           Data.Maybe                             (fromMaybe)
 
 import qualified Network.HTTP2                          as NH2
 
@@ -56,9 +56,10 @@ import           SecondTransfer.Sessions.Internal       (
                                                          SessionsContext)
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Http2.Session
-import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker,
-                                                         Effect,
-                                                         fragmentDeliveryCallback_Ef,
+import           SecondTransfer.MainLoop.CoherentWorker (AwareWorker                      ,
+                                                         Effect                           ,
+                                                         PriorityEffect               (..),
+                                                         fragmentDeliveryCallback_Ef      ,
                                                          priorityEffect_Ef)
 import qualified SecondTransfer.MainLoop.Framer         as F
 import           SecondTransfer.IOCallbacks.Types
@@ -67,12 +68,13 @@ import           SecondTransfer.Exception
 
 import           SecondTransfer.Http2.TransferTypes
 import           SecondTransfer.Http2.OutputTray
+import           SecondTransfer.Http2.CalmState
 
 #ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging        (logit)
 #endif
 
-import           Debug.Trace                            (traceStack)
+--import           Debug.Trace                            (traceStack)
 
 
 http2PrefixLength :: Int
@@ -589,14 +591,12 @@ outputGatherer session_output = do
                    sendSpecificTerminateGoAway last_stream_id error_code
                    releaseFramer
 
-               HeadersTrain_StFB (stream_id, frames, stream_bytes_mvar)  -> do
+               HeadersTrain_StFB (stream_id, frames, effect , stream_bytes_mvar)  -> do
                    let
                        bs = serializeMany frames
                    -- Send the headers first
                    withHighPrioritySend bs
-                   -- This frame is flow-controlled... I may be unable to send this frame in
-                   -- some circumstances...
-                   startStreamOutputQueue stream_bytes_mvar stream_id delivery_notify
+                   startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify
                    cont
 
                PriorityTrain_StFB frames -> do
@@ -652,8 +652,8 @@ startStreamOutputComandQueueIfNeeded stream_id =
 
 
 -- | Handles only Data frames.
-startStreamOutputQueue :: MVar DataAndEffect ->  GlobalStreamId  -> DeliveryNotifyCallback -> FramerSession ()
-startStreamOutputQueue stream_bytes_mvar stream_id delivery_notify  = do
+startStreamOutputQueue :: Effect -> MVar OutputDataFeed ->  GlobalStreamId  -> DeliveryNotifyCallback -> FramerSession ()
+startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify  = do
 
     -- s2o_mvar <- view stream2outputBytes
 
@@ -686,11 +686,17 @@ startStreamOutputQueue stream_bytes_mvar stream_id delivery_notify  = do
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
             close_action
 
+        -- The starting value of the calm, as dicated by the effects
+        calm_0 = case effect ^. priorityEffect_Ef of
+            NoEffect_PrEf  -> newCalmState 0 []
+            Uniform_PrEf default_calm -> newCalmState default_calm []
+            PerYield_PrEf start_calm cmap -> newCalmState start_calm cmap
+
     read_state <- ask
     _ <- liftIO $ forkIOExc "streamOutputQueue"
            $ ignoreException blockedIndefinitelyOnMVar  ()
            $ close_on_error session_id' sessions_context
-           $ runReaderT (flowControlOutput stream_id initial_cap 0 "" command_chan stream_bytes_mvar delivery_notify (error "noeffectyet"))
+           $ runReaderT (flowControlOutput stream_id initial_cap 0 calm_0 "" command_chan stream_bytes_mvar delivery_notify effect)
              read_state
 
     return ()
@@ -740,16 +746,17 @@ sendBytesN bs = do
 -- the output tray (and occassionally also block on that, if the output tray
 -- doesn't have enough space).
 --
-flowControlOutput :: Int
-                     -> Int
-                     -> Int
-                     ->  LB.ByteString
+flowControlOutput ::    Int  -- Stream id
+                     -> Int  -- Capacity
+                     -> Int  -- Ordinal
+                     -> CalmState  -- Calm
+                     -> LB.ByteString
                      -> Chan FlowControlCommand
-                     -> MVar DataAndEffect
+                     -> MVar OutputDataFeed
                      -> DeliveryNotifyCallback
                      -> Effect
-                     ->  FramerSession ()
-flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan delivery_notify last_effect =
+                     -> FramerSession ()
+flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_chan delivery_notify last_effect =
     ordinal `seq` if leftovers == ""
       then {-# SCC fcOBranch1  #-} do
         -- Get more data (possibly block waiting for it)... there will be an
@@ -758,35 +765,47 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
         -- TODO: If an exception is raised here (because the thread pulling data fromt he Coherent Worker
         -- died), it would be a wait on deadlock MVar thingy... in that case take care of ending things
         -- properly ...
-        (bytes_to_send, effect) <- liftIO $ {-# SCC perfectlyHarmlessExceptionPoint #-} takeMVar bytes_chan
-        if B.length bytes_to_send == 0
+        bytes_to_send <- liftIO $ {-# SCC perfectlyHarmlessExceptionPoint #-} takeMVar bytes_chan
+        let
+            bytes_length = B.length bytes_to_send
+        if bytes_length == 0
           then do
-            -- Signals end of data on stream, format and exit
+              -- Signal end of data on stream, format and exit
               let
-                  priority = fromMaybe stream_id $ effect ^. priorityEffect_Ef
+
                   formatted = LB.fromStrict $ NH2.encodeFrame
                       (NH2.EncodeInfo {
                          NH2.encodeFlags     = NH2.setEndStream NH2.defaultFlags
                         ,NH2.encodeStreamId  = stream_id
                         ,NH2.encodePadding   = Nothing })
                       (NH2.DataFrame "")
+
+                  priority = getCurrentCalm calm
+
               withNormalPrioritySend priority stream_id ordinal formatted
-              delivery_notify stream_id effect ordinal
+              delivery_notify stream_id last_effect ordinal
               -- And just before returning, be sure to release the structures related to this
               -- stream
               finishFlowControlForStream stream_id
-          else
+          else do
+              -- We have got more data, and we need to send it down the way. Use this space to
+              -- adjust the calm as required
+              let
+                  new_calm = advanceCalm calm bytes_length
+
+              -- And now, re-invoke
               flowControlOutput
                   stream_id
                   capacity
                   ordinal
+                  new_calm
                   (LB.fromStrict bytes_to_send)
                   commands_chan
                   bytes_chan
                   delivery_notify
-                  effect
+                  last_effect
       else {-# SCC fcOBranch2  #-}  do
-        -- Length?
+        -- Ok, here is the data, from real
         let
             amount = fromIntegral $  LB.length leftovers
 
@@ -806,7 +825,7 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
           then do
             -- Can send, but must format first...
             let
-                priority = fromMaybe stream_id $ last_effect ^. priorityEffect_Ef
+                priority = getCurrentCalm calm
                 formatted =  LB.fromStrict $ NH2.encodeFrame
                     (NH2.EncodeInfo {
                        NH2.encodeFlags     = NH2.defaultFlags
@@ -823,6 +842,7 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
                 stream_id
                 (capacity - use_amount)
                 (ordinal+1 )
+                calm
                 new_leftover
                 commands_chan
                 bytes_chan
@@ -838,6 +858,7 @@ flowControlOutput stream_id capacity ordinal leftovers commands_chan bytes_chan 
                         stream_id
                         (capacity + delta_cap)
                         ordinal
+                        calm
                         leftovers
                         commands_chan
                         bytes_chan

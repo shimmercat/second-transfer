@@ -135,6 +135,7 @@ library
                   , SecondTransfer.Http2.SimpleClient
                   , SecondTransfer.Http2.TransferTypes
                   , SecondTransfer.Http2.OutputTray
+                  , SecondTransfer.Http2.CalmState
 
                   , SecondTransfer.Http1.Session
                   , SecondTransfer.IOCallbacks.Botcher

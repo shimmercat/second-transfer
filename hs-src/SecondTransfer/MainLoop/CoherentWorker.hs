@@ -31,6 +31,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , TupledRequest
     , FragmentDeliveryCallback
     , InterruptEffect(..)
+    , PriorityEffect(..)
 
     , headers_RQ
     , inputData_RQ
@@ -184,17 +185,42 @@ data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway
                                                       --   other fields of the PrincipalStream record will be ignored.
 
 
+-- | Valid priority effects
+--
+--
+-- In certain circunstances a stream can use an internal priority,
+-- not given by the browser and the protocol. Lowest values here are
+-- given more priority. Default (when Nothing) is given zero. Cases
+-- with negative numbers also work. Since higher numbers mean *lower*
+-- priority, we often call this number *calm*, so that higher numbers
+-- mean higher calm.
+--
+-- Notice that SecondTransfer still assigns "system priorities" to frames
+-- which are used before the priorities computed by this mechanism.
+data PriorityEffect =
+    NoEffect_PrEf                      -- ^ Leaves on default priorities
+  | Uniform_PrEf !Int                  -- ^ Assigns a uniform priority to all data in this stream
+  | PerYield_PrEf Int [(Word, Word)]   -- ^ Starts with the given priority, and as the sender crosses
+                                       --   each byte boundary in the first part of the pair, the calm
+                                       --   is raised (e.g., the priority is lowered), by the positive
+                                       --   number given as second part of the pair
+
+-- TODO:  another kind of priority effect would be one here the priorities are
+--        known in advance. Only problem here is determining if the action would
+--        need to be in the resourcet monad or not....
+
+
 -- | Sometimes a response needs to be handled a bit specially,
 --   for example by reporting delivery details back to the worker
 data Effect = Effect {
-  -- | A callback to be called whenever a data-packet for this stream is called.
+  -- | A callback to be called whenever a data-packet for this stream is .
   _fragmentDeliveryCallback_Ef :: Maybe FragmentDeliveryCallback
 
   -- | In certain circunstances a stream can use an internal priority,
   -- not given by the browser and the protocol. Lowest values here are
   -- given more priority. Default (when Nothing) is given zero. Cases
   -- with negative numbers also work.
-  ,_priorityEffect_Ef :: Maybe Int
+  ,_priorityEffect_Ef :: PriorityEffect
 
   -- | There are situations when it is desirable to close a stream or the entire
   --   connection. Use this member to indicate that.
@@ -210,7 +236,7 @@ makeLenses ''Effect
 defaultEffects :: Effect
 defaultEffects = Effect {
   _fragmentDeliveryCallback_Ef = Nothing,
-  _priorityEffect_Ef = Nothing,
+  _priorityEffect_Ef = NoEffect_PrEf,
   _interrupt_Ef = Nothing
    }
 

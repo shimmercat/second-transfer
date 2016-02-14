@@ -112,7 +112,7 @@ type InputFrame  = NH2.Frame
 -- What to do regarding headers
 data HeaderOutputMessage =
     -- Send the headers of the principal stream
-    NormalResponse_HM (GlobalStreamId,  Headers, Effect, MVar TT.DataAndEffect)
+    NormalResponse_HM (GlobalStreamId,  Headers, Effect, MVar TT.OutputDataFeed)
     -- Send a push-promise
     |PushPromise_HM   (GlobalStreamId, GlobalStreamId, Headers, Effect)
     -- Send a reset stream notification for the stream given below
@@ -142,7 +142,7 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
 
     -- And regular contents can come this way and thus be properly mixed
     -- with everything else.... for now...
-    ,_streamBytesSink_WTE         :: MVar TT.DataAndEffect
+    ,_streamBytesSink_WTE         :: MVar TT.OutputDataFeed
 
     ,_streamsCancelled_WTE        :: MVar NS.IntSet
 
@@ -1619,7 +1619,7 @@ normallyHandleStream principal_stream = do
             _ <- runConduit $
                (data_and_conclusion)
                `fuseBothMaybe`
-               (sendDataOfStream stream_id data_output effects)
+               (sendDataOfStream stream_id data_output)
             ReT.unprotect resource_key
 
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
@@ -1676,15 +1676,15 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
             _ <- runConduit $
                  pushed_data_and_conclusion
                 `fuseBothMaybe`
-                sendDataOfStream child_stream_id pusher_data_output effects
+                sendDataOfStream child_stream_id pusher_data_output
             ReT.unprotect k
 
         return ()
 
 
 --                                                       v-- comp. monad.
-sendDataOfStream :: MonadIO m => GlobalStreamId -> MVar TT.DataAndEffect -> Effect -> Sink B.ByteString m ()
-sendDataOfStream _stream_id data_output effect =
+sendDataOfStream :: MonadIO m => GlobalStreamId -> MVar TT.OutputDataFeed  -> Sink B.ByteString m ()
+sendDataOfStream _stream_id data_output  =
   do
     consumer
   where
@@ -1696,18 +1696,18 @@ sendDataOfStream _stream_id data_output effect =
 
             Nothing -> do
                 -- This is how we finish sending data
-                liftIO $ putMVar data_output ( "", effect)
+                liftIO $ putMVar data_output  ""
 
             Just bytes
                 | lng <- B.length bytes, lng > 0   -> do
 
                     liftIO $ do
-                        putMVar data_output (bytes, effect)
+                        putMVar data_output bytes
                     consumer
 
                 | otherwise -> do
                     -- Finish sending data, finish in general
-                    liftIO $ putMVar data_output ("", effect)
+                    liftIO $ putMVar data_output ""
 
 
 -- Returns if the frame is the first in the stream
@@ -1782,7 +1782,8 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             liftIO $ bs_chunks `deepseq` withMVar session_output_mvar $ \ session_output -> do
                     let
                         header_frames = headerFrames stream_id bs_chunks effect
-                    sendOutputToFramer session_output $ TT.HeadersTrain_StFB (stream_id, header_frames, data_output)
+                    sendOutputToFramer session_output
+                        $ TT.HeadersTrain_StFB (stream_id, header_frames, effect, data_output)
 
         GoAway_HM (stream_id, _effect) -> do
            -- This is in charge of sending an interrupt message to the framer
@@ -1932,7 +1933,7 @@ sessionPollThread  session_data headers_output = do
 
     _ <- liftIO . forkIOExc "s2f6" $ do
         either_e0 <- E.try $ runReaderT
-            (clientWorkerThread new_stream_id effects output_mvar input_data_stream )
+            (clientWorkerThread new_stream_id output_mvar input_data_stream )
             worker_environment
         case either_e0 :: Either HTTP500PrecursorException () of
             Left _ -> writeChan session_input $ InternalAbortStream_SIC new_stream_id
@@ -1954,13 +1955,13 @@ sessionPollThread  session_data headers_output = do
     sessionPollThread session_data headers_output
 
 
-clientWorkerThread :: GlobalStreamId -> Effect -> MVar TT.DataAndEffect -> InputDataStream -> WorkerMonad ()
-clientWorkerThread stream_id effects output_mvar input_data_stream = do
+clientWorkerThread :: GlobalStreamId  -> MVar TT.OutputDataFeed -> InputDataStream -> WorkerMonad ()
+clientWorkerThread stream_id  output_mvar input_data_stream = do
     -- And now work on sending the data, if any...
     _ <- liftIO . ReT.runResourceT . runConduit $
         input_data_stream
         `fuseBothMaybe`
-        sendDataOfStream stream_id output_mvar effects
+        sendDataOfStream stream_id output_mvar
     return ()
 
 

@@ -5,7 +5,7 @@ module SecondTransfer.Http2.TransferTypes (
      , GlobalStreamId
      , SessionToFramerBlock                             (..)
      , OutputFrame
-     , DataAndEffect
+     , OutputDataFeed
      ) where
 
 --import Control.Lens
@@ -36,7 +36,7 @@ data  SessionOutputCommand =
   deriving Show
 
 
-type DataAndEffect = (B.ByteString, Effect)
+type OutputDataFeed = B.ByteString
 
 
 -- | Signals that the Session sends to the Framer concerning normal operation, including
@@ -45,7 +45,9 @@ type DataAndEffect = (B.ByteString, Effect)
 data SessionToFramerBlock =
     Command_StFB         !SessionOutputCommand
   | PriorityTrain_StFB   [OutputFrame]
-  | HeadersTrain_StFB (GlobalStreamId, [OutputFrame], MVar DataAndEffect) -- stream id, the headers of the response, the mvar where data is put.
+  | HeadersTrain_StFB (GlobalStreamId, [OutputFrame], Effect, MVar OutputDataFeed)
+                      -- stream id, the headers of the response,
+                       -- the effect provided by the worker, the mvar where data is put.
 --  | StartDataOutput_StFB (GlobalStreamId, MVar DataAndEffect )  -- ^ An empty string shall signal end of data
 
 
