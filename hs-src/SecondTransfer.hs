@@ -169,7 +169,9 @@ module SecondTransfer(
     -- | Use these functions to create your TLS-compliant
     --   HTTP/2 server in a snap.
     , tlsServeWithALPN
+#ifndef BOTAN_DISABLED
     , botanTLS
+#endif
 
     , dropIncomingData
     ) where
@@ -179,5 +181,7 @@ import           SecondTransfer.Http2.MakeAttendant     (http2Attendant)
 import           SecondTransfer.MainLoop
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.Types
+#ifndef BOTAN_DISABLED
 import           SecondTransfer.TLS.Botan               (botanTLS)
+#endif
 import           SecondTransfer.Utils.DevNull           (dropIncomingData)

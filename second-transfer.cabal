@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.10.0.0
+version     :              0.10.0.1
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -46,16 +46,12 @@ Flag debug
   Description: Enable debug support
   Default:     False
 
-Flag fastc
-  Description: Enable fast use of c libraries
+Flag enable-botan
+  Description: Enable Botan (No TLS support without this)
   Default: False
 
 Flag misc-executables
   Description: Compile helpers for development
-  Default: False
-
-Flag monitoring
-  Description: Enable build-time hacks used to inspect the live runtime state
   Default: False
 
 source-repository head
@@ -65,7 +61,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      0.10.0.0
+  tag:      0.10.0.1
 
 library
 
@@ -112,7 +108,6 @@ library
 
 
                   -- TODO: Most of these should be moved back to "other-modules"
-                  , SecondTransfer.TLS.Botan
                   , SecondTransfer.Sessions.Internal
                   , SecondTransfer.Sessions.Tidal
                   , SecondTransfer.Sessions.HashableSockAddr
@@ -141,19 +136,18 @@ library
                   , SecondTransfer.IOCallbacks.Botcher
 
 
-
-  if flag(monitoring)
-     CPP-Options: -DSECONDTRANSFER_MONITORING
+  if flag(enable-botan)
+      exposed-modules:   SecondTransfer.TLS.Botan
 
   build-tools: cpphs
 
   default-extensions: CPP
 
-  if flag(fastc)
+  if flag(enable-botan)
      CPP-Options: -DINCLUDE_BOTAN_H
      include-dirs: /usr/local/include/botan-1.11/
   else
-     CPP-Options: -DINCLUDE_BOTAN_ALL_H
+     CPP-Options: -DBOTAN_DISABLED
 
 
   -- LANGUAGE extensions used by modules in this package.
@@ -179,7 +173,6 @@ library
                  attoparsec >= 0.12,
                  clock >= 0.6,
                  resourcet >= 1.1,
-                 -- SafeSemaphore >= 0.10,
                  BoundedChan >= 1.0.3,
                  pqueue >= 1.3.0,
                  stm >= 2.3,
@@ -188,10 +181,6 @@ library
                  vector >= 0.10,
                  vector-algorithms >= 0.7,
                  mmorph >= 1.0
-
-  if flag(monitoring)
-     build-depends: hedis >= 0.6
-                  , unix >= 2.7
 
   -- Directories containing source files.
   hs-source-dirs: hs-src
@@ -211,8 +200,7 @@ library
       cc-options: -O0 -g3 -std=c++11
       ld-options: -g3
   else
-      -- -g3 temporarily set
-      cc-options: -g3 -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
+      cc-options: -std=c++11 -mavx2 -msse4.1 -msse2 -mpclmul -maes
   if os(linux)
       ghc-options: -pgmPcpphs "-pgmc g++"  -optP--cpp
   if os(darwin)
@@ -220,33 +208,21 @@ library
 
   --               v------ remove this
   if os(linux)
-      if flag(fastc)
+      if flag(enable-botan)
         c-sources:       cbits/enable_tls.cpp
-      else
-        c-sources:       cbits/enable_tls.cpp
-                   , cbits/botan_all.cpp
-                   , cbits/botan_all_avx2.cpp
-                   , cbits/botan_all_aesni.cpp
-                   , cbits/botan_all_ssse3.cpp
-                   , cbits/botan_all_rdrand.cpp
+
 
   if os(darwin)
-      extra-libraries: second_transfer__enable_tls
-      extra-lib-dirs: /usr/local/shimmercat-build/
-      ld-options: -framework Security
+      if flag(enable-botan)
+          extra-libraries: second_transfer__enable_tls
+          extra-lib-dirs: /usr/local/shimmercat-build/
+          ld-options: -framework Security
   if os(linux)
       extra-libraries: stdc++
       extra-lib-dirs: /usr/local
-  if flag(fastc)
+  if flag(enable-botan)
       if os(linux)
           extra-libraries: botan-1.11
-
-
-
-
-  -- NOTE: Please fill-in with an-up-to date library path here.
-  -- It should point to openssl 1.0.2 or greater. See note for
-  -- include-dirs above.
 
   include-dirs: macros/
 

@@ -1,13 +1,10 @@
 flags:
   second-transfer:
-    debug: false
+    enable-botan: false
 docker:
     enable: false
 packages:
 - '.'
-flags:
-    second-transfer: 
-        fastc: true
 ghc-options:
     second-transfer: "-pgmc g++"
 resolver: nightly-2016-01-02
