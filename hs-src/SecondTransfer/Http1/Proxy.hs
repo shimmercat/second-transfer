@@ -56,11 +56,10 @@ fragmentMaxLength :: Int
 fragmentMaxLength = 16384
 
 
--- | Takes an IOCallbacksConn (not straight IOCallbacks since we plan on adding controllabiility)
---   features on top of this type), and serializes a request (encoded HTTP/2 style in headers and streams)
+-- | Takes an IOCallbacks  and serializes a request (encoded HTTP/2 style in headers and streams)
 --   on top of the callback, waits for the results, and returns the response. Notice that this proxy
 --   may fail for any reason, do take measures and handle exceptions. Also, must headers manipulations
---   (e.g. removing the "Connection" header) are left to the upper layers. And this doesn't include
+--   (e.g. removing the Connection header) are left to the upper layers. And this doesn't include
 --   managing any kind of pipelining in the http/1.1 connection, however, close is not done, so
 --   keep-alive (not pipelineing) should be OK.
 ioProxyToConnection :: forall m . MonadIO m => IOCallbacks -> HttpRequest m -> m (HttpResponse m, IOCallbacks)

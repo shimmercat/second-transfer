@@ -46,10 +46,9 @@ newtype ConnectionId = ConnectionId Int64
 
 -- | Connection events
 data ConnectionEvent =
-    -- ^ The second member says how many live connections are now
-    Established_CoEv NS.SockAddr ConnectionId Int64
-  | ALPNFailed_CoEv ConnectionId
-  | Ended_CoEv ConnectionId
+    Established_CoEv NS.SockAddr ConnectionId Int64        -- ^ New connection. The second member says how many live connections are now
+  | ALPNFailed_CoEv ConnectionId                           -- ^ An ALPN negotiation failed
+  | Ended_CoEv ConnectionId                                -- ^ A connection ended.
 
 
 type LogCallback =  ConnectionEvent -> IO ()
@@ -64,6 +63,7 @@ data ConnectionCallbacks = ConnectionCallbacks {
 
 makeLenses ''ConnectionCallbacks
 
+-- | Default connections callback. Empty
 defaultConnectionCallbacks :: ConnectionCallbacks
 defaultConnectionCallbacks = ConnectionCallbacks {
     _logEvents_CoCa = Nothing

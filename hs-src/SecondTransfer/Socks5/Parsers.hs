@@ -106,6 +106,6 @@ unpack x = B.pack $ map f $ reverse [0..byteSize x - 1]
 wordN :: (FiniteBits a) => (a -> B.ByteString) -> a -> P.Parser a
 wordN u w = P.string (u w) >> return w
 
- -- |Match a specific 16-bit big-endian word.
+-- | Match a specific 16-bit big-endian word.
 word16be :: Word16 -> P.Parser Word16
 word16be = wordN unpack

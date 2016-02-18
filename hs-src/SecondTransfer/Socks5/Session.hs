@@ -135,10 +135,10 @@ negotiateSocksAndForward approver socks_here =
         Right result -> return result
 
 
- -- | Forwards a set of IOCallbacks (actually, it is exactly the same passed in) after the
- --   SOCKS5 negotiation, if the negotiation succeeds and the indicated "host" is approved
- --   by the first parameter. If the approver returns false, this function will try to
- --   actually connect to the host and let the software act as a true proxy.
+-- | Forwards a set of IOCallbacks (actually, it is exactly the same passed in) after the
+--   SOCKS5 negotiation, if the negotiation succeeds and the indicated "host" is approved
+--   by the first parameter. If the approver returns false, this function will try to
+--   actually connect to the host and let the software act as a true proxy.
 negotiateSocksForwardOrConnect ::  (B.ByteString -> Bool) -> IOCallbacks -> IO ConnectOrForward
 negotiateSocksForwardOrConnect approver socks_here =
   do
@@ -164,7 +164,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                       do
                         maybe_forwarding_callbacks <- connectOnBehalfOfClient address port_number
                         case maybe_forwarding_callbacks of
-                            Just (indicated_address, io_callbacks) -> do
+                            Just (_indicated_address, io_callbacks) -> do
                                 let
                                     server_reply =  ServerReply_Packet {
                                         _version_SP4    = ProtocolVersion
@@ -176,7 +176,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                                         }
                                 ps putServerReply_Packet server_reply
                                 -- Now couple the two streams ...
-                                couple socks_here io_callbacks
+                                _ <- couple socks_here io_callbacks
                                 return $ Forward_COF (pack . show $ address) (fromIntegral port_number)
                             _ ->
                                 return $ Drop_COF (pack . show $ address)
@@ -267,8 +267,8 @@ toSocks5Addr (NS.SockAddrInet _ ha) = IPv4_IA ha
 toSocks5Addr _                      = error "toSocks5Addr not fully implemented"
 
 
- -- | Simple alias to SocketIOCallbacks where we expect
- --   encrypted contents over a SOCKS5 Socket
+-- | Simple alias to SocketIOCallbacks where we expect
+--   encrypted contents over a SOCKS5 Socket
 newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks SocketIOCallbacks
 
 instance IOChannels TLSServerSOCKS5Callbacks where
