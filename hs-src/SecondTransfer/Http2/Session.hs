@@ -561,7 +561,8 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
                  session_data
 
           Nothing ->
-              putStrLn "Warning, created session without registering it"
+              -- putStrLn "Warning, created session without registering it"
+              return ()
 
 
     -- If I'm a client, I also need a thread to poll for requests

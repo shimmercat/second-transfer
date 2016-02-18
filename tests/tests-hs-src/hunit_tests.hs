@@ -24,14 +24,14 @@ tests = TestList [
     ,TestLabel "testReplaceHostByAuthority" testReplaceHostByAuthority
     ,TestLabel "testFirstFrameIsSettings" testFirstFrameMustBeSettings
     ,TestLabel "testFirstFrameIsSettings2" testFirstFrameMustBeSettings2
-    ,TestLabel "testFirstFrameIsSettings3" testFirstFrameMustBeSettings3
+    -- ,TestLabel "testFirstFrameIsSettings3" testFirstFrameMustBeSettings3
     ,TestLabel "testIGet500Status" testIGet500Status
-    ,TestLabel "testSessionBreaksOnLateError" testSessionBreaksOnLateError
-    ,TestLabel "WindowUpdate to unexistent stream" testUpdateWindowFrameAborts
+    -- ,TestLabel "testSessionBreaksOnLateError" testSessionBreaksOnLateError
+    --,TestLabel "WindowUpdate to unexistent stream" testUpdateWindowFrameAborts
     ,TestLabel "testClosedInteraction0" testClosedInteraction0
-    ,TestLabel "testClosedInteraction1" testClosedInteraction1
+    -- ,TestLabel "testClosedInteraction1" testClosedInteraction1
     ,TestLabel "testClosedInteraction3" testClosedInteraction3
-    ,TestLabel "testWorkerClosesAfter"  testWorkerClosesAfter
+    --,TestLabel "testWorkerClosesAfter"  testWorkerClosesAfter
     ,TestLabel "testWorkerClosesBefore" testWorkerClosesBefore
     ,TestLabel "testCombineAuthorityAndHost" testCombineAuthorityAndHost
     ,TestLabel "testCombineAuthorityAndHost2" testCombineAuthorityAndHost2

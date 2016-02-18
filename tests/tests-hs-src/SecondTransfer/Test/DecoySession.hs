@@ -180,7 +180,8 @@ createDecoySession attendant = do
         client_callbacks = channelsToIOCallbacks output_data_channel input_data_channel reverse_data_tmvar
         start_client_session_callback :: IO ClientState
         start_client_session_callback = do
-            wrapSession (ClientState_SP client_state) client_sessions_context client_callbacks
+            -- Connection info is not used anyway with client cases
+            wrapSession (ClientState_SP client_state) client_sessions_context (error "no-connection_data")  client_callbacks
             return client_state
 
 
@@ -193,7 +194,7 @@ createDecoySession attendant = do
 
     thread_id <- forkIO $ catch
         (do
-            attendant attendant_callbacks
+            attendant nullConnectionData  attendant_callbacks
         )
         ((\ e -> do
             putStrLn $ "Exception: " ++ (show e)

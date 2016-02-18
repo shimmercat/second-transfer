@@ -4,10 +4,10 @@ module Tests.HTTP1Parse where
 import           Control.Lens
 import           Control.Concurrent                  hiding (yield)
 
-import qualified Data.ByteString                     as B
+--import qualified Data.ByteString                     as B
 import qualified Data.ByteString.Lazy                as LB
 import qualified Data.ByteString.Builder             as Bu
-import           Data.Maybe                          (isJust)
+--import           Data.Maybe                          (isJust)
 import           Data.Conduit
 import qualified Data.Conduit.List                   as DCL
 
@@ -34,8 +34,8 @@ testParse = TestCase $ do
         a1                                 = addBytes a0 headers_text
         (OnlyHeaders_H1PC h0 leftovers)    = a1
         (HeadersAndBody_H1PC h1 cond0 l2)  = addBytes a0 headers_text2
-        waitForBodyOk (HeadersAndBody_H1PC _ _ _)   = True
-        waitForBodyOk _ = False
+        --waitForBodyOk (HeadersAndBody_H1PC _ _ _)   = True
+        --waitForBodyOk _ = False
     assertBool "testParse.IsDone" (isDone a1)
     assertEqual "testParse.NoLeftovers" leftovers ""
     assertEqual "testParse.YesLeftovers" l2 "p"
@@ -149,10 +149,10 @@ testCycle = TestCase $ do
     iob <- handshake iobp
 
     let
-        controller = IOCallbacksConn ioa
+        controller =  ioa
 
     finished <- newEmptyMVar
-    forkIO $ do
+    _ <- forkIO $ do
         request_text <- (iob ^. pullAction_IOC) 74
         --putStrLn . show $ request_text
         assertEqual "test.Request" "POST /interesting HTTP/1.1\r\nhost:www.example.com\r\netag:afrh\r\n\r\nHello world" request_text

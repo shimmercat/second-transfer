@@ -77,7 +77,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         push_action
 
                  Nothing ->
-                     putStrLn "Warning, created session without registering it"
+                     -- putStrLn "Warning, created session without registering it"
+                     return ()
 
             go started_time new_session_tag (Just "") 1
         return ()

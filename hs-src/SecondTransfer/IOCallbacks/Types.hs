@@ -27,6 +27,7 @@ module SecondTransfer.IOCallbacks.Types (
                , SOCKS5Preface
                , ConnectionData     (..)
                , addr_CnD
+               , nullConnectionData
 
                -- * Utility functions
                , PullActionWrapping
@@ -201,6 +202,9 @@ instance TLSServerIO TLSServer
 
 -- | Some context  related to a connection
 newtype ConnectionData = ConnectionData { _addr_CnD :: Maybe HashableSockAddr }
+
+nullConnectionData :: ConnectionData
+nullConnectionData = ConnectionData { _addr_CnD = Nothing }
 
 makeLenses ''ConnectionData
 

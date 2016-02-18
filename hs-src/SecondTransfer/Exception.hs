@@ -37,6 +37,7 @@ module SecondTransfer.Exception (
 
       -- * Proxies
     , blockedIndefinitelyOnMVar
+    , blockedIndefinitelyOnSTM
     , noMoreDataException
     , ioProblem
     , gatewayAbortedException
@@ -311,6 +312,9 @@ forkIOExc msg comp = forkIO $ keyedReportExceptions msg  comp
 
 blockedIndefinitelyOnMVar :: Proxy BlockedIndefinitelyOnMVar
 blockedIndefinitelyOnMVar = Proxy
+
+blockedIndefinitelyOnSTM :: Proxy BlockedIndefinitelyOnSTM
+blockedIndefinitelyOnSTM = Proxy
 
 ioException :: Proxy IOException
 ioException = Proxy

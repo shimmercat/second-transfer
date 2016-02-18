@@ -153,6 +153,8 @@ L.makeLenses ''FramerSessionData
 
 type FramerSession = ReaderT FramerSessionData IO
 
+-- | Either we are server and have an "AwareWorker", or we are client and
+--   have a "ClientState"
 data SessionPayload =
     AwareWorker_SP AwareWorker   -- I'm a server
     |ClientState_SP ClientState  -- I'm a client
@@ -171,6 +173,8 @@ goAwayPriority :: Int
 goAwayPriority = (-15)
 
 
+-- | Wraps a session, provided that we get who will be taking care of the session
+--  and the session context.
 wrapSession :: SessionPayload -> SessionsContext -> Attendant
 wrapSession session_payload sessions_context connection_info io_callbacks = do
 
@@ -279,17 +283,21 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
 
 
     _ <- forkIOExc "inputGathererHttp2"
-        $ {-# SCC inputGatherer  #-} close_on_error new_session_id sessions_context
+        $ close_on_error new_session_id sessions_context
+        $ ignoreException blockedIndefinitelyOnSTM  ()
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (inputGatherer pull_action session_input ) framer_session_data
     _ <- forkIOExc "outputGathererHttp2"
-        $ {-# SCC outputGatherer  #-} close_on_error new_session_id sessions_context
+        $ close_on_error new_session_id sessions_context
+        $ ignoreException blockedIndefinitelyOnSTM  ()
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (outputGatherer session_output ) framer_session_data
     -- Actual data is reordered before being sent
     _ <- forkIOExc "sendReorderingHttp2"
         $ ensure_close
-        $ {-# SCC sendReordering  #-} close_on_error new_session_id sessions_context
+        $ ignoreException blockedIndefinitelyOnMVar ()
+        $ ignoreException blockedIndefinitelyOnSTM  ()
+        $ close_on_error new_session_id sessions_context
         $ runReaderT sendReordering framer_session_data
 
     return ()
@@ -444,7 +452,7 @@ inputGatherer pull_action session_input = do
 
     abortSession :: Sink a FramerSession ()
     abortSession = do
-      liftIO $ putStrLn  "Framer called Abort Session"
+      --liftIO $ putStrLn  "Framer called Abort Session"
       lift $ do
         sendGoAwayFrame NH2.ProtocolError
         -- Inform the session that it can tear down itself
@@ -1024,5 +1032,5 @@ sendReordering = {-# SCC sndReo  #-} do
 
         Left entries_data -> do
            sendBytesN entries_data
-           liftIO $ putStrLn "AboutToProduceCleanClose"
+           --liftIO $ putStrLn "AboutToProduceCleanClose"
            liftIO close_action
