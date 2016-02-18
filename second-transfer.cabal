@@ -145,6 +145,8 @@ library
 
   if flag(enable-botan)
      CPP-Options: -DINCLUDE_BOTAN_H
+     -- A default directory for botan.... you can have your own
+     -- through a stack flag. 
      include-dirs: /usr/local/include/botan-1.11/
   else
      CPP-Options: -DBOTAN_DISABLED
@@ -188,13 +190,7 @@ library
   -- Base language which the package is written in.
   default-language: Haskell2010
 
-  -- NOTE: Very specific directory with the version of openssl
-  -- that I'm using. As of February 2015-- openssl 1.0.2 is not
-  -- commonly installed. Update this path in your build
-  -- or otherwise your build will be broken.
-  include-dirs: /opt/openssl-1.0.2/include
-              , /usr/local/include/botan-1.11
-
+  include-dirs:  /usr/local/include/botan-1.11
 
   if flag(debug)
       cc-options: -O0 -g3 -std=c++11

@@ -7,19 +7,19 @@ import SecondTransfer(
     , http11Attendant
     , dropIncomingData
     , coherentToAwareWorker
-    , FinishRequest(..)
     )
 import SecondTransfer.Sessions(
       makeSessionsContext
     , defaultSessionsConfig
     )
 import SecondTransfer.TLS.CoreServer
+import SecondTransfer.TLS.Types   (defaultConnectionCallbacks)
 import SecondTransfer.TLS.Botan
 
 import Data.Typeable              (Proxy)
 import Data.Conduit
-import Control.Concurrent         (threadDelay, forkIO)
-import Control.Concurrent.MVar
+
+import qualified Data.ByteString  as B
 
 saysHello :: DataAndConclusion
 saysHello = do
@@ -49,10 +49,13 @@ main = do
         http11_attendant = http11Attendant sessions_context helloWorldWorker
         tls_session_proxy :: Proxy BotanTLSContext
         tls_session_proxy = error "Irrelevant"
+    cert_contents     <- B.readFile "_priv/cert.pem"
+    priv_key_contents <- B.readFile "_priv/privkey.unencrypted-pkcs8.pem"
     tlsServeWithALPN
         tls_session_proxy
-        "_priv/cert.pem"                     -- Server certificate
-        "_priv/privkey.unencrypted-pkcs8.pem"      -- Certificate private key
+        defaultConnectionCallbacks
+        cert_contents                    -- Server certificate
+        priv_key_contents                -- Certificate private key
         "127.0.0.1"                      -- On which interface to bind
         [
             ("h2-14", http2_attendant),  -- Protocols present in the ALPN negotiation

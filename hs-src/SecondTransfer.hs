@@ -30,8 +30,8 @@ The library
     (long uploads in POST or PUT requests) and to deliver streaming responses. You
     should even be able to do both simultaneously.
 
-Setting up TLS for HTTP/2 correctly is a shore, so I have bundled here the
-TLS setup logic. Before you read any further, ATTENTION: enable always the threaded
+Setting up TLS for HTTP/2 correctly is a shore, so we have bundled here the
+TLS setup logic. Enable always the threaded
 ghc runtime in your final programs if you want TLS to work.
 
 
