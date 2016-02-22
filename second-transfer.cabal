@@ -93,6 +93,7 @@ library
                   , SecondTransfer.IOCallbacks.WrapSocket
                   , SecondTransfer.IOCallbacks.Coupling
                   , SecondTransfer.IOCallbacks.SaveFragment
+                  , SecondTransfer.IOCallbacks.Throtler
 
                   -- These are really internal modules, but  are exposed
                   -- here for the sake of the test suite. They are hidden
