@@ -25,6 +25,7 @@ module SecondTransfer.Socks5.Types (
                , Socks5LogCallback
                , Socks5ConnectionCallbacks                          (..)
                , logEvents_S5CC
+               , blanketPlainTextIO_S5CC
      ) where
 
 ---import           Control.Concurrent
@@ -40,6 +41,8 @@ import           Data.Word
 import           Data.Int                                           (Int64)
 
 import qualified Network.Socket                                     as NS(SockAddr)
+
+import           SecondTransfer.IOCallbacks.Types                          (IOCallbacks)
 
 -------------------------------------------------------------------------------------------------------
 --
@@ -66,6 +69,11 @@ type Socks5LogCallback =  Socks5ConnectEvent -> IO ()
 data Socks5ConnectionCallbacks = Socks5ConnectionCallbacks {
     -- | Invoked after the connection is accepted, and after it is finished.
     _logEvents_S5CC            :: Maybe Socks5LogCallback
+
+    -- | Function to transform the plain-text IOCallbacks when a connection is
+    --   accepted. Handy for implementing metrics, or for slowing things down.
+    --
+ ,  _blanketPlainTextIO_S5CC   :: Maybe (IOCallbacks -> IO IOCallbacks)
     }
 
 makeLenses ''Socks5ConnectionCallbacks

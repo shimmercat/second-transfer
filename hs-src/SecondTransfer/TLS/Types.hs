@@ -8,8 +8,11 @@ module SecondTransfer.TLS.Types (
 
                , ConnectionId                                              (..)
                , ConnectionEvent                                           (..)
+
                , ConnectionCallbacks                                       (..)
                , logEvents_CoCa
+               , blanketPlainTextIO_CoCa
+
                , defaultConnectionCallbacks
        ) where
 
@@ -20,7 +23,7 @@ import           Data.Int                                                  (Int6
 
 import qualified Network.Socket                                            as NS(SockAddr)
 
-import           SecondTransfer.IOCallbacks.Types                          (TLSServerIO, IOChannels)
+import           SecondTransfer.IOCallbacks.Types                          (TLSServerIO, IOChannels, IOCallbacks)
 
 -- | Singleton type. Used in conjunction with an `MVar`. If the MVar is full,
 --   the fuction `tlsServeWithALPNAndFinishOnRequest` knows that it should finish
@@ -70,6 +73,10 @@ type LogCallback =  ConnectionEvent -> IO ()
 data ConnectionCallbacks = ConnectionCallbacks {
     -- | Invoked after the connection is accepted, and after it is finished.
     _logEvents_CoCa            :: Maybe LogCallback
+
+    -- | Function to transform the plain-text IOCallbacks when a connection is
+    --   accepted. Handy for implementing metrics, or for slowing things down
+ ,  _blanketPlainTextIO_CoCa  :: Maybe (IOCallbacks -> IO IOCallbacks)
     }
 
 makeLenses ''ConnectionCallbacks
@@ -78,4 +85,5 @@ makeLenses ''ConnectionCallbacks
 defaultConnectionCallbacks :: ConnectionCallbacks
 defaultConnectionCallbacks = ConnectionCallbacks {
     _logEvents_CoCa = Nothing
+  , _blanketPlainTextIO_CoCa = Nothing
     }

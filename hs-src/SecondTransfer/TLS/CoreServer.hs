@@ -258,7 +258,14 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
           connection_data = ConnectionData hashable_addr
       log_event (Established_CoEv sock_addr wconn_id live_now)
       session <- unencryptTLSServerIO ctx encrypted_io
-      plaintext_io_callbacks_u <- handshake session :: IO IOCallbacks
+
+      plaintext_io_callbacks_u' <- handshake session :: IO IOCallbacks
+
+      -- Modulate the IO callbacks if that has been instructed.
+      plaintext_io_callbacks_u <- case (connection_callbacks ^. blanketPlainTextIO_CoCa) of
+          Nothing -> return plaintext_io_callbacks_u'
+          Just u -> u plaintext_io_callbacks_u'
+
 
       close_reported <- newMVar False
 
@@ -294,33 +301,6 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
               log_event (ALPNFailed_CoEv wconn_id)
               plaintext_io_callbacks ^. closeAction_IOC
     return ()
-
-
--- tlsSessionHandlerControllable ::  (TLSContext ctx session, TLSServerIO encrypted_io)
---     => [(String, ControllableAttendant controller)]  ->  ctx ->  encrypted_io -> IO (Maybe controller)
--- tlsSessionHandlerControllable attendants ctx encrypted_io = do
---     session <- unencryptTLSServerIO ctx encrypted_io
---     plaintext_io_callbacks <- handshake session :: IO IOCallbacks
---     maybe_sel_prot <- getSelectedProtocol session
---     case maybe_sel_prot of
---         Just (_, prot_name) -> do
---             let
---                 Just  use_attendant = lookup (unpack prot_name) attendants
---             x <- use_attendant plaintext_io_callbacks
---             return . Just $ x
-
---         Nothing -> do
---             let
---                 maybe_attendant = lookup "" attendants
---             case maybe_attendant of
---                 Just use_attendant -> do
---                     x <- use_attendant plaintext_io_callbacks
---                     return . Just $ x
---                 Nothing -> do
---                     -- Silently do nothing, and close the connection
---                     plaintext_io_callbacks ^. closeAction_IOC
---                     return Nothing
-
 
 
 chooseProtocol :: [(String, a)] ->  [B.ByteString] -> IO (Maybe Int)

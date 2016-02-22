@@ -88,7 +88,6 @@ newThrotler bandwidth latency sourceio =
     return $ set pushAction_IOC (\ x -> runReaderT (throtlerPush x) throttler_state) sourceio
 
 
-
 throtlerPush ::  LB.ByteString -> Throttler ()
 throtlerPush contents =
   do

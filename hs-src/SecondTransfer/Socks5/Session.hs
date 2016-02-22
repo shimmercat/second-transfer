@@ -298,7 +298,7 @@ tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_soc
      tcpServe listen_socket socks_action
   where
      socks_action active_socket = do
-         forkIOExc "tlsSOCKS5Serve/negotiation" $ do
+         _ <- forkIOExc "tlsSOCKS5Serve/negotiation" $ do
              conn_id <- modifyMVar s5s_mvar $ \ s5s -> do
                  let
                      conn_id = s5s ^. nextConnection_S5S
@@ -321,7 +321,7 @@ tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_soc
                    then negotiateSocksForwardOrConnect approver io_callbacks
                    else negotiateSocksAndForward       approver io_callbacks
              case maybe_negotiated_io of
-                 Connect_COF fate negotiated_io -> do
+                 Connect_COF fate _negotiated_io -> do
                      let
                          tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
                      log_event $ HandlingHere_S5Ev fate wconn_id
