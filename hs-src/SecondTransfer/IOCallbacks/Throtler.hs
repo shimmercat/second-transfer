@@ -17,7 +17,8 @@ import           Control.Monad.IO.Class                 (liftIO)
 import           Control.Monad                          (when)
 import           Control.Monad.Trans.Reader
 import           Control.Concurrent
---import           Control.Concurrent.Chan
+import           Control.Concurrent.BoundedChan
+import qualified Control.Concurrent.BoundedChan         as BC
 
 import           Data.IORef
 import qualified Data.ByteString.Lazy                         as LB
@@ -38,6 +39,8 @@ import qualified Data.Sequence                          as Sq
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception
 
+import           Debug.Trace
+
 
 -- |Some number that says something about the precission of the throtler. It is the
 -- length of the log. Let's say 20
@@ -50,7 +53,7 @@ data ThrottlerState = ThrottlerState {
   , _latency_TS        :: Double
   , _bandwidth_TS      :: Double
 
-  , _waitingPackets_TS :: Chan (TimeSpec, LB.ByteString)
+  , _waitingPackets_TS :: BoundedChan (TimeSpec, LB.ByteString)
 
   , _sentLog_TS        :: IORef (Seq (TimeSpec, Int))
     }
@@ -68,7 +71,7 @@ type Throttler = ReaderT  ThrottlerState IO
 newThrotler :: Double -> Double -> IOCallbacks -> IO IOCallbacks
 newThrotler bandwidth latency sourceio =
   do
-    waiting_chan <- newChan
+    waiting_chan <- newBoundedChan 5
     sent_log_ioref <- newIORef mempty
     let
         throttler_state = ThrottlerState {
@@ -94,7 +97,7 @@ throtlerPush contents =
     -- When the packet arrived
     when_arrived <- liftIO $ getTime Monotonic
     waiting_chan <- view waitingPackets_TS
-    liftIO $ writeChan waiting_chan (when_arrived, contents)
+    liftIO $ BC.writeChan waiting_chan (when_arrived, contents)
 
 
 -- | works like t2 - t1
@@ -109,7 +112,7 @@ deliveryThread =
   do
     waiting_chan <- view waitingPackets_TS
     -- Ok, let's see when we can deliver the next packet
-    next_to_deliver <- liftIO $ readChan waiting_chan
+    next_to_deliver <- liftIO $ BC.readChan waiting_chan
 
     -- There are two variables that I need to take into account: one
     -- limit set by bandwidth, and one limit set by latency
@@ -133,6 +136,8 @@ deliveryThread =
     let
         size_to_deliver = fromIntegral . LB.length $ packet_contents
 
+        --  trace ("size to deliver " ++ show size_to_deliver) $
+
         bandwidth_future = case  viewl sent_log of
             EmptyL ->
                 -- No packets has been sent, the admisible future
@@ -147,7 +152,7 @@ deliveryThread =
                     -- t0 should be negative implying a negative offset
                     -- from now, so that the time tnp1 that
                     -- we get implies a likely possitive offset from now.
-                    t0 =  when_sent `secondsDiff` now
+                    t0 =   when_sent `secondsDiff` now
                     -- Number of bytes that appear in the log as sent in the
                     -- time-interval that the log covers.
                     bytes_sent_before = foldl (\x p -> snd p + x) 0 sent_log
@@ -157,7 +162,7 @@ deliveryThread =
                     -- in a piece of paper, and it includes the time of the oldest
                     -- sent packet ...
                     tnp1 = t0 + (fromIntegral (bytes_sent_before +  size_to_deliver))/bandwidth
-                in max 0.0 tnp1
+                in  max 0.0 tnp1
 
         -- The time to wait is the max of the time indicated by the latency
         -- and by the bandwidth calculation.

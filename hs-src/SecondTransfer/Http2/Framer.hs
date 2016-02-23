@@ -36,6 +36,7 @@ import qualified Data.ByteString.Lazy                   as LB
 import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Foldable                          (find)
+import qualified Data.Vector                            as DVec
 --import qualified Data.PQueue.Min                        as PQ
 --import           Data.Maybe                             (fromMaybe)
 
@@ -46,6 +47,7 @@ import           System.Clock                           (
                                                           Clock(..)
                                                         , getTime
                                                         , TimeSpec
+                                                        , timeSpecAsNanoSecs
                                                         )
 -- import           System.Mem.Weak
 
@@ -74,7 +76,7 @@ import           SecondTransfer.Http2.CalmState
 import           SecondTransfer.MainLoop.Logging        (logit)
 #endif
 
---import           Debug.Trace                            (traceStack)
+import           Debug.Trace
 
 
 http2PrefixLength :: Int
@@ -102,6 +104,18 @@ data PrioritySendState = PrioritySendState {
      }
 
 L.makeLenses ''PrioritySendState
+
+
+-- | To measure and tune packet size as a measure of how much data
+--   has been put into the network so far.
+data TrayMeter  = TrayMeter {
+    _lastSentPacket_TrM     :: !TimeSpec
+  , _packetsInTrend_TrM      :: !Int
+    }
+    deriving Show
+
+L.makeLenses ''TrayMeter
+
 
 
 data FramerSessionData = FramerSessionData {
@@ -281,6 +295,7 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
             -- putStrLn $ show _e
             modifyMVar_ output_is_forbidden (\ _ -> return True)
 
+    now <- getTime Monotonic
 
     _ <- forkIOExc "inputGathererHttp2"
         $ close_on_error new_session_id sessions_context
@@ -298,7 +313,7 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ ignoreException blockedIndefinitelyOnSTM  ()
         $ close_on_error new_session_id sessions_context
-        $ runReaderT sendReordering framer_session_data
+        $ runReaderT (sendReordering $ startTrayMeter now) framer_session_data
 
     return ()
 
@@ -694,8 +709,11 @@ startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify  = do
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
             close_action
 
+        priority_effect =  effect ^. priorityEffect_Ef
+
         -- The starting value of the calm, as dicated by the effects
-        calm_0 = case effect ^. priorityEffect_Ef of
+        calm_0 = case
+                       trace ( "prio-effect " ++ show priority_effect ) $ priority_effect of
             NoEffect_PrEf  -> newCalmState 0 []
             Uniform_PrEf default_calm -> newCalmState default_calm []
             PerYield_PrEf start_calm cmap -> newCalmState start_calm cmap
@@ -916,12 +934,8 @@ withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
                     filling_level = ot1 ^. filling_OuT
                     max_length_out = ot1 ^. maxLength_OuT
 
-                    very_low_priority = priority  >= 512
-                    (_ot2, lowest_calm_value) = lowestCalmValue ot1
-                    can_add = if very_low_priority then
-                        ( (max_length_out - filling_level) >= 4 ) && (lowest_calm_value >= priority )
-                        else
-                        filling_level < max_length_out
+                    (_ot2, lowest_calm_value) =  lowestCalmValue ot1
+                    can_add = ( (max_length_out - filling_level) >= 4 ) || (lowest_calm_value >= priority )
 
                 if can_add || (system_priority < (-1) )
                   then do
@@ -976,6 +990,42 @@ pushGoAwayFrame frame_encode_info frame_payload =
     goAwaySend datum
 
 
+startTrayMeter :: TimeSpec -> TrayMeter
+startTrayMeter starttime = TrayMeter {
+    _lastSentPacket_TrM  = starttime
+  , _packetsInTrend_TrM   = 0
+    }
+
+resetTime :: Double
+resetTime = 2.0
+
+sizeSequence :: DVec.Vector Int
+sizeSequence = DVec.fromList [1000,
+                              1000,
+                              1000,
+                              1000,
+                              1000,
+                              1000,
+                              1000,
+                              1000,
+                              2448,
+                              2448,
+                              2448,
+                              2448,
+                              2448,
+                              2448,
+                              8448,
+                              8448,
+                              8448,
+                              8448,
+                              8448,
+                              8448,
+                              15448,
+                              15448,
+                              15448,
+                              15448
+                             ]
+
 -- | In charge of actually sending the  frames, in a special thread (create said thread
 -- in the caller).
 --
@@ -985,13 +1035,28 @@ pushGoAwayFrame frame_encode_info frame_payload =
 -- As long as all the pipes connecting components of the system are bound, terminating
 -- this function and it's thread should propagate as blocked-indefinitely errors to
 -- all the other threads to pipes.
-sendReordering :: FramerSession ()
-sendReordering = {-# SCC sndReo  #-} do
+sendReordering :: TrayMeter -> FramerSession ()
+sendReordering tray_meter = {-# SCC sndReo  #-} do
     pss <- view prioritySendState
     close_action <- view closeAction
-    use_size <- view (sessionsContext . sessionsConfig . networkChunkSize)
+    now <- liftIO . getTime $ Monotonic
+
     -- Get a set of packets (that is, their reprs) to send
     let
+        (sequence_number, new_meter ) = if
+            (
+              (fromIntegral $ timeSpecAsNanoSecs (  now - tray_meter ^. lastSentPacket_TrM  ))) / 1.0e9 > resetTime
+          then
+            (0, startTrayMeter now)
+          else
+            (
+              tray_meter ^. packetsInTrend_TrM,
+              (L.over packetsInTrend_TrM (+ 1 ) . L.set lastSentPacket_TrM now $ tray_meter)
+            )
+
+        use_size = if sequence_number >= DVec.length sizeSequence
+            then 16000
+            else sizeSequence DVec.! sequence_number
 
         get_sendable_data = do
             maybe_entries <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
@@ -1028,7 +1093,7 @@ sendReordering = {-# SCC sndReo  #-} do
     case either_entries_data of
         Right entries_data -> do
            sendBytesN entries_data
-           sendReordering
+           sendReordering new_meter
 
         Left entries_data -> do
            sendBytesN entries_data

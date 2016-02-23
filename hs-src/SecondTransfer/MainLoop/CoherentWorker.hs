@@ -204,6 +204,7 @@ data PriorityEffect =
                                        --   each byte boundary in the first part of the pair, the calm
                                        --   is raised (e.g., the priority is lowered), by the positive
                                        --   number given as second part of the pair
+  deriving Show
 
 -- TODO:  another kind of priority effect would be one here the priorities are
 --        known in advance. Only problem here is determining if the action would

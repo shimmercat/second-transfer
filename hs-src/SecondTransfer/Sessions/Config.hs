@@ -19,7 +19,6 @@ module SecondTransfer.Sessions.Config(
                , addUsedProtocol
                , pushEnabled
                , firstPushStream
-               , networkChunkSize
                , trayMaxSize
 
                , SessionComponent                       (..)
@@ -180,11 +179,6 @@ data SessionsConfig = SessionsConfig {
  , _pushEnabled               :: Bool
    -- | The number to use for the first pushed stream. Should be even
  , _firstPushStream            :: Int
-   -- | Max amount of bytes to try to send in one go. The session will
-   --   send less data if less is available, otherwise it will send slightly
-   --   more than this amount, depending on packet boundaries. This is
-   --   used to avoid TCP and TLS fragmentation at the network layer
- , _networkChunkSize          :: Int
    -- | Max number of packets to hold in the output tray. A high number means
    --   that more memory is used by the packets have a higher chance of going
    --   out in a favourable order.
@@ -214,7 +208,6 @@ defaultSessionsConfig = SessionsConfig {
   , _dataFrameSize = 16*1024
   , _pushEnabled = True
   , _firstPushStream = 8
-  , _networkChunkSize = 18*1024
   -- Max number of packets that can be waiting to exit. A big number here
   -- is desirable, but counts towards the memory consumption when the network is slow...
   -- so for now let's make it a little bit lower. In the future we may want to adjust
