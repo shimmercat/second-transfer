@@ -5,6 +5,7 @@ module SecondTransfer.Http2.CalmState (
               , newCalmState
               , getCurrentCalm
               , advanceCalm
+              , bytesTillNextCalmSwitch
 
               , CalmEnhacementMap
     ) where
@@ -24,12 +25,20 @@ data CalmState = CalmState {
     }
     deriving (Show, Eq)
 
+
 newCalmState :: Int -> CalmEnhacementMap -> CalmState
 newCalmState start_calm cemap = CalmState cemap 0 start_calm
 
 
 getCurrentCalm :: CalmState -> Int
 getCurrentCalm CalmState{_currentCalm} = _currentCalm
+
+
+bytesTillNextCalmSwitch :: CalmState ->  Int
+bytesTillNextCalmSwitch  CalmState{ _restOfMap = [] } = 4000000000             -- Not good, will cause problems
+bytesTillNextCalmSwitch  CalmState{ _restOfMap = _rom@((offset, _bump):_r),
+                          _currentOffset,
+                          _currentCalm }  =  fromIntegral offset -  _currentOffset
 
 
 advanceCalm :: CalmState -> Int -> CalmState
@@ -39,7 +48,7 @@ advanceCalm _cs@CalmState{ _restOfMap = rom@((offset, bump):r),
                           _currentCalm } advance_bytes =
   let
     new_offset = _currentOffset + advance_bytes
-    crosses_boundary = fromIntegral new_offset > offset
+    crosses_boundary = fromIntegral new_offset >= offset
   in
     CalmState {
         _restOfMap = if crosses_boundary then r else rom ,

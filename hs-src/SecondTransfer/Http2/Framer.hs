@@ -800,41 +800,43 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
           else do
               -- We have got more data, and we need to send it down the way. Use this space to
               -- adjust the calm as required
-              let
-                  new_calm = advanceCalm calm bytes_length
 
               -- And now, re-invoke
               flowControlOutput
                   stream_id
                   capacity
                   ordinal
-                  new_calm
+                  calm
                   (LB.fromStrict bytes_to_send)
                   commands_chan
                   bytes_chan
                   delivery_notify
                   last_effect
       else {-# SCC fcOBranch2  #-}  do
-        -- Ok, here is the data, from real
+        -- I have data in leftovers
         let
             amount = fromIntegral $  LB.length leftovers
 
-            -- TODO: This hacks forbids the session to handle out larger frames, even if
-            -- the peer would allow them.
-            -- The correct way goes through pulling some data from the session:
-            --
-            --        use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
-            --        use_size <- liftIO $ DIO.readIORef use_size_ioref
-            --
-            (use_amount, new_leftover, to_send) =
-                if amount > 16384
-                  then (16384, LB.drop 16384 leftovers, LB.take 16384 leftovers)
-                  else (amount, "", leftovers)
+            left_before_prio_break = bytesTillNextCalmSwitch calm
 
-        if  use_amount <= capacity
+            -- Ok, flow control output will forbid frames wich are larger than 14000 bytes.
+            max_bytes :: Int
+            max_bytes = 14000
+
+            use_bytes = minimum [max_bytes, amount, left_before_prio_break]
+
+            use_bytes_l = fromIntegral use_bytes
+
+            (to_send, new_leftover) = LB.splitAt use_bytes_l leftovers
+
+            new_calm = advanceCalm calm use_bytes
+
+        if  use_bytes <= capacity
           then do
             -- Can send, but must format first...
             let
+                -- By taking an upper bound above, we know that we have not crossed
+                -- the calm limit yet.
                 priority = getCurrentCalm calm
                 formatted =  LB.fromStrict $ NH2.encodeFrame
                     (NH2.EncodeInfo {
@@ -850,17 +852,17 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
             delivery_notify stream_id last_effect ordinal
             flowControlOutput
                 stream_id
-                (capacity - use_amount)
+                (capacity - use_bytes)
                 (ordinal+1 )
-                calm
+                new_calm
                 new_leftover
                 commands_chan
                 bytes_chan
-
                 delivery_notify
                 last_effect
           else do
-            -- I can not send because flow-control is full, wait for a command instead
+            -- I can not send because flow-control is full, wait for a command instead.
+            -- Lazily computed new_calm have no effect in this case.
             command <- liftIO $ {-# SCC t2 #-} readChan commands_chan
             case  {-# SCC t3 #-} command of
                 AddBytes_FCM delta_cap -> do

@@ -18,6 +18,8 @@ import qualified Data.ByteString.Builder                        as Bu
 
 import qualified Data.Map.Strict                                as DM
 
+import           Debug.Trace
+
 -- | A channel key (SystemPriority, OrdinaryPriority)
 newtype ChannelKey = ChannelKey (Int, Int)
     deriving (Eq, Ord, Show)
@@ -164,7 +166,8 @@ getDataUpTo_AtM is_first return_at_trigger
             datum_length = fromIntegral $  LB.length datum
             datum_as_bu = Bu.lazyByteString datum
         if datum_length > return_at_trigger
-          then
+          then do
+            liftIO $ putStrLn "cut-----------------"
             return datum_as_bu
           else do
             let
@@ -204,4 +207,4 @@ gowy  gw =
                     -- one
                     gowy gw1
 
-                Just token -> return $ Just token
+                Just token -> return $ trace  ("token-fetched, length: " ++ (show . LB.length $ token ^. payload_ChT) ) $ Just token

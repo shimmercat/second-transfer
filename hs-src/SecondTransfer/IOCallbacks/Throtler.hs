@@ -71,7 +71,8 @@ type Throttler = ReaderT  ThrottlerState IO
 newThrotler :: Double -> Double -> IOCallbacks -> IO IOCallbacks
 newThrotler bandwidth latency sourceio =
   do
-    waiting_chan <- newBoundedChan 5
+    -- TODO: this should be something else...
+    waiting_chan <- newBoundedChan 2
     sent_log_ioref <- newIORef mempty
     let
         throttler_state = ThrottlerState {
