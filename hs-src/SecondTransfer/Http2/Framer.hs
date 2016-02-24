@@ -36,6 +36,7 @@ import qualified Data.ByteString.Lazy                   as LB
 import qualified Data.ByteString.Builder                as Bu
 import           Data.Conduit
 import           Data.Foldable                          (find)
+import           Data.IORef
 import qualified Data.Vector                            as DVec
 --import qualified Data.PQueue.Min                        as PQ
 --import           Data.Maybe                             (fromMaybe)
@@ -69,7 +70,7 @@ import           SecondTransfer.Utils                   (Word24, word24ToInt)
 import           SecondTransfer.Exception
 
 import           SecondTransfer.Http2.TransferTypes
-import           SecondTransfer.Http2.OutputTray
+import           SecondTransfer.Http2.PriorityChannels
 import           SecondTransfer.Http2.CalmState
 
 #ifdef SECONDTRANSFER_MONITORING
@@ -93,17 +94,6 @@ data FlowControlCommand =
 
 -- A hashtable from stream id to channel of availabiliy increases
 type Stream2AvailSpace = HashTable GlobalStreamId (Chan FlowControlCommand)
-
-
-
--- Simple thread to prioritize frames in the session
-data PrioritySendState = PrioritySendState {
-     _outputTray_PSS                 :: MVar OutputTray
-   , _dataReady_PSS                  :: MVar ()
-   , _spaceReady_PSS                 :: MVar ()
-     }
-
-L.makeLenses ''PrioritySendState
 
 
 -- | To measure and tune packet size as a measure of how much data
@@ -156,10 +146,13 @@ data FramerSessionData = FramerSessionData {
     --, _lastOutputStream      :: MVar Int
 
     -- For sending data orderly
-    , _prioritySendState     :: PrioritySendState
+    , _prioritySendState     :: PriorityChannelsState
 
     -- Need to know this for the preface
     , _sessionRole_FSD       :: SessionRole
+
+    -- A flag to set when signaling goAway
+    , _goAwaySignaled        :: IORef Bool
     }
 
 L.makeLenses ''FramerSessionData
@@ -179,12 +172,6 @@ newtype SimpleSessionControl  = SimpleSessionControl (TimeSpec, IO () )
 
 instance ActivityMeteredSession SimpleSessionControl where
     sessionLastActivity (SimpleSessionControl (t,_button)) = return t
-
-
--- | This is a special "mark" priority that when used causes the connection
---   to be closed. It is used because is clean.
-goAwayPriority :: Int
-goAwayPriority = (-15)
 
 
 -- | Wraps a session, provided that we get who will be taking care of the session
@@ -227,9 +214,9 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
     -- last_output_stream_id     <- newMVar 0
     output_is_forbidden       <- newMVar False
 
-    output_tray_mvar          <- newMVar . newOutputTray . ( ^. sessionsConfig . trayMaxSize ) $ sessions_context
-    data_ready_mvar           <- newEmptyMVar
-    space_ready_mvar          <- newMVar ()
+    priority_send_state       <- newPriorityChannelState
+
+    go_away_signaled_ioref    <- liftIO $ newIORef False
 
     -- TODO: this one should be comming from the SessionsConfig struct at Sessions/Config.hs
     let max_recv_frame_size   =  16384
@@ -246,12 +233,9 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         ,_lastInputStream     = last_stream_id
         --,_lastOutputStream    = last_output_stream_id
         ,_outputIsForbidden   = output_is_forbidden
-        ,_prioritySendState   = PrioritySendState {
-                                  _outputTray_PSS = output_tray_mvar
-                                , _dataReady_PSS = data_ready_mvar
-                                , _spaceReady_PSS = space_ready_mvar
-                                }
+        ,_prioritySendState   = priority_send_state
         ,_sessionRole_FSD     = session_role
+        ,_goAwaySignaled      = go_away_signaled_ioref
         }
 
 
@@ -918,40 +902,7 @@ releaseFramer =
 withPrioritySend_ :: Int -> Int -> Int -> Int -> LB.ByteString -> FramerSession ()
 withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
     pss <- view prioritySendState
-    let
-        new_entry = TrayEntry {
-            _systemPriority_TyE = system_priority -- Ordinary data packets go after everybody else
-          , _streamPriority_TyE = priority
-          , _streamOrdinal_TyE = packet_ordinal
-          , _payload_TyE =  datum
-          , _streamId_TyE = stream_id
-            }
-        attempt =  do
-            could_add <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
-                _ <- tryTakeMVar (pss ^. spaceReady_PSS)
-                let
-
-                    filling_level = ot1 ^. filling_OuT
-                    max_length_out = ot1 ^. maxLength_OuT
-
-                    (_ot2, lowest_calm_value) =  lowestCalmValue ot1
-                    can_add = ( (max_length_out - filling_level) >= 4 ) || (lowest_calm_value >= priority )
-
-                if can_add || (system_priority < (-1) )
-                  then do
-                    let new_ot = addEntry ot1 new_entry
-                    return (new_ot, True)
-                  else do
-                    return (ot1, False)
-            if could_add
-              then do
-                _ <- tryPutMVar (pss ^. dataReady_PSS) ()
-                return ()
-              else do
-                readMVar (pss ^. spaceReady_PSS)
-                attempt
-    -- Now, for this to work, I need to have enough capacity to add something to the queue
-    liftIO $ attempt
+    liftIO $ putInPriorityChannel pss system_priority priority stream_id packet_ordinal datum
 
 
 -- | Blocks if there is not enough space in the tray
@@ -963,11 +914,19 @@ withNormalPrioritySend = withPrioritySend_ 0
 withHighPrioritySend :: LB.ByteString -> FramerSession ()
 withHighPrioritySend  datum = withPrioritySend_ (-1) 0 0 0 datum
 
--- Just be sure to send it with some specific priority
+
+goAwayPriority :: Int
+goAwayPriority = -15
+
+
+-- | Just be sure to send it with some specific, very high priority
 goAwaySend :: LB.ByteString -> FramerSession ()
 goAwaySend  datum =
   do
     withPrioritySend_ goAwayPriority 0 0 0 datum
+    goaway_ioref <- view goAwaySignaled
+    liftIO $ writeIORef goaway_ioref True
+
 
 
 serializeMany :: [OutputFrame] -> LB.ByteString
@@ -1055,47 +1014,21 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
             )
 
         use_size = if sequence_number >= DVec.length sizeSequence
-            then 16000
+            then 8200  -- Should end in something close to 16 kb
             else sizeSequence DVec.! sequence_number
 
-        get_sendable_data = do
-            maybe_entries <- modifyMVar (pss ^. outputTray_PSS) $ \ ot1 -> do
-                _ <- tryTakeMVar (pss ^. dataReady_PSS)
-                if (ot1 ^. filling_OuT) <= 0
-                  then do
-                    return (ot1 ,Nothing)
-                  else do
-                    let
-                      (ot2, entries) = splitOverSize use_size ot1
-                    return (ot2, Just entries)
+    builder <- liftIO $ getDataUpTo pss use_size
 
-            case maybe_entries of
-                Just entries -> do
-                    -- The entries vector is already sorted by priority. if the first entry
-                    -- has priority goAwayPriority, it means that we should only send that one and close
-                    -- the connection immediately....
-                    --
-                    -- Also, this code should guarantee that no empty vector is ever seen
-                    -- here (look for the (ot1 ^. filling_OuT) line above)
-                    -- liftIO $ putStrLn $ "sent " ++ (show . length $ entries )
-                    _ <- tryPutMVar (pss ^. spaceReady_PSS) ()
-                    let
-                      first_entry = head entries
-                    if first_entry ^. systemPriority_TyE == goAwayPriority
-                      then
-                        return . Left $ first_entry ^. payload_TyE
-                      else
-                        return . Right . Bu.toLazyByteString . mconcat . map (Bu.lazyByteString . ( ^. payload_TyE) ) $  entries
-                Nothing -> do
-                    _ <- readMVar (pss ^. dataReady_PSS)
-                    get_sendable_data
-    either_entries_data <- liftIO get_sendable_data
-    case either_entries_data of
-        Right entries_data -> do
-           sendBytesN entries_data
-           sendReordering new_meter
+    let
+        entries_data = Bu.toLazyByteString builder
 
-        Left entries_data -> do
-           sendBytesN entries_data
-           --liftIO $ putStrLn "AboutToProduceCleanClose"
-           liftIO close_action
+    goaway_signaled_ioref <- view goAwaySignaled
+    goaway_signaled <- liftIO $ readIORef goaway_signaled_ioref
+
+    if goaway_signaled
+      then do
+        sendBytesN entries_data
+        liftIO close_action
+      else do
+        sendBytesN entries_data
+        sendReordering new_meter
