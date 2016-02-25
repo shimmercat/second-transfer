@@ -39,13 +39,7 @@ import qualified Data.Sequence                          as Sq
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception
 
-import           Debug.Trace
-
-
--- |Some number that says something about the precission of the throtler. It is the
--- length of the log. Let's say 20
-lengthOfPacketLog :: Int
-lengthOfPacketLog = 20
+--import           Debug.Trace
 
 
 data ThrottlerState = ThrottlerState {
@@ -56,11 +50,37 @@ data ThrottlerState = ThrottlerState {
   , _waitingPackets_TS :: BoundedChan (TimeSpec, LB.ByteString)
 
   , _sentLog_TS        :: IORef (Seq (TimeSpec, Int))
+  , _logLength_TS      :: Int
     }
 
 makeLenses ''ThrottlerState
 
 type Throttler = ReaderT  ThrottlerState IO
+
+
+-- Used in the various calculations below
+assumedAveragePacketLength :: Double
+assumedAveragePacketLength = 8192.0
+
+-- | How many packets do we need to store to simulate network parameters?
+lengthOfPacketBacklog :: Double -> Double -> Int
+lengthOfPacketBacklog bandwidth latency  =
+  let
+    bytes_to_store = bandwidth * latency
+  in
+    max 1 (floor $ bytes_to_store / assumedAveragePacketLength)
+
+
+-- | Let's make this go back half a second. That is, the length of the
+--   record should be such that we can contain the number of packets of
+--   length "assumedAveragePacketLength" that we would be able to send in
+--   half a second, or one. This only uses the bandwidth, not the latency.
+lengthOfSentPacketsRecord :: Double -> Double -> Int
+lengthOfSentPacketsRecord bandwidth _latency =
+  let
+    bytes_of_half_a_second = 0.5 * bandwidth
+  in
+    max 1 (ceiling $ bytes_of_half_a_second / assumedAveragePacketLength)
 
 
 -- | Creates a new throtler. The bandwidth should be given in bytes per
@@ -71,8 +91,7 @@ type Throttler = ReaderT  ThrottlerState IO
 newThrotler :: Double -> Double -> IOCallbacks -> IO IOCallbacks
 newThrotler bandwidth latency sourceio =
   do
-    -- TODO: this should be something else...
-    waiting_chan <- newBoundedChan 2
+    waiting_chan <- newBoundedChan $ lengthOfPacketBacklog bandwidth latency
     sent_log_ioref <- newIORef mempty
     let
         throttler_state = ThrottlerState {
@@ -81,6 +100,7 @@ newThrotler bandwidth latency sourceio =
           , _bandwidth_TS = bandwidth
           , _waitingPackets_TS = waiting_chan
           , _sentLog_TS = sent_log_ioref
+          , _logLength_TS = lengthOfSentPacketsRecord bandwidth latency
         }
 
     -- Start the throtler thread
@@ -146,7 +166,9 @@ deliveryThread =
                 0
 
             -- The oldest sent packet can be found at the left of the
-            -- sent log.
+            -- sent log. BUG: This fails when the connection has been inactive
+            -- for a long time, since the history present for all the packets
+            -- registered in the back-log consistently says that there is space
             ( (when_sent, _) :< _after_that ) ->
                 -- We need to apply the formula
                 let
@@ -179,8 +201,10 @@ deliveryThread =
     -- we just got from a queue)
     new_now <- liftIO $ getTime Monotonic
 
+    length_of_packet_record <- view logLength_TS
+
     let
-        new_sent_log = if Sq.length sent_log < lengthOfPacketLog
+        new_sent_log = if Sq.length sent_log < length_of_packet_record
            then sent_log |> (new_now, size_to_deliver)
            else Sq.drop 1 sent_log |> (new_now, size_to_deliver)
 
