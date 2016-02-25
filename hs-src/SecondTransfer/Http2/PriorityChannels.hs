@@ -207,4 +207,4 @@ gowy  gw =
                     -- one
                     gowy gw1
 
-                Just token -> return $ trace  ("token-fetched, length: " ++ (show . LB.length $ token ^. payload_ChT) ) $ Just token
+                Just token -> return $ {- trace  ("token-fetched, length: " ++ (show . LB.length $ token ^. payload_ChT) ) $ -} Just token

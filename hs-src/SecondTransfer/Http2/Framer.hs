@@ -696,8 +696,7 @@ startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify  = do
         priority_effect =  effect ^. priorityEffect_Ef
 
         -- The starting value of the calm, as dicated by the effects
-        calm_0 = case
-                       trace ( "prio-effect " ++ show priority_effect ) $ priority_effect of
+        calm_0 = case priority_effect of
             NoEffect_PrEf  -> newCalmState 0 []
             Uniform_PrEf default_calm -> newCalmState default_calm []
             PerYield_PrEf start_calm cmap -> newCalmState start_calm cmap
