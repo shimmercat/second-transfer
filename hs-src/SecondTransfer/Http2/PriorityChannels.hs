@@ -167,7 +167,6 @@ getDataUpTo_AtM is_first return_at_trigger
             datum_as_bu = Bu.lazyByteString datum
         if datum_length > return_at_trigger
           then do
-            liftIO $ putStrLn "cut-----------------"
             return datum_as_bu
           else do
             let
@@ -207,4 +206,4 @@ gowy  gw =
                     -- one
                     gowy gw1
 
-                Just token -> return $ {- trace  ("token-fetched, length: " ++ (show . LB.length $ token ^. payload_ChT) ) $ -} Just token
+                Just token -> return $ Just token

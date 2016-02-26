@@ -561,7 +561,6 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
                  session_data
 
           Nothing ->
-              -- putStrLn "Warning, created session without registering it"
               return ()
 
 
@@ -626,7 +625,6 @@ sessionInputThread  = do
 
         FirstFrame_SIC _ -> do
             -- Bad, incorrect id or god knows only what ....
-            -- liftIO $ putStrLn "cc1"
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
@@ -652,7 +650,6 @@ sessionInputThread  = do
             -- here we believe that it is not necessary to tear down the
             -- entire session and therefore it's enough with a stream
             -- reset
-            -- liftIO $ putStrLn "cc4"
             sendOutPriorityTrain
                 (NH2.EncodeInfo
                     NH2.defaultFlags
