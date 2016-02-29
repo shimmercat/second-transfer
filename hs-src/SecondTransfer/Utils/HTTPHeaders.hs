@@ -39,6 +39,9 @@ module SecondTransfer.Utils.HTTPHeaders (
     , indentSpace_PPHC
     , prettyPrintHeaders
     , defaultPrettyPrintHeadersConfig
+
+    -- ** Functions to work with cookies
+    , parseCookiesHeaderFieldValue
     ) where
 
 import qualified Control.Lens                           as L
@@ -57,6 +60,10 @@ import qualified Data.Text                              as T
 import           Data.Text.Encoding                     (decodeUtf8, encodeUtf8)
 import qualified Data.Map.Strict                        as Ms
 import           Data.Word                              (Word8)
+
+-- Provide support for cookies
+import qualified Data.Attoparsec.ByteString             as ATO
+import qualified Data.Attoparsec.ByteString.Char8       as ATOCh8
 
 
 import           Data.Time.Format                       (formatTime, defaultTimeLocale)
@@ -382,7 +389,9 @@ removeConnectionHeaders headers =
            ) headers
 
 
--- | Fusion values for a specific header, using a provided separator.
+-- | Fusion values for a specific header, using a provided separator. Useful
+--  to *create* conformat HTTP/1.1 headers. HTTP/2 headers, in the other
+--  hand, can benefit of splitting the cookies.
 fusionHeaders :: HeaderName -> B.ByteString -> Headers -> Headers
 fusionHeaders header_name separator headers =
   let
@@ -431,7 +440,7 @@ fusionHeaders header_name separator headers =
   in
      result `deepseq` result
 
-
+-- Support for pretty printing headers -----------------------------------------
 
 data PrettyPrintHeadersConfig = PrettyPrintHeadersConfig {
     _indentSpace_PPHC       :: Int
@@ -453,3 +462,24 @@ prettyPrintHeaders config headers =
                 headers
   where
      space = Bu.byteString . pack . take (config ^. indentSpace_PPHC) . repeat $ ' '
+
+-- Cookie support --------------------------------------------------------------
+
+-- | Parses the "Cookie" header. This is somewhat untested and not very good.
+--   If the parser fails, an empty string is returned.
+parseCookiesHeaderFieldValue :: B.ByteString -> [(B.ByteString, B.ByteString)]
+parseCookiesHeaderFieldValue hv =
+  let
+    p :: ATO.Parser [(B.ByteString, B.ByteString)]
+    p = do
+       ATO.many' $ do
+          name <- ATOCh8.takeWhile (ATOCh8.notInClass "= ")
+          _ <- ATOCh8.char '='
+          value <- ATOCh8.takeWhile (ATOCh8.notInClass "; ")
+          _ <- ATOCh8.skipWhile $ ATOCh8.inClass " ;"
+          return (name, value)
+
+  in case ATO.parseOnly p hv of
+     Left _ -> []
+     Right c -> c
+--
