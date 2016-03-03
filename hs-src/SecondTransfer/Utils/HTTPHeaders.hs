@@ -374,7 +374,7 @@ introduceDateHeader header_editor = do
     let
         date_header_lens = headerLens "date"
         formatted_date = Just . pack $
-            formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" current_time
+            formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %z" current_time
         new_editor = L.set date_header_lens formatted_date header_editor
     return new_editor
 
@@ -386,7 +386,7 @@ introduceDateHeaderModifier  = do
     let
         date_header_lens = headerLens "date"
         formatted_date = Just . pack $
-            formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" current_time
+            formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %z" current_time
         result = \ header_editor -> L.set date_header_lens formatted_date header_editor
     return result
 
