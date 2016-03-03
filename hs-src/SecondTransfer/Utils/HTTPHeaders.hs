@@ -30,6 +30,7 @@ module SecondTransfer.Utils.HTTPHeaders (
     -- ** HTTP utilities
     ,replaceHostByAuthority
     ,introduceDateHeader
+    ,introduceDateHeaderModifier
     ,headerIsPseudo
     ,combineAuthorityAndHost
     ,removeConnectionHeaders
@@ -376,6 +377,18 @@ introduceDateHeader header_editor = do
             formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" current_time
         new_editor = L.set date_header_lens formatted_date header_editor
     return new_editor
+
+
+-- | As introduceDateHeader, but returns a modifier instead
+introduceDateHeaderModifier :: IO (HeaderEditor ->  HeaderEditor)
+introduceDateHeaderModifier  = do
+    current_time <- getCurrentTime
+    let
+        date_header_lens = headerLens "date"
+        formatted_date = Just . pack $
+            formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" current_time
+        result = \ header_editor -> L.set date_header_lens formatted_date header_editor
+    return result
 
 
 -- | Remove connection-specific headers as required by HTTP/2
