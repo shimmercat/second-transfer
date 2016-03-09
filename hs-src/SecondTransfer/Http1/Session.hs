@@ -338,9 +338,11 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                            then
                               Bu.toLazyByteString $
                                   (headerListToHTTP1ResponseText
-                                      (("transfer-encoding", "chunked")
-                                       :response_headers
-                                      )
+                                        (
+                                          head response_headers : -- Separate the :status header
+                                          ("transfer-encoding", "chunked") :
+                                          tail response_headers
+                                        )
                                   ) `mappend` "\r\n"
                            else
                               headers_text_as_lbs

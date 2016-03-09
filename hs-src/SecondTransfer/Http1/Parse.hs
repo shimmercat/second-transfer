@@ -527,7 +527,7 @@ unwrapChunks =
 -- It is not using during parse, but during the inverse process.
 headerListToHTTP1ResponseText :: Headers -> Bu.Builder
 headerListToHTTP1ResponseText headers =
-    case headers of
+    case  headers of
         -- According to the specs, :status can be only
         -- the first header
         (hn,hv): rest | hn == ":status" ->
