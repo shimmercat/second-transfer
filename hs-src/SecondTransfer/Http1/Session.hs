@@ -322,22 +322,46 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
             response_headers    = principal_stream ^. headers_PS
             transfer_encoding = find (\ x -> (fst x) == "transfer-encoding" ) response_headers
             cnt_length_header = find (\ x -> (fst x) == "content-length" )    response_headers
-            headers_text_as_lbs = Bu.toLazyByteString $ headerListToHTTP1ResponseText response_headers  `mappend` "\r\n"
+            headers_text_as_lbs =
+                Bu.toLazyByteString $
+                    headerListToHTTP1ResponseText response_headers `mappend` "\r\n"
 
         close_release_key <- ReT.register close_action
+
+        let
+            handle_as_chunked set_transfer_encoding =
+              do
+                -- TODO: Take care of footers
+                let
+                    headers_text_as_lbs' =
+                        if set_transfer_encoding
+                           then
+                              Bu.toLazyByteString $
+                                  (headerListToHTTP1ResponseText
+                                      (("transfer-encoding", "chunked")
+                                       :response_headers
+                                      )
+                                  ) `mappend` "\r\n"
+                           else
+                              headers_text_as_lbs
+                liftIO $ push_action headers_text_as_lbs'
+                -- Will run the conduit. If it fails, the connection will be closed.
+                (_maybe_footers, _did_ok) <-
+                    runConduit $
+                        data_and_conclusion
+                        `fuseBothMaybe`
+                        (CL.map wrapChunk =$= piecewiseconsume)
+                -- Don't forget the zero-length terminating chunk...
+                _ <- maybepushtext $ wrapChunk ""
+                -- If I got to this point, I can keep the connection alive for a future request
+                _ <- ReT.unprotect close_release_key
+                return ()
+
         case (transfer_encoding, cnt_length_header) of
 
             (Just (_, enc), _ )
-              | transferEncodingIsChunked enc -> do
-                  -- TODO: Take care of footers
-                  liftIO $ push_action headers_text_as_lbs
-                  -- Will run the conduit. If it fails, the connection will be closed.
-                  (_maybe_footers, _did_ok) <- runConduit  $ data_and_conclusion `fuseBothMaybe` (CL.map wrapChunk =$= piecewiseconsume)
-                  -- Don't forget the zero-length terminating chunk...
-                  _ <- maybepushtext $ wrapChunk ""
-                  -- If I got to this point, I can keep the connection alive for a future request
-                  _ <- ReT.unprotect close_release_key
-                  return ()
+              | transferEncodingIsChunked enc ->
+                handle_as_chunked False
 
               | otherwise -> do
                 -- This is a pretty bad condition, I don't know how to use
@@ -350,14 +374,25 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                     content_length :: Int
                     content_length = read . unpack $ content_length_str
                 liftIO $ push_action headers_text_as_lbs
-                (_maybe_footers, _did_ok) <- runConduit $ data_and_conclusion `fuseBothMaybe` (CL.map LB.fromStrict =$= piecewiseconsumecounting content_length)
+                (_maybe_footers, _did_ok) <-
+                      runConduit $
+                          data_and_conclusion
+                          `fuseBothMaybe`
+                          (CL.map LB.fromStrict
+                               =$=
+                               piecewiseconsumecounting content_length
+                          )
                 -- Got here, keep the connection open
                 _ <- ReT.unprotect close_release_key
                 return ()
 
             (Nothing, Nothing) -> do
-                -- What?
-                liftIO . throwIO $ HTTP11SyntaxException "ApplicationMustProvideContentLengthOrSpecifiyTransferEncoding"
+                -- We come here when there is no explicit transfer encoding and when there is
+                -- no content-length header. This condition should be avoided by most users of
+                -- of this library, but sometimes we are talking to an application...
+                -- There are two options here: to handle the transfer as chunked, or to close
+                -- the connection after ending...
+                handle_as_chunked True
 
 
 addExtraHeaders :: SessionsContext -> Headers -> Headers
