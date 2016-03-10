@@ -1108,16 +1108,19 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
                                 writeChan session_input InternalAbort_SIC
                         io_closed_handle :: E.BlockedIndefinitelyOnMVar -> IO ()
                         io_closed_handle _e = return ()
-                    thread_id <- forkIOExc "s2f7" . E.handle general_exc_handler . E.handle io_closed_handle $
-                        ({-# SCC growP1 #-} do
-                            putMVar ready ()
-                            runReaderT
-                                (workerThread
-                                       request'
-                                       coherent_worker)
-                                for_worker_thread
-                            H.delete stream2workerthread stream_id
-                        )
+                    thread_id <-
+                      forkIOExc "s2f7" .
+                      E.handle general_exc_handler .
+                      E.handle io_closed_handle $
+                          ({-# SCC growP1 #-} do
+                              putMVar ready ()
+                              runReaderT
+                                  (workerThread
+                                         request'
+                                         coherent_worker)
+                                  for_worker_thread
+                              H.delete stream2workerthread stream_id
+                          )
                     H.insert stream2workerthread stream_id thread_id
                     takeMVar ready
 
