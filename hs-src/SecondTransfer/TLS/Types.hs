@@ -23,7 +23,13 @@ import           Data.Int                                                  (Int6
 
 import qualified Network.Socket                                            as NS(SockAddr)
 
-import           SecondTransfer.IOCallbacks.Types                          (TLSServerIO, IOChannels, IOCallbacks)
+import           SecondTransfer.IOCallbacks.Types                          (
+                                                                           TLSServerIO,
+                                                                           IOChannels,
+                                                                           IOCallbacks,
+                                                                           ConnectionData,
+                                                                           ConnectionId (..)
+                                                                           )
 
 -- | Singleton type. Used in conjunction with an `MVar`. If the MVar is full,
 --   the fuction `tlsServeWithALPNAndFinishOnRequest` knows that it should finish
@@ -53,11 +59,6 @@ class IOChannels session => TLSContext ctx session | ctx -> session, session -> 
     getSelectedProtocol :: session -> IO (Maybe (Int, B.ByteString))
 
 
--- | A connection number
-newtype ConnectionId = ConnectionId Int64
-    deriving (Eq, Ord, Show, Enum)
-
-
 -- | Connection events
 data ConnectionEvent =
     Established_CoEv NS.SockAddr ConnectionId Int64        -- ^ New connection. The second member says how many live connections are now
@@ -75,8 +76,8 @@ data ConnectionCallbacks = ConnectionCallbacks {
     _logEvents_CoCa            :: Maybe LogCallback
 
     -- | Function to transform the plain-text IOCallbacks when a connection is
-    --   accepted. Handy for implementing metrics, or for slowing things down
- ,  _blanketPlainTextIO_CoCa  :: Maybe (IOCallbacks -> IO IOCallbacks)
+    --   accepted. Handy for implementing metrics, or for slowing things down.
+ ,  _blanketPlainTextIO_CoCa  :: Maybe (ConnectionData -> IOCallbacks -> IO IOCallbacks)
     }
 
 makeLenses ''ConnectionCallbacks

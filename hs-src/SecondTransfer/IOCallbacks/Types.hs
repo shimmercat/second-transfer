@@ -1,4 +1,4 @@
-{-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable #-}
+{-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
 module SecondTransfer.IOCallbacks.Types (
                -- | Functions for passing data to external parties
                --   The callbacks here should have a blocking behavior and not
@@ -27,7 +27,10 @@ module SecondTransfer.IOCallbacks.Types (
                , SOCKS5Preface
                , ConnectionData     (..)
                , addr_CnD
+               , connId_CnD
                , nullConnectionData
+
+               , ConnectionId       (..)
 
                -- * Utility functions
                , PullActionWrapping
@@ -40,6 +43,7 @@ module SecondTransfer.IOCallbacks.Types (
 import           Control.Lens
 
 import           Data.IORef
+import           Data.Int                                    (Int64)
 
 import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
@@ -200,11 +204,24 @@ instance IOChannels TLSServer where
 instance TLSEncryptedIO TLSServer
 instance TLSServerIO TLSServer
 
+
+
+-- | A connection number
+newtype ConnectionId = ConnectionId Int64
+    deriving (Eq, Ord, Show, Enum)
+
+
 -- | Some context  related to a connection
-newtype ConnectionData = ConnectionData { _addr_CnD :: Maybe HashableSockAddr }
+data ConnectionData =  ConnectionData {
+    _addr_CnD   :: Maybe HashableSockAddr
+  , _connId_CnD :: ConnectionId
+    }
 
 nullConnectionData :: ConnectionData
-nullConnectionData = ConnectionData { _addr_CnD = Nothing }
+nullConnectionData = ConnectionData {
+    _addr_CnD = Nothing
+  , _connId_CnD = ConnectionId (-1)
+    }
 
 makeLenses ''ConnectionData
 

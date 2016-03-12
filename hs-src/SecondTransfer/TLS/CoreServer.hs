@@ -255,7 +255,11 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
       sock_addr <- getSocketPeerAddress encrypted_io
       let
           hashable_addr = hashableSockAddrFromNSSockAddr sock_addr
-          connection_data = ConnectionData hashable_addr
+          connection_data = ConnectionData
+              {
+                 _addr_CnD = hashable_addr
+               , _connId_CnD = wconn_id
+              }
       log_event (Established_CoEv sock_addr wconn_id live_now)
       session <- unencryptTLSServerIO ctx encrypted_io
 
@@ -264,7 +268,7 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
       -- Modulate the IO callbacks if that has been instructed.
       plaintext_io_callbacks_u <- case (connection_callbacks ^. blanketPlainTextIO_CoCa) of
           Nothing -> return plaintext_io_callbacks_u'
-          Just u -> u plaintext_io_callbacks_u'
+          Just u -> u connection_data plaintext_io_callbacks_u'
 
 
       close_reported <- newMVar False
