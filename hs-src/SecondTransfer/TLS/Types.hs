@@ -10,6 +10,10 @@ module SecondTransfer.TLS.Types (
                , ConnectionEvent                                           (..)
 
                , ConnectionCallbacks                                       (..)
+
+               , ConnectionTransformCallback
+               , LogCallback
+
                , logEvents_CoCa
                , blanketPlainTextIO_CoCa
 
@@ -66,7 +70,13 @@ data ConnectionEvent =
   | Ended_CoEv ConnectionId                                -- ^ A connection ended.
 
 
+-- | See the docs below
 type LogCallback =  ConnectionEvent -> IO ()
+
+
+-- | See below
+type ConnectionTransformCallback = ConnectionData -> IOCallbacks -> IO IOCallbacks
+
 
 -- | Callbacks used by  client applications to get notified about interesting
 --   events happening at a connection level, or to get asked about things
@@ -77,7 +87,7 @@ data ConnectionCallbacks = ConnectionCallbacks {
 
     -- | Function to transform the plain-text IOCallbacks when a connection is
     --   accepted. Handy for implementing metrics, or for slowing things down.
- ,  _blanketPlainTextIO_CoCa  :: Maybe (ConnectionData -> IOCallbacks -> IO IOCallbacks)
+ ,  _blanketPlainTextIO_CoCa  :: Maybe ConnectionTransformCallback
     }
 
 makeLenses ''ConnectionCallbacks
