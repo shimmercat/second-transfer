@@ -43,7 +43,7 @@ module SecondTransfer.IOCallbacks.Types (
 import           Control.Lens
 
 import           Data.IORef
-import           Data.Int                                    (Int64)
+import           Data.Int                                     (Int64)
 
 import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
@@ -210,6 +210,7 @@ instance TLSServerIO TLSServer
 newtype ConnectionId = ConnectionId Int64
     deriving (Eq, Ord, Show, Enum)
 
+makeLenses ''ConnectionId
 
 -- | Some context  related to a connection
 data ConnectionData =  ConnectionData {
