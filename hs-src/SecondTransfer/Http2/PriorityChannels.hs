@@ -77,6 +77,8 @@ putInPriorityChannel state system_priority priority stream_id packet_ordinal dat
 -- | If necessary, builds a channel at the given priority level, and puts a token
 --   there.
 --
+-- This function may block (which is desired)
+--
 --   Notice that for this to work, the calm of the packets in a stream should be non-
 --  decreasing.
 putInPriorityChannel_AtM :: Int -> Int -> Int -> Int -> LB.ByteString -> PriorityChannelM ()

@@ -99,7 +99,7 @@ type Stream2AvailSpace = HashTable GlobalStreamId (Chan FlowControlCommand)
 -- | To measure and tune packet size as a measure of how much data
 --   has been put into the network so far.
 data TrayMeter  = TrayMeter {
-    _lastSentPacket_TrM     :: !TimeSpec
+    _lastSentPacket_TrM      :: !TimeSpec
   , _packetsInTrend_TrM      :: !Int
     }
     deriving Show
@@ -885,10 +885,9 @@ releaseFramer =
     return ()
 
 
--- | Puts output wagons in the tray. This function blocks if there is not
---  enough space in the tray and the system priority is not negative.
---  For negative system priority, the packets are always queued, so that
---  then can be sent as soon as possible.
+-- | Puts output wagons in the tray. This function may block
+-- whenever there is data already scheduled at the given
+-- priority.
 --
 -- This prioritizes DATA packets, in some rudimentary way.
 -- This code will be replaced in due time for something compliant.
@@ -903,7 +902,11 @@ releaseFramer =
 withPrioritySend_ :: Int -> Int -> Int -> Int -> LB.ByteString -> FramerSession ()
 withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
     pss <- view prioritySendState
-    liftIO $ putInPriorityChannel pss system_priority priority stream_id packet_ordinal datum
+    -- The strict conversions below is to ensure that we store this in the send
+    -- queues properly evaluated.
+    -- datum' <- liftIO . evaluate . LB.fromStrict . LB.toStrict $ datum
+    datum' <- liftIO . evaluate  $ datum
+    liftIO $ putInPriorityChannel pss system_priority priority stream_id packet_ordinal datum'
 
 
 -- | Blocks if there is not enough space in the tray
@@ -1011,7 +1014,11 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
           else
             (
               tray_meter ^. packetsInTrend_TrM,
-              (L.over packetsInTrend_TrM (+ 1 ) . L.set lastSentPacket_TrM now $ tray_meter)
+              (
+                L.over packetsInTrend_TrM (+ 1 ) .
+                L.set lastSentPacket_TrM now $
+                tray_meter
+              )
             )
 
         use_size = if sequence_number >= DVec.length sizeSequence
