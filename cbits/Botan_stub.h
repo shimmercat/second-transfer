@@ -2,6 +2,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 extern void iocba_push(HsStablePtr a1, HsPtr a2, HsInt32 a3);
 extern void iocba_data_cb(HsStablePtr a1, HsPtr a2, HsInt32 a3);
 extern void iocba_alert_cb(HsStablePtr a1, HsInt32 a2);
