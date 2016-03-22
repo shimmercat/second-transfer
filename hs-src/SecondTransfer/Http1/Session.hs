@@ -158,7 +158,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _sessionId_Pr         = session_tag,
                           _protocol_Pr          = Http11_HPV,
                           _anouncedProtocols_Pr = Nothing,
-                          _peerAddress_Pr       = maybe_hashable_addr
+                          _peerAddress_Pr       = maybe_hashable_addr,
+                          _pushIsEnabled_Pr     = False
                         }
                     }
                 ReT.runResourceT $ answer_by_principal_stream principal_stream
@@ -193,7 +194,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _sessionId_Pr         = session_tag,
                           _protocol_Pr          = Http11_HPV,
                           _anouncedProtocols_Pr = Nothing,
-                          _peerAddress_Pr       = maybe_hashable_addr
+                          _peerAddress_Pr       = maybe_hashable_addr,
+                          _pushIsEnabled_Pr     = False
                         }
                     }
                 ReT.runResourceT $ answer_by_principal_stream principal_stream

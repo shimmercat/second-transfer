@@ -39,16 +39,20 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , headers_PS
     , pushedStreams_PS
     , dataAndConclusion_PS
+
     , dataAndConclusion_Psh
     , requestHeaders_Psh
     , responseHeaders_Psh
     , effect_PS
+
     , startedTime_Pr
     , streamId_Pr
     , sessionId_Pr
     , anouncedProtocols_Pr
     , peerAddress_Pr
     , protocol_Pr
+    , pushIsEnabled_Pr
+
     , fragmentDeliveryCallback_Ef
     , priorityEffect_Ef
     , interrupt_Ef
@@ -120,7 +124,9 @@ data Perception = Perception {
     -- | For new connections, probably a list of announced protocols
     _anouncedProtocols_Pr :: Maybe [B.ByteString],
     -- | tuple with something like the IPv4 number for the requesting host
-    _peerAddress_Pr       :: Maybe HashableSockAddr
+    _peerAddress_Pr       :: Maybe HashableSockAddr,
+    -- | Say if this connection enables Push
+    _pushIsEnabled_Pr    :: Bool
   }
 
 makeLenses ''Perception
