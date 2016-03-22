@@ -943,6 +943,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
     session_input             <- view sessionInput
     stream2workerthread       <- view stream2WorkerThread
     maybe_hashable_addr       <- view peerAddress
+    session_settings          <- view sessionSettings
 
     if opens_stream
       then {-# SCC gpAb #-} do
@@ -1063,20 +1064,27 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
                   else do
                     return Nothing
 
+                -- We are going to read this here because we want to
+                -- pass it to the worker a layer up.
+                push_enabled <-
+                    liftIO . DIO.readIORef $
+                        session_settings ^. pushEnabled_SeS
+
                 let
-                  perception = Perception {
-                      _startedTime_Pr = headers_arrived_time,
-                      _streamId_Pr = stream_id,
-                      _sessionId_Pr = current_session_id,
-                      _protocol_Pr = Http2_HPV,
-                      _anouncedProtocols_Pr = Nothing,
-                      _peerAddress_Pr = maybe_hashable_addr
-                      }
-                  request' = Request {
-                      _headers_RQ = header_list_after,
-                      _inputData_RQ = post_data_source,
-                      _perception_RQ = perception
-                      }
+                    perception = Perception {
+                        _startedTime_Pr = headers_arrived_time,
+                        _streamId_Pr = stream_id,
+                        _sessionId_Pr = current_session_id,
+                        _protocol_Pr = Http2_HPV,
+                        _anouncedProtocols_Pr = Nothing,
+                        _peerAddress_Pr = maybe_hashable_addr,
+                        _pushIsEnabled_Pr = push_enabled
+                        }
+                    request' = Request {
+                        _headers_RQ = header_list_after,
+                        _inputData_RQ = post_data_source,
+                        _perception_RQ = perception
+                        }
 
                 -- TODO: Handle the cases where a request tries to send data
                 -- even if the method doesn't allow for data.
