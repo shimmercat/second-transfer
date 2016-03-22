@@ -20,7 +20,10 @@ import           Data.Int                                           (Int64)
 
 import qualified Network.Socket                                     as NS
 
-import           SecondTransfer.Exception                           (SOCKS5ProtocolException (..), forkIOExc )
+import           SecondTransfer.Exception                           (
+                                                                     SOCKS5ProtocolException (..),
+                                                                     NoMoreDataException,
+                                                                     forkIOExc )
 
 import           SecondTransfer.Socks5.Types
 import           SecondTransfer.Socks5.Parsers
@@ -174,10 +177,20 @@ negotiateSocksForwardOrConnect approver socks_here =
                                          -- Wrong port, but...
                                       , _port_SP4 = 10001
                                         }
-                                ps putServerReply_Packet server_reply
-                                -- Now couple the two streams ...
-                                _ <- couple socks_here io_callbacks
-                                return $ Forward_COF (pack . show $ address) (fromIntegral port_number)
+                                E.catch
+                                    (do
+                                        ps putServerReply_Packet server_reply
+                                        -- Now couple the two streams ...
+                                        _ <- couple socks_here io_callbacks
+                                        return $ Forward_COF (pack . show $ address) (fromIntegral port_number)
+                                    )
+                                    (
+                                      (\ _e ->
+                                          return . Drop_COF . pack $
+                                               "Connection truncated by forwarding target " ++ show address
+                                          ) :: NoMoreDataException -> IO ConnectOrForward
+                                    )
+
                             _ ->
                                 return $ Drop_COF (pack . show $ address)
 
@@ -241,7 +254,7 @@ connectOnBehalfOfClient address port_number =
 
     case maybe_sock_addr of
         Just sock_addr@(NS.SockAddrInet _ ha) -> do
-            E.catch
+            E.catches
                 (do
                     client_socket <-  NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
                     let
@@ -253,8 +266,20 @@ connectOnBehalfOfClient address port_number =
                     io_callbacks <- handshake socket_io_callbacks
                     return . Just $ (toSocks5Addr translated_address , io_callbacks)
                 )
-                ((\_ -> do
-                    return Nothing)::E.IOException -> IO (Maybe (IndicatedAddress , IOCallbacks) ) )
+                [
+                  E.Handler
+                      (
+                          (\_ -> do
+                              return Nothing
+                          )::E.IOException -> IO (Maybe (IndicatedAddress , IOCallbacks))
+                      ),
+                  E.Handler
+                      (
+                          (\_ -> do
+                              return Nothing
+                          )::NoMoreDataException -> IO (Maybe (IndicatedAddress , IOCallbacks))
+                      )
+                ]
 
         _ -> do
             -- Temporary message
@@ -315,24 +340,32 @@ tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_soc
              log_event $ Established_S5Ev peer_address wconn_id
 
              socket_io_callbacks <- socketIOCallbacks active_socket
+
              io_callbacks <- handshake socket_io_callbacks
-             maybe_negotiated_io <-
-               if forward_connections
-                   then negotiateSocksForwardOrConnect approver io_callbacks
-                   else negotiateSocksAndForward       approver io_callbacks
-             case maybe_negotiated_io of
-                 Connect_COF fate _negotiated_io -> do
-                     let
-                         tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
-                     log_event $ HandlingHere_S5Ev fate wconn_id
-                     onsocks5_action tls_server_socks5_callbacks
-                 Drop_COF fate -> do
-                     log_event $ Dropped_S5Ev fate wconn_id
-                     (io_callbacks ^. closeAction_IOC)
-                     return ()
-                 Forward_COF fate port -> do
-                     -- TODO: More data needs to come here
-                     -- Do not close
-                     log_event $ ToExternal_S5Ev fate port wconn_id
-                     return ()
+             E.catch
+               (do
+                 maybe_negotiated_io <-
+                   if forward_connections
+                       then negotiateSocksForwardOrConnect approver io_callbacks
+                       else negotiateSocksAndForward       approver io_callbacks
+                 case maybe_negotiated_io of
+                     Connect_COF fate _negotiated_io -> do
+                         let
+                             tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
+                         log_event $ HandlingHere_S5Ev fate wconn_id
+                         onsocks5_action tls_server_socks5_callbacks
+                     Drop_COF fate -> do
+                         log_event $ Dropped_S5Ev fate wconn_id
+                         (io_callbacks ^. closeAction_IOC)
+                         return ()
+                     Forward_COF fate port -> do
+                         -- TODO: More data needs to come here
+                         -- Do not close
+                         log_event $ ToExternal_S5Ev fate port wconn_id
+                         return ()
+               )
+               (( \ _e -> do
+                   log_event $ Dropped_S5Ev "Peer errored" wconn_id
+                   (io_callbacks ^. closeAction_IOC)
+               ):: NoMoreDataException -> IO () )
          return ()
