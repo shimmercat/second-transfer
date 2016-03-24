@@ -20,7 +20,8 @@
 #include <botan/data_src.h>
 #endif
 
-#include "Botan_stub.h"
+ #include "HsFFI.h"
+
 #include <functional>
 
 #include <cstdlib>
@@ -35,6 +36,36 @@
 // This is also a good point to write about the "TLS overhead."
 
 namespace second_transfer {
+
+
+typedef void (*iocba_push_fptr)(HsStablePtr a1, HsPtr a2, HsInt32 a3);
+typedef void (*iocba_data_cb_fptr)(HsStablePtr a1, HsPtr a2, HsInt32 a3);
+typedef void (*iocba_alert_cb_fptr)(HsStablePtr a1, HsInt32 a2);
+typedef void (*iocba_handshake_cb_fptr)(HsStablePtr a1);
+typedef HsInt (*iocba_select_protocol_cb_fptr)(HsStablePtr a1, HsPtr a2, HsInt a3);
+
+
+iocba_push_fptr iocba_push;
+iocba_data_cb_fptr iocba_data_cb;
+iocba_alert_cb_fptr iocba_alert_cb;
+iocba_handshake_cb_fptr iocba_handshake_cb;
+iocba_select_protocol_cb_fptr iocba_select_protocol_cb;
+
+
+extern "C" void iocba_init_callbacks(
+    iocba_push_fptr iocba_push_param,
+    iocba_data_cb_fptr iocba_data_param,
+    iocba_alert_cb_fptr iocba_alert_cb_param,
+    iocba_handshake_cb_fptr iocba_handshake_cb_param,
+    iocba_select_protocol_cb_fptr iocba_select_protocol_cb_param
+)
+{
+    iocba_push = iocba_push_param ;
+    iocba_data_cb = iocba_data_param ;
+    iocba_alert_cb = iocba_alert_cb_param ;
+    iocba_handshake_cb = iocba_handshake_cb_param ;
+    iocba_select_protocol_cb = iocba_select_protocol_cb_param ;
+}
 
 // Just because of the conversions, but it may be a handy place for
 // other stuff later.
