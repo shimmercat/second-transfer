@@ -217,8 +217,8 @@ library
           ld-options: -framework Security
   if os(windows)
       if flag(enable-botan)
-          extra-libraries: second_transfer__enable_tls
-          extra-lib-dirs: c:\shimmercat-build\lib
+          extra-libraries: second_transfer__enable_tls libstdc++-6
+          extra-lib-dirs: c:\\shimmercat-build\\lib
   if os(linux)
       extra-libraries: stdc++
       extra-lib-dirs: /usr/local

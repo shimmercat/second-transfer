@@ -50,7 +50,7 @@ elif [[ $platform == 'windows' ]] ; then
     botan_location=$build_dir
     botan_includes=$botan_location/include/
     botan_lib_dir=$botan_location/lib
-    extra_compile_flags="-DWINTRICK -L$THIS_DIR/cbits"
+    extra_compile_flags="-DBUILDING_DLL -L$THIS_DIR/cbits"
     extra_compile_flags2="-lsecond_transfer"
     pushd $THIS_DIR/..
     placement_path=`stack path --local-install-root`/lib/x86_64-windows-ghc-$GHC_VERSION/
