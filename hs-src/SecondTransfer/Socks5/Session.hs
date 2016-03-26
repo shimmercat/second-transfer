@@ -54,7 +54,7 @@ tryRead iocallbacks leftovers p = do
     let
         react (P.Done i r) = return  (r, i)
         react (P.Fail i contexts msg) =
-            return $ E.throw $ SOCKS5ProtocolException
+            E.throwIO $ SOCKS5ProtocolException
                  ("parseFailed: Left #" ++
                  show (B.length i) ++
                  " bytes to parse ( " ++
