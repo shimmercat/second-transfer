@@ -55,19 +55,19 @@ tryRead iocallbacks leftovers p = do
         onResult result =
             case result of
                 P.Done i r   ->  Right . Just $ (r,i)
-                P.Fail _ _ _ ->  Right $ Nothing
+                P.Fail _ _ _ ->  Right  Nothing
                 P.Partial f  ->  Left $ f
 
         go  f = do
             fragment <- (iocallbacks ^. bestEffortPullAction_IOC) True
             case onResult $ f fragment of
                Right (Just x) -> return x
-               Right Nothing -> E.throwIO SOCKS5ProtocolException
+               Right Nothing -> E.throwIO $ SOCKS5ProtocolException "parsedFailed"
                Left ff -> go ff
 
     case onResult $ P.parse p leftovers  of
         Right (Just x) -> return x
-        Right Nothing  -> E.throwIO SOCKS5ProtocolException
+        Right Nothing  -> E.throwIO $ SOCKS5ProtocolException  "parsedFailed"
         Left f0 -> go f0
 
 
@@ -103,7 +103,7 @@ negotiateSocksAndForward approver socks_here =
                     address = req_packet ^. address_SP3
                     named_host = case address of
                         DomainName_IA name -> name
-                        _  -> ""
+                        _  -> E.throw . SOCKS5ProtocolException $ "UnsupportedAddress " ++ show address
                 if  approver named_host then
                     do
                         -- First I need to answer to the client that we are happy and ready
@@ -128,10 +128,10 @@ negotiateSocksAndForward approver socks_here =
 
             -- Other commands not handled for now
             _             -> do
-                return $ Drop_COF "<socks5-unimplemented>"
+                return $ Drop_COF "<socks5-unimplemented-command>"
 
     case ei of
-        Left SOCKS5ProtocolException -> return $ Drop_COF "<protocol exception>"
+        Left (SOCKS5ProtocolException msg) -> return $ Drop_COF (pack msg)
         Right result -> return result
 
 
@@ -213,7 +213,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                 return $ Drop_COF "<socks5-unimplemented>"
 
     case ei of
-        Left SOCKS5ProtocolException -> return $ Drop_COF "<socks5-protocol-exception>"
+        Left (SOCKS5ProtocolException msg) -> return . Drop_COF  . pack $ msg
         Right result -> return result
 
 
@@ -240,15 +240,15 @@ connectOnBehalfOfClient address port_number =
                     return Nothing
 
     case maybe_sock_addr of
-        Just sock_addr@(NS.SockAddrInet _ ha) -> do
+        Just _sock_addr@(NS.SockAddrInet _ ha) -> do
             E.catch
                 (do
                     client_socket <-  NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
                     let
                         translated_address =  (NS.SockAddrInet (fromIntegral port_number) ha)
                     NS.connect client_socket translated_address
-                    is_connected <- NS.isConnected client_socket
-                    peer_name <- NS.getPeerName client_socket
+                    _is_connected <- NS.isConnected client_socket
+                    _peer_name <- NS.getPeerName client_socket
                     socket_io_callbacks <- socketIOCallbacks client_socket
                     io_callbacks <- handshake socket_io_callbacks
                     return . Just $ (toSocks5Addr translated_address , io_callbacks)
