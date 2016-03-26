@@ -52,23 +52,26 @@ data ConnectOrForward =
 tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
 tryRead iocallbacks leftovers p = do
     let
-        onResult result =
-            case result of
-                P.Done i r   ->  Right . Just $ (r,i)
-                P.Fail _ _ _ ->  Right  Nothing
-                P.Partial f  ->  Left $ f
+        react (P.Done i r) = return  (r, i)
+        react (P.Fail i contexts msg) =
+            return $ E.throw $ SOCKS5ProtocolException
+                 ("parseFailed: Left #" ++
+                 show (B.length i) ++
+                 " bytes to parse ( " ++
+                 show (B.unpack i) ++
+                 ") " ++ " contexts: " ++
+                 (show contexts) ++
+                 " message: " ++
+                 msg
+                )
+        react (P.Partial f)  =
+            go f
 
         go  f = do
             fragment <- (iocallbacks ^. bestEffortPullAction_IOC) True
-            case onResult $ f fragment of
-               Right (Just x) -> return x
-               Right Nothing -> E.throwIO $ SOCKS5ProtocolException "parsedFailed"
-               Left ff -> go ff
+            react (f fragment)
 
-    case onResult $ P.parse p leftovers  of
-        Right (Just x) -> return x
-        Right Nothing  -> E.throwIO $ SOCKS5ProtocolException  "parsedFailed"
-        Left f0 -> go f0
+    react $ P.parse p leftovers
 
 
 pushDatum :: IOCallbacks -> (a -> U.Put) -> a -> IO ()
