@@ -20,10 +20,37 @@
 #include <botan/data_src.h>
 #endif
 
-#include "Botan_stub.h"
+ #include "HsFFI.h"
+
 #include <functional>
 
 #include <cstdlib>
+
+#if defined _WIN32 || defined __CYGWIN__
+   #ifdef BUILDING_DLL
+       #ifdef __GNUC__
+          #define DLL_PUBLIC __attribute__ ((dllexport))
+       #else
+          #define DLL_PUBLIC __declspec(dllexport) // Note: actually gcc seems to also supports this syntax.
+       #endif
+   #else
+       #ifdef __GNUC__
+          #define DLL_PUBLIC __attribute__ ((dllimport))
+       #else
+          #define DLL_PUBLIC __declspec(dllimport) // Note: actually gcc seems to also supports this syntax.
+       #endif
+   #endif
+   #define DLL_LOCAL
+#else
+   #if __GNUC__ >= 4
+      #define DLL_PUBLIC __attribute__ ((visibility ("default")))
+      #define DLL_LOCAL  __attribute__ ((visibility ("hidden")))
+   #else
+      #define DLL_PUBLIC
+      #define DLL_LOCAL
+   #endif
+#endif
+
 
 // TODO:
 //
@@ -35,6 +62,36 @@
 // This is also a good point to write about the "TLS overhead."
 
 namespace second_transfer {
+
+
+typedef void (*iocba_push_fptr)(HsStablePtr a1, HsPtr a2, HsInt32 a3);
+typedef void (*iocba_data_cb_fptr)(HsStablePtr a1, HsPtr a2, HsInt32 a3);
+typedef void (*iocba_alert_cb_fptr)(HsStablePtr a1, HsInt32 a2);
+typedef void (*iocba_handshake_cb_fptr)(HsStablePtr a1);
+typedef HsInt (*iocba_select_protocol_cb_fptr)(HsStablePtr a1, HsPtr a2, HsInt a3);
+
+
+iocba_push_fptr iocba_push;
+iocba_data_cb_fptr iocba_data_cb;
+iocba_alert_cb_fptr iocba_alert_cb;
+iocba_handshake_cb_fptr iocba_handshake_cb;
+iocba_select_protocol_cb_fptr iocba_select_protocol_cb;
+
+
+extern "C" DLL_PUBLIC void iocba_init_callbacks(
+    iocba_push_fptr iocba_push_param,
+    iocba_data_cb_fptr iocba_data_param,
+    iocba_alert_cb_fptr iocba_alert_cb_param,
+    iocba_handshake_cb_fptr iocba_handshake_cb_param,
+    iocba_select_protocol_cb_fptr iocba_select_protocol_cb_param
+)
+{
+    iocba_push = iocba_push_param ;
+    iocba_data_cb = iocba_data_param ;
+    iocba_alert_cb = iocba_alert_cb_param ;
+    iocba_handshake_cb = iocba_handshake_cb_param ;
+    iocba_select_protocol_cb = iocba_select_protocol_cb_param ;
+}
 
 // Just because of the conversions, but it may be a handy place for
 // other stuff later.
@@ -253,7 +310,7 @@ std::string defaultProtocolSelector(void* botan_pad_ref, std::vector<std::string
 
 } // namespace
 
-extern "C" int iocba_receive_data(
+extern "C" DLL_PUBLIC int iocba_receive_data(
     void* tls_channel,
     char* data,
     int length )
@@ -273,7 +330,7 @@ extern "C" int iocba_receive_data(
     return 0;
 }
 
-extern "C" void iocba_cleartext_push(
+extern "C" DLL_PUBLIC void iocba_cleartext_push(
     void* tls_channel,
     char* data,
     int length )
@@ -292,7 +349,7 @@ extern "C" void iocba_cleartext_push(
 }
 
 
-extern "C" void iocba_close(
+extern "C" DLL_PUBLIC void iocba_close(
     void* tls_channel
     )
 {
@@ -314,7 +371,7 @@ struct botan_tls_context_t {
     second_transfer::HereTLSPolicy here_tls_policty;
 };
 
-extern "C" botan_tls_context_t* iocba_make_tls_context(
+extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context(
     const char* cert_filename,
     const char* privkey_filename
     )
@@ -339,7 +396,7 @@ extern "C" botan_tls_context_t* iocba_make_tls_context(
 pthread_mutex_t new_ctx_mutex = PTHREAD_MUTEX_INITIALIZER ;
 pthread_mutex_t new_channel_mutex = PTHREAD_MUTEX_INITIALIZER ;
 
-extern "C" botan_tls_context_t* iocba_make_tls_context_from_memory(
+extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context_from_memory(
     const uint8_t* cert_data,
     uint32_t cert_data_length,
     const uint8_t* key_data,
@@ -372,7 +429,7 @@ extern "C" botan_tls_context_t* iocba_make_tls_context_from_memory(
 }
 
 
-extern "C" void iocba_delete_tls_context(botan_tls_context_t* ctx)
+extern "C" DLL_PUBLIC  void iocba_delete_tls_context(botan_tls_context_t* ctx)
 {
     delete ctx->session_manager;
     delete ctx->rng;
@@ -380,7 +437,7 @@ extern "C" void iocba_delete_tls_context(botan_tls_context_t* ctx)
 }
 
 
-extern "C" void* iocba_new_tls_server_channel (
+extern "C" DLL_PUBLIC void* iocba_new_tls_server_channel (
        void* botan_pad_ref,
        botan_tls_context_t* ctx)
 {
@@ -402,9 +459,10 @@ extern "C" void* iocba_new_tls_server_channel (
     return server;
 }
 
-extern "C" void iocba_delete_tls_server_channel (
+extern "C" DLL_PUBLIC void iocba_delete_tls_server_channel (
     Botan::TLS::Server * srv
     )
 {
     delete srv;
 }
+

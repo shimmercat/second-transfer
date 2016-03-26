@@ -96,9 +96,17 @@ withBotanPad siocb cb = do
     botan_pad <- deRefStablePtr siocb
     cb botan_pad
 
+
 dontMultiThreadBotan :: MVar ()
 {-# NOINLINE dontMultiThreadBotan #-}
-dontMultiThreadBotan = unsafePerformIO (newMVar ())
+dontMultiThreadBotan = unsafePerformIO $ do
+    a <- mk_iocba_push iocba_push
+    b <- mk_iocba_data_cb iocba_data_cb
+    c <- mk_iocba_alert_cb iocba_alert_cb
+    d <- mk_iocba_handshake_cb iocba_handshake_cb
+    e <- mk_iocba_select_protocol_cb iocba_select_protocol_cb
+    iocba_init_callbacks a b c d e
+    newMVar ()
 
 -- withBotanPadReadLock :: BotanPadRef -> (BotanPad -> IO () ) -> IO ()
 -- withBotanPadReadLock = withBotanPadLock readLock_BP
@@ -107,9 +115,11 @@ dontMultiThreadBotan = unsafePerformIO (newMVar ())
 -- withBotanPadWriteLock = withBotanPadLock writeLock_BP
 
 
--- Botan calls this function whenever it wishes to send any data
+type F_iocba_push =  BotanPadRef -> Ptr CChar -> CInt -> IO ()
+foreign export ccall iocba_push :: F_iocba_push
+
+-- |Botan calls this function whenever it wishes to send any data
 -- to the remote peer. In some cases we can not honor Botan's wishes
-foreign export ccall iocba_push :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
 iocba_push :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
 iocba_push siocb p len =
     withBotanPad siocb $ \ botan_pad ->  do
@@ -135,9 +145,13 @@ iocba_push siocb p len =
                 --putStrLn "IGNORED DATA SEND ON ENCR SOCKET"
                 return ()
 
+-- | Used to pass callbacks to the C/C++ code
+foreign import ccall "wrapper"
+    mk_iocba_push :: F_iocba_push -> IO (FunPtr F_iocba_push)
 
+type F_iocba_data_cb = BotanPadRef -> Ptr CChar -> CInt -> IO ()
 -- | Callback invoked by Botan with clear text data just decoded from the stream
-foreign export ccall iocba_data_cb :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
+foreign export ccall iocba_data_cb :: F_iocba_data_cb
 iocba_data_cb :: BotanPadRef -> Ptr CChar -> CInt -> IO ()
 iocba_data_cb siocb p len = withBotanPad siocb $ \ botan_pad -> do
     let
@@ -155,10 +169,14 @@ iocba_data_cb siocb p len = withBotanPad siocb $ \ botan_pad -> do
           putStrLn "EmptyStringGot"
           return ()
 
+foreign import ccall "wrapper"
+    mk_iocba_data_cb :: F_iocba_data_cb -> IO (FunPtr F_iocba_data_cb)
+
 
 -- TODO: Should we raise some sort of exception here? Maybe call the "closeAction"
 -- in the other sides?
-foreign export ccall iocba_alert_cb :: BotanPadRef -> CInt -> IO ()
+type F_iocba_alert_cb = BotanPadRef -> CInt -> IO ()
+foreign export ccall iocba_alert_cb :: F_iocba_alert_cb
 iocba_alert_cb :: BotanPadRef -> CInt -> IO ()
 iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
     let
@@ -171,11 +189,14 @@ iocba_alert_cb siocb alert_code = withBotanPad siocb $ \botan_pad -> do
              return ()
           else
              return ()
+foreign import ccall "wrapper"
+    mk_iocba_alert_cb :: F_iocba_alert_cb -> IO (FunPtr F_iocba_alert_cb)
 
 
 -- Botan relies a wealth of information here, not using at the moment :-(
-foreign export ccall iocba_handshake_cb :: BotanPadRef -> IO ()
-iocba_handshake_cb :: BotanPadRef -> IO ()
+type F_iocba_handshake_cb = BotanPadRef -> IO ()
+foreign export ccall iocba_handshake_cb :: F_iocba_handshake_cb
+iocba_handshake_cb :: F_iocba_handshake_cb
 iocba_handshake_cb siocb = do
     withBotanPad siocb $ \botan_pad -> do
         let
@@ -192,9 +213,12 @@ iocba_handshake_cb siocb = do
                 return ()
         return ()
 
+foreign import ccall "wrapper"
+    mk_iocba_handshake_cb :: F_iocba_handshake_cb -> IO (FunPtr F_iocba_handshake_cb)
 
-foreign export ccall iocba_select_protocol_cb :: BotanPadRef -> Ptr CChar -> Int -> IO Int
-iocba_select_protocol_cb :: BotanPadRef -> Ptr CChar -> Int -> IO Int
+type F_iocba_select_protocol_cb = BotanPadRef -> Ptr CChar -> Int -> IO Int
+foreign export ccall iocba_select_protocol_cb :: F_iocba_select_protocol_cb
+iocba_select_protocol_cb :: F_iocba_select_protocol_cb
 iocba_select_protocol_cb siocb p len =
     withBotanPad siocb $ \ botan_pad -> do
         let
@@ -206,6 +230,9 @@ iocba_select_protocol_cb siocb p len =
             selected_protocol_mvar = botan_pad ^. selectedProtocol_BP
         putMVar selected_protocol_mvar (Just (ss, chosen_protocol_int ))
         return chosen_protocol_int
+
+foreign import ccall "wrapper"
+    mk_iocba_select_protocol_cb :: F_iocba_select_protocol_cb -> IO (FunPtr F_iocba_select_protocol_cb)
 
 
 foreign import ccall iocba_cleartext_push :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
@@ -223,6 +250,16 @@ foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_
 --foreign import ccall "wrapper" mkTlsServerDeleter :: (BotanTLSChannelPtr -> IO ()) -> IO (FunPtr ( BotanTLSChannelPtr -> IO () ) )
 
 foreign import ccall iocba_receive_data :: BotanTLSChannelPtr -> Ptr CChar -> CInt -> IO CInt
+
+
+foreign import ccall iocba_init_callbacks ::
+    FunPtr F_iocba_push ->
+    FunPtr F_iocba_data_cb ->
+    FunPtr F_iocba_alert_cb ->
+    FunPtr F_iocba_handshake_cb ->
+    FunPtr F_iocba_select_protocol_cb ->
+    IO ()
+
 
 
 botanPushData :: BotanPad -> LB.ByteString -> IO ()
@@ -302,26 +339,26 @@ protocolSelectorToC prot_sel flat_protocols = do
 
 newBotanTLSContext :: RawFilePath -> RawFilePath -> ProtocolSelector ->  IO BotanTLSContext
 newBotanTLSContext cert_filename privkey_filename prot_sel =
-  do
-    B.useAsCString cert_filename $ \ s1 ->
-        B.useAsCString privkey_filename $ \ s2 -> do
-            ctx_ptr <-  iocba_make_tls_context s1 s2
-            x <- newForeignPtr iocba_delete_tls_context ctx_ptr
-            return $ BotanTLSContext x prot_sel
+    withMVar dontMultiThreadBotan $ \ _ ->  do
+        B.useAsCString cert_filename $ \ s1 ->
+            B.useAsCString privkey_filename $ \ s2 -> do
+                ctx_ptr <-  iocba_make_tls_context s1 s2
+                x <- newForeignPtr iocba_delete_tls_context ctx_ptr
+                return $ BotanTLSContext x prot_sel
 
 
 newBotanTLSContextFromMemory :: B.ByteString -> B.ByteString -> ProtocolSelector -> IO BotanTLSContext
 newBotanTLSContextFromMemory cert_data key_data prot_sel =
-  do
-    B.useAsCString cert_data $ \ s1 ->
-      B.useAsCString key_data $ \s2 -> do
-          ctx_ptr <- iocba_make_tls_context_from_memory
-                         s1
-                         (fromIntegral . B.length $ cert_data)
-                         s2
-                         (fromIntegral . B.length $ key_data)
-          x <- newForeignPtr iocba_delete_tls_context ctx_ptr
-          return $ BotanTLSContext x prot_sel
+    withMVar dontMultiThreadBotan $ \ _ ->   do
+        B.useAsCString cert_data $ \ s1 ->
+          B.useAsCString key_data $ \s2 -> do
+              ctx_ptr <- iocba_make_tls_context_from_memory
+                             s1
+                             (fromIntegral . B.length $ cert_data)
+                             s2
+                             (fromIntegral . B.length $ key_data)
+              x <- newForeignPtr iocba_delete_tls_context ctx_ptr
+              return $ BotanTLSContext x prot_sel
 
 
 unencryptChannelData :: TLSServerIO a =>  BotanTLSContext -> a -> IO  BotanSession

@@ -52,26 +52,32 @@ data ConnectOrForward =
   | Drop_COF B.ByteString
 
 
-tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
-tryRead iocallbacks leftovers p = do
+tryRead :: IOCallbacks ->  String  ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
+tryRead iocallbacks what_doing leftovers p = do
     let
-        onResult result =
-            case result of
-                P.Done i r   ->  Right . Just $ (r,i)
-                P.Fail _ _ _ ->  Right $ Nothing
-                P.Partial f  ->  Left $ f
+        react (P.Done i r) = return  (r, i)
+        react (P.Fail i contexts msg) =
+            E.throwIO $ SOCKS5ProtocolException
+                 ("/" ++
+                  what_doing ++
+                  "/" ++
+                  "parseFailed: Left #" ++
+                 show (B.length i) ++
+                 " bytes to parse ( " ++
+                 show (B.unpack i) ++
+                 ") " ++ " contexts: " ++
+                 (show contexts) ++
+                 " message: " ++
+                 msg
+                )
+        react (P.Partial f)  =
+            go f
 
         go  f = do
             fragment <- (iocallbacks ^. bestEffortPullAction_IOC) True
-            case onResult $ f fragment of
-               Right (Just x) -> return x
-               Right Nothing -> E.throwIO SOCKS5ProtocolException
-               Left ff -> go ff
+            react (f fragment)
 
-    case onResult $ P.parse p leftovers  of
-        Right (Just x) -> return x
-        Right Nothing  -> E.throwIO SOCKS5ProtocolException
-        Left f0 -> go f0
+    react $ P.parse p leftovers
 
 
 pushDatum :: IOCallbacks -> (a -> U.Put) -> a -> IO ()
@@ -92,12 +98,12 @@ negotiateSocksAndForward approver socks_here =
         ps = pushDatum socks_here
     -- Start by reading the standard socks5 header
     ei <- E.try $ do
-        (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
+        (_auth, next1) <- tr "client-auth-methods"  ""  parseClientAuthMethods_Packet
         -- I will ignore the auth methods for now
         let
             server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
         ps putServerSelectsMethod_Packet server_selects
-        (req_packet, _next2) <- tr next1 parseClientRequest_Packet
+        (req_packet, _next2) <- tr "client-request"  next1 parseClientRequest_Packet
         case req_packet ^. cmd_SP3 of
 
             Connect_S5PC  -> do
@@ -106,7 +112,7 @@ negotiateSocksAndForward approver socks_here =
                     address = req_packet ^. address_SP3
                     named_host = case address of
                         DomainName_IA name -> name
-                        _  -> ""
+                        _  -> E.throw . SOCKS5ProtocolException $ "UnsupportedAddress " ++ show address
                 if  approver named_host then
                     do
                         -- First I need to answer to the client that we are happy and ready
@@ -131,10 +137,10 @@ negotiateSocksAndForward approver socks_here =
 
             -- Other commands not handled for now
             _             -> do
-                return $ Drop_COF "<socks5-unimplemented>"
+                return $ Drop_COF "<socks5-unimplemented-command>"
 
     case ei of
-        Left SOCKS5ProtocolException -> return $ Drop_COF "<protocol exception>"
+        Left (SOCKS5ProtocolException msg) -> return $ Drop_COF (pack msg)
         Right result -> return result
 
 
@@ -150,12 +156,12 @@ negotiateSocksForwardOrConnect approver socks_here =
         ps = pushDatum socks_here
     -- Start by reading the standard socks5 header
     ei <- E.try $ do
-        (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
+        (_auth, next1) <- tr "client-auth-methods" ""  parseClientAuthMethods_Packet
         -- I will ignore the auth methods for now
         let
             server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
         ps putServerSelectsMethod_Packet server_selects
-        (req_packet, _next2) <- tr next1 parseClientRequest_Packet
+        (req_packet, _next2) <- tr "client-request" next1 parseClientRequest_Packet
         case req_packet ^. cmd_SP3 of
 
             Connect_S5PC  -> do
@@ -226,7 +232,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                 return $ Drop_COF "<socks5-unimplemented>"
 
     case ei of
-        Left SOCKS5ProtocolException -> return $ Drop_COF "<socks5-protocol-exception>"
+        Left (SOCKS5ProtocolException msg) -> return . Drop_COF  . pack $ msg
         Right result -> return result
 
 
@@ -260,8 +266,8 @@ connectOnBehalfOfClient address port_number =
                     let
                         translated_address =  (NS.SockAddrInet (fromIntegral port_number) ha)
                     NS.connect client_socket translated_address
-                    is_connected <- NS.isConnected client_socket
-                    peer_name <- NS.getPeerName client_socket
+                    _is_connected <- NS.isConnected client_socket
+                    _peer_name <- NS.getPeerName client_socket
                     socket_io_callbacks <- socketIOCallbacks client_socket
                     io_callbacks <- handshake socket_io_callbacks
                     return . Just $ (toSocks5Addr translated_address , io_callbacks)

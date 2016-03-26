@@ -69,7 +69,10 @@ createAndBindListeningSocket hostname portnumber = do
               (NS.addrAddress addr_info0)
         }
     host_address <- return $ NS.addrAddress addr_info1
+
+#ifndef WIN32
     NS.setSocketOption the_socket NS.ReusePort 1
+#endif
     NS.setSocketOption the_socket NS.RecvBuffer 32000
     NS.setSocketOption the_socket NS.SendBuffer 32000
     -- Linux honors the Low Water thingy below, and this setting is OK for HTTP/2 connections, but
@@ -91,7 +94,9 @@ createAndBindListeningSocketNSSockAddr host_addr = do
         NS.SockAddrInet _ _ -> NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
         NS.SockAddrUnix _ -> NS.socket NS.AF_UNIX NS.Stream NS.defaultProtocol
         _ -> error "NetworkAddressTypeNotHandled"
+#ifndef WIN32
     NS.setSocketOption the_socket NS.ReusePort 1
+#endif
     NS.setSocketOption the_socket NS.RecvBuffer 32000
     NS.setSocketOption the_socket NS.SendBuffer 32000
     -- Linux honors the Low Water thingy below, and this setting is OK for HTTP/2 connections, but

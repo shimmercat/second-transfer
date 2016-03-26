@@ -260,7 +260,7 @@ instance Exception StreamCancelledException
 
 
 -- | Exception to denote that something failed with the SOCKS5 protocol
-data SOCKS5ProtocolException = SOCKS5ProtocolException
+data SOCKS5ProtocolException = SOCKS5ProtocolException String
     deriving (Show, Typeable)
 
 
