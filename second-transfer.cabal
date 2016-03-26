@@ -148,7 +148,7 @@ library
   if flag(enable-botan)
      CPP-Options: -DINCLUDE_BOTAN_H
      -- A default directory for botan.... you can have your own
-     -- through a stack flag. 
+     -- through a stack flag.
      -- include-dirs: /usr/local/include/botan-1.11/
   else
      CPP-Options: -DBOTAN_DISABLED
