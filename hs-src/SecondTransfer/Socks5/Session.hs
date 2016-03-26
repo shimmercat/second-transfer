@@ -49,13 +49,16 @@ data ConnectOrForward =
   | Drop_COF B.ByteString
 
 
-tryRead :: IOCallbacks ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
-tryRead iocallbacks leftovers p = do
+tryRead :: IOCallbacks ->  String  ->  B.ByteString  -> P.Parser a -> IO (a,B.ByteString)
+tryRead iocallbacks what_doing leftovers p = do
     let
         react (P.Done i r) = return  (r, i)
         react (P.Fail i contexts msg) =
             E.throwIO $ SOCKS5ProtocolException
-                 ("parseFailed: Left #" ++
+                 ("/" ++
+                  what_doing ++
+                  "/" ++
+                  "parseFailed: Left #" ++
                  show (B.length i) ++
                  " bytes to parse ( " ++
                  show (B.unpack i) ++
@@ -92,12 +95,12 @@ negotiateSocksAndForward approver socks_here =
         ps = pushDatum socks_here
     -- Start by reading the standard socks5 header
     ei <- E.try $ do
-        (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
+        (_auth, next1) <- tr "client-auth-methods"  ""  parseClientAuthMethods_Packet
         -- I will ignore the auth methods for now
         let
             server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
         ps putServerSelectsMethod_Packet server_selects
-        (req_packet, _next2) <- tr next1 parseClientRequest_Packet
+        (req_packet, _next2) <- tr "client-request"  next1 parseClientRequest_Packet
         case req_packet ^. cmd_SP3 of
 
             Connect_S5PC  -> do
@@ -150,12 +153,12 @@ negotiateSocksForwardOrConnect approver socks_here =
         ps = pushDatum socks_here
     -- Start by reading the standard socks5 header
     ei <- E.try $ do
-        (_auth, next1) <- tr ""  parseClientAuthMethods_Packet
+        (_auth, next1) <- tr "client-auth-methods" ""  parseClientAuthMethods_Packet
         -- I will ignore the auth methods for now
         let
             server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
         ps putServerSelectsMethod_Packet server_selects
-        (req_packet, _next2) <- tr next1 parseClientRequest_Packet
+        (req_packet, _next2) <- tr "client-request" next1 parseClientRequest_Packet
         case req_packet ^. cmd_SP3 of
 
             Connect_S5PC  -> do
