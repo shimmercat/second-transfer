@@ -216,6 +216,7 @@ library
           extra-lib-dirs: /usr/local/shimmercat-build/
           ld-options: -framework Security
   if os(windows)
+      cpp-options: -DWIN32
       if flag(enable-botan)
           extra-libraries: second_transfer__enable_tls libstdc++-6
           extra-lib-dirs: c:\\shimmercat-build\\lib
