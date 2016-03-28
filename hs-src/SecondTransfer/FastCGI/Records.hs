@@ -196,7 +196,10 @@ maxChunkLength :: Int64
 maxChunkLength = 32000
 
 toWrappedStream ::
-  forall m . Monad m => RecordType -> Int -> Conduit LB.ByteString m LB.ByteString
+  forall m . Monad m =>
+  RecordType ->
+  Int ->
+       Conduit LB.ByteString m LB.ByteString
 toWrappedStream record_type request_id =
   let
 
@@ -218,7 +221,9 @@ toWrappedStream record_type request_id =
       | otherwise = do
           maybe_new_data <- await
           case maybe_new_data of
-              Nothing -> return ()
+              Nothing -> do
+                  yield ""
+                  return ()
               Just fragment -> go fragment
   in
     go ""

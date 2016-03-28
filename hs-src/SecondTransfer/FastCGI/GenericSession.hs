@@ -11,9 +11,10 @@ import           Control.Concurrent                                        hidin
 --import           Control.Monad.Morph                                       (hoist, lift)
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 import qualified Control.Monad.Trans.Resource                              as ReT
-import           Control.Monad.Catch                                       (MonadThrow)
+import           Control.Monad.Catch                                       (MonadCatch)
 
 import qualified Data.ByteString                                           as B
+import           Data.Maybe                                                (fromMaybe)
 --import           Data.List                                                 (foldl')
 import qualified Data.ByteString.Builder                                   as Bu
 --import           Data.ByteString.Char8                                     (pack, unpack)
@@ -33,6 +34,13 @@ import           SecondTransfer.IOCallbacks.Types
 -- The Http1 variation is as useful for this case, as we are not using the
 -- neat features of HTTP/2
 import           SecondTransfer.Http1.Types
+import           SecondTransfer.Http1.Proxy                               (
+                                                                           processHttp11Output
+                                                                          )
+import           SecondTransfer.Http1.Parse                               (
+                                                                           methodHasRequestBody
+                                                                          )
+
 import qualified SecondTransfer.Utils.HTTPHeaders                          as He
 import           SecondTransfer.Exception                                  (resourceForkIOExc)
 import           SecondTransfer.MainLoop.CoherentWorker                    (Headers,
@@ -65,20 +73,28 @@ makeLenses ''SessionSeed
 ioProxyToConnection ::
    forall m . (MonadIO m,
                ReT.MonadBaseControl IO m,
-               MonadThrow m
+               MonadCatch m
                ) =>
    SessionSeed ->
-   HttpRequest m ->
-   m (HttpResponse m)
+   HttpRequest (ReT.ResourceT m) ->
+   ReT.ResourceT m (HttpResponse (ReT.ResourceT m))
 ioProxyToConnection session_seed  request =
-  ReT.runResourceT $ do
+  do
     let
         request_id = session_seed ^. requestId_GeS
+        ioc = session_seed ^. ioc_GeS
+        h3 = request ^. headers_Rq
+        method = fromMaybe "GET" $ He.fetchHeader h3 ":method"
+
     -- For the time being, we are not going to set a PATH_INFO.
-    sendHeadersToApplication session_seed (request ^. headers_Rq)
+    sendHeadersToApplication session_seed h3
 
     --
-    http_response <- processOutputAndStdErr request_id  (request ^. body_Rq )
+    http_response <- processOutputAndStdErr
+        request_id
+        method
+        (request ^. body_Rq )
+        ioc
 
     return (http_response)
 
@@ -126,43 +142,56 @@ sendHeadersToApplication session_seed http_headers =
         )
 
 
-processOutputAndStdErr :: (MonadIO m) =>
+processOutputAndStdErr ::
+    forall m . (MonadIO m,
+                ReT.MonadBaseControl IO m,
+                MonadCatch m
+                ) =>
     Int ->
-    Source m B.ByteString ->
-    (LB.ByteString -> IO () ) ->
-        ReT.ResourceT m (HttpResponse m)
-processOutputAndStdErr request_id client_input  push =
+    B.ByteString ->
+    Source (ReT.ResourceT m) B.ByteString ->
+    IOCallbacks ->
+        ReT.ResourceT m (HttpResponse (ReT.ResourceT m))
+processOutputAndStdErr request_id method client_input ioc =
   do
-    -- We return immediately, but open two threads to send data in both ways
-    -- and a third one to watch for when the transfers are complete.
-    w1 <- liftIO newEmptyMVar
-    w2 <- liftIO newEmptyMVar
+    let
+        push = ioc ^. pushAction_IOC
 
     -- TODO: Check method has input etc.
-    _ <- resourceForkIOExc "fastCGIOutputThread" $ do
-        (
-            client_input
-            =$=
-            CL.map LB.fromStrict
-            $$
-            (toWrappedStream Stdin_RT request_id)
-            =$=
-            (CL.mapM_  (liftIO `fmap` push ) )
-           )
-        putMVar w1 ()
+    _ <- resourceForkIOExc "fastCGIOutputThread" $
+        if methodHasRequestBody method
+          then
+            (
+                client_input
+                =$=
+                CL.map LB.fromStrict
+                $$
+                (toWrappedStream Stdin_RT request_id)
+                =$=
+                (CL.mapM_  (liftIO `fmap` push ) )
+                )
+          else
+            (
+                (yield "")
+                $$
+                (toWrappedStream Stdin_RT request_id)
+                =$=
+                (CL.mapM_  (liftIO `fmap` push ) )
+                )
 
+    (http_response, _io_callbacks) <- processHttp11Output
+        ioc
+        method
 
-
-
-
+    return http_response
 
 
 shortCircuit :: HeaderName -> HeaderName   -> (Header -> Header) -> (Header -> Header )
 shortCircuit from_name to_name f =
   let
-    transform h@(hn, hv) | hn == from_name  =  (to_name, hv)
+    transform' h@(hn, hv) | hn == from_name  =  (to_name, hv)
                          | otherwise = f h
-  in transform
+  in transform'
 
 
 notThis :: HeaderName -> (Header -> Bool) -> (Header -> Bool)
@@ -186,6 +215,7 @@ requestHeadersToCGI document_root headers_http =
     basic_transformer_0 =
         shortCircuit "cookie" "HTTP_COOKIE" .
         shortCircuit ":authority" "HTTP_HOST" .
+        shortCircuit "host" "HTTP_HOST" .
         shortCircuit "referer" "HTTP_REFERER" .
         shortCircuit "user-agent" "HTTP_USER_AGENT" .
         shortCircuit ":method" "REQUEST_METHOD" .
