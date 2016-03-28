@@ -52,11 +52,6 @@ import           SecondTransfer.Exception                                  (
 #include "instruments.cpphs"
 
 
-
-fragmentMaxLength :: Int
-fragmentMaxLength = 16384
-
-
 -- | Takes an IOCallbacks  and serializes a request (encoded HTTP/2 style in headers and streams)
 --   on top of the callback, waits for the results, and returns the response. Notice that this proxy
 --   may fail for any reason, do take measures and handle exceptions.
@@ -67,7 +62,7 @@ fragmentMaxLength = 16384
 --   (e.g. removing the Connection header) are left to the upper layers. And this doesn't include
 --   managing any kind of pipelining in the http/1.1 connection, however, close is not done, so
 --   keep-alive (not pipelineing) should be OK.
-ioProxyToConnection :: forall m . MonadIO m => IOCallbacks -> HttpRequest m -> m (HttpResponse m, IOCallbacks)
+ioProxyToConnection :: forall m . MonadIO m => IOCallbacks -> HttpRequest m -> m (HttpResponse m)
 ioProxyToConnection ioc request =
   do
     let
@@ -101,7 +96,9 @@ ioProxyToConnection ioc request =
       else
         return ()
 
-    processHttp11Output ioc method
+    processHttp11Output
+        ( (ioc ^. bestEffortPullAction_IOC ) True)
+        method
 
 
 -- | Takes IOCallbacks and reads from there an HTTP/1.1 response. Notice
@@ -111,10 +108,10 @@ ioProxyToConnection ioc request =
 --   upon exceptions.
 processHttp11Output ::
   (MonadIO m) =>
-  IOCallbacks ->
+  IO B.ByteString ->
   B.ByteString ->
-  m (HttpResponse m, IOCallbacks)
-processHttp11Output ioc method =
+  m (HttpResponse m)
+processHttp11Output bepa method =
   do
     -- So, say that we are here, that means we haven't exploded
     -- in the process of sending this request. now let's Try to
@@ -125,7 +122,7 @@ processHttp11Output ioc method =
         -- pump0 :: IncrementalHttp1Parser -> m Http1ParserCompletion
         pump0 p =
          do
-            some_bytes <- liftIO $ (ioc ^. bestEffortPullAction_IOC) True
+            some_bytes <- liftIO bepa
             let completion = addBytes p some_bytes
             case completion of
                MustContinue_H1PC new_parser -> pump0 new_parser
@@ -153,8 +150,7 @@ processHttp11Output ioc method =
             either_ioproblem_or_s <-
               liftIO $
                   keyedReportExceptions "pll-" $
-                      E.try  $
-                           (ioc ^. bestEffortPullAction_IOC ) True
+                      E.try bepa
 
             case either_ioproblem_or_s :: Either IOProblem B.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
@@ -173,7 +169,7 @@ processHttp11Output ioc method =
             either_ioproblem_or_s <-
               liftIO $
                   keyedReportExceptions "plc-" $
-                      E.try  $ (ioc ^. bestEffortPullAction_IOC ) True
+                      E.try bepa
 
             s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
@@ -196,8 +192,7 @@ processHttp11Output ioc method =
               else do
                 s <- liftIO $
                     keyedReportExceptions "ue-" $
-                        E.try $
-                            (ioc ^. bestEffortPullAction_IOC) True
+                        E.try bepa
 
                 case (s :: Either NoMoreDataException B.ByteString) of
                     Left _ -> do
@@ -214,39 +209,39 @@ processHttp11Output ioc method =
         OnlyHeaders_H1PC headers leftovers -> do
             when (B.length leftovers > 0) $ do
                 return ()
-            return (HttpResponse {
+            return HttpResponse {
                 _headers_Rp = headers
               , _body_Rp = return ()
-                }, ioc)
+                }
 
         HeadersAndBody_H1PC headers (UseBodyLength_BSC n) leftovers -> do
             --  HEADs must be handled differently!
             if methodHasResponseBody method
               then
-                return (HttpResponse {
+                return HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = pumpout leftovers (n - (fromIntegral $ B.length leftovers ) )
-                    }, ioc)
+                    }
               else
-                return (HttpResponse {
+                return HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = return ()
-                    }, ioc)
+                    }
 
 
         HeadersAndBody_H1PC headers Chunked_BSC  leftovers -> do
             --  HEADs must be handled differently!
             if methodHasResponseBody method
               then
-                return (HttpResponse {
+                return HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = unwrapping_chunked leftovers
-                    },ioc)
+                    }
               else
-                return (HttpResponse {
+                return HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = return ()
-                    },ioc)
+                    }
 
 
         HeadersAndBody_H1PC _headers SemanticAbort_BSC  _leftovers -> do
@@ -260,15 +255,15 @@ processHttp11Output ioc method =
             -- "HEAD" kind responses
             if methodHasResponseBody method
               then
-                return (HttpResponse {
+                return HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = pump_until_exception leftovers
-                    },ioc)
+                    }
               else
-                return (HttpResponse {
+                return HttpResponse {
                     _headers_Rp = headers
                   , _body_Rp = return ()
-                    },ioc)
+                    }
 
         MustContinue_H1PC _ ->
             error "UnexpectedIncompleteParse"
