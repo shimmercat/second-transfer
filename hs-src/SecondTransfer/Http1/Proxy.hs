@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies, Rank2Types #-}
 module SecondTransfer.Http1.Proxy (
                  ioProxyToConnection
+               , processHttp11Output
         ) where
 
 import           Control.Lens
@@ -96,6 +97,16 @@ ioProxyToConnection ioc request =
       else
         return ()
 
+    processHttp11Output ioc method
+
+
+processHttp11Output ::
+  (MonadIO m) =>
+  IOCallbacks ->
+  B.ByteString ->
+  m (HttpResponse m, IOCallbacks)
+processHttp11Output ioc method =
+  do
     -- So, say that we are here, that means we haven't exploded
     -- in the process of sending this request. now let's Try to
     -- fetch the answer...
