@@ -2,6 +2,13 @@
 
 module SecondTransfer.FastCGI.GenericSession (
                  ioProxyToConnection
+               , SessionConfig                                            (..)
+               , documentRoot_cgiSC
+
+               , SessionSeed                                              (..)
+               , requestId_GeS
+               , ioc_GeS
+               , config_GeS
     ) where
 
 import           Control.Lens
