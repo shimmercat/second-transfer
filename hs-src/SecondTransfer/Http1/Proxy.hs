@@ -138,34 +138,35 @@ processHttp11Output ioc method =
             when (B.length fragment > 0) $  yield fragment
             when (n > 0 ) $ pull n
 
+        -- Pull up to n bytes, but not one more. We could
+        -- keep any un-consummed data in the pipe. That's pipelining for
+        -- HTTP/1.1, which we are not using.  Here instead we trust
+        -- that the underlying layer is somehow delimiting the output,
+        -- so that (ioc ^ bestEffortPullAction_IOC ) True will return
+        -- a packet that ends at the boundaries of HTTP/1.1 requests.
+        -- Without HTTP/1.1 pipelining, that *must* happen, even over
+        -- keepalive connections.
         pull :: MonadIO m => Int -> Source m B.ByteString
-        pull n
-          | n > fragmentMaxLength = do
+        pull n =
+          do
 
             either_ioproblem_or_s <-
               liftIO $
                   keyedReportExceptions "pll-" $
                       E.try  $
-                           (ioc ^. pullAction_IOC ) fragmentMaxLength
+                           (ioc ^. bestEffortPullAction_IOC ) True
 
-            s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
+            case either_ioproblem_or_s :: Either IOProblem B.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
-                Right datum -> return datum
-            yield s
-            pull ( n - fragmentMaxLength )
-
-          | otherwise = do
-
-            either_ioproblem_or_s <-
-              liftIO $
-                  keyedReportExceptions "pla-" $
-                      E.try  $ (ioc ^. pullAction_IOC ) n
-
-            s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
-                Left _exc -> liftIO $ E.throwIO GatewayAbortedException
-                Right datum -> return datum
-            yield s
-            -- and finish...
+                Right datum
+                  | nn <- B.length datum, nn < n ->
+                    do
+                      yield datum
+                      pull (n - nn)
+                  | otherwise ->
+                      -- This will discard the rest of the data, read
+                      -- comment above.
+                      yield $ B.take n datum
 
         pull_forever :: MonadIO m => Source m B.ByteString
         pull_forever = do
