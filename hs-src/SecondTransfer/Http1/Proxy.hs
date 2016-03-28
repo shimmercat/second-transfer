@@ -142,7 +142,12 @@ processHttp11Output ioc method =
         pull n
           | n > fragmentMaxLength = do
 
-            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "pll-" $ E.try  $ (ioc ^. pullAction_IOC ) fragmentMaxLength
+            either_ioproblem_or_s <-
+              liftIO $
+                  keyedReportExceptions "pll-" $
+                      E.try  $
+                           (ioc ^. pullAction_IOC ) fragmentMaxLength
+
             s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
                 Right datum -> return datum
@@ -151,7 +156,11 @@ processHttp11Output ioc method =
 
           | otherwise = do
 
-            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "pla-" $ E.try  $ (ioc ^. pullAction_IOC ) n
+            either_ioproblem_or_s <-
+              liftIO $
+                  keyedReportExceptions "pla-" $
+                      E.try  $ (ioc ^. pullAction_IOC ) n
+
             s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
                 Right datum -> return datum
@@ -160,7 +169,11 @@ processHttp11Output ioc method =
 
         pull_forever :: MonadIO m => Source m B.ByteString
         pull_forever = do
-            either_ioproblem_or_s <- liftIO $ keyedReportExceptions "plc-" $ E.try  $ (ioc ^. bestEffortPullAction_IOC ) True
+            either_ioproblem_or_s <-
+              liftIO $
+                  keyedReportExceptions "plc-" $
+                      E.try  $ (ioc ^. bestEffortPullAction_IOC ) True
+
             s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
                 Right datum -> return datum
@@ -180,7 +193,11 @@ processHttp11Output ioc method =
                 yield fragment
                 pump_until_exception mempty
               else do
-                s <- liftIO $ keyedReportExceptions "ue-" $ E.try $ (ioc ^. bestEffortPullAction_IOC) True
+                s <- liftIO $
+                    keyedReportExceptions "ue-" $
+                        E.try $
+                            (ioc ^. bestEffortPullAction_IOC) True
+
                 case (s :: Either NoMoreDataException B.ByteString) of
                     Left _ -> do
                         return ()
