@@ -12,7 +12,7 @@ module SecondTransfer.Http1.Types (
                , Http1CycleController                                      (..)
                , ProxyToHttpServer                                         (..)
 
-
+               , ResponseBodyHandling                                      (..)
         ) where
 
 import           Control.Lens
@@ -43,6 +43,21 @@ data HttpResponse m = HttpResponse {
     }
 
 makeLenses ''HttpResponse
+
+
+-- | What to do with the source of ByteStrings to handle the body
+data ResponseBodyHandling =
+    -- | This response have no body, any leftover bytes are for the next
+    --   response (pipelining?)
+    None_RBH
+    -- | No transfer-encoding
+  | PlainBytes_RBH
+    -- | There is a chunked transfer encoding. Use unwrapChunks over the
+    --   original source
+  | Chunked_RBH
+
+
+
 
 -- Used for early release of resources
 class Monad m => Http1CycleController m contrl where

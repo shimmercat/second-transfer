@@ -18,6 +18,7 @@ module SecondTransfer.Http1.Parse(
     ,transferEncodingIsChunked
     ,wrapChunk
     ,unwrapChunks
+    ,leftoversFromParserCompletion
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
@@ -105,6 +106,11 @@ data Http1ParserCompletion =
     |RequestIsMalformed_H1PC String
     deriving Show
 
+
+leftoversFromParserCompletion :: Http1ParserCompletion -> B.ByteString
+leftoversFromParserCompletion (OnlyHeaders_H1PC _ l) = l
+leftoversFromParserCompletion (HeadersAndBody_H1PC _ _ l) = l
+leftoversFromParserCompletion _ = mempty
 
 -- | Stop condition when parsing the body.
 --  Tons and tons of messages in the internet go without a Content-Length

@@ -128,6 +128,8 @@ library
                   , SecondTransfer.Socks5.Serializers
                   , SecondTransfer.Socks5.Parsers
 
+                  , SecondTransfer.FastCGI.GenericSession
+
                   , SecondTransfer.Http2.MakeAttendant
                   , SecondTransfer.Http2.SimpleClient
                   , SecondTransfer.Http2.TransferTypes
@@ -168,6 +170,7 @@ library
                  binary >= 0.7.1.0,
                  containers >= 0.5.5,
                  conduit >= 1.2.4 && < 1.3,
+                 conduit-extra >= 1.1 && < 1.3,
                  transformers >=0.3 && <= 0.5,
                  network-uri >= 2.6 && < 2.7,
                  hashtables >= 1.2 && < 1.3,

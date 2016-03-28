@@ -8,9 +8,17 @@ module SecondTransfer.FastCGI.Records (
               , wrapRecordFrame
               , toWrappedStream
 
+              , readRecordFrame
+
               , writeParameterPair
+
+              , type_RH
+              , payload_RH
+              , requestId_RH
     ) where
 
+
+import           Control.Lens
 
 import           Data.Binary
 --import           Data.Word
@@ -50,6 +58,15 @@ data FastCGIRoles =
   | Filter_fcgiR
     deriving (Show, Eq, Enum, Ord)
 
+
+data RecordFrame = RecordFrame {
+    _type_RH          :: RecordType
+  , _requestId_RH     :: Int
+  , _payload_RH       :: B.ByteString
+    }
+    deriving (Show)
+
+makeLenses ''RecordFrame
 
 data BeginRequest_Rec = BeginRequest_Rec {
     _applicationClosesConnection_BR :: Bool
@@ -131,13 +148,6 @@ writeParameterPair (hn, hv) =
         bu_hv
         ]
 
-
-data RecordFrame = RecordFrame {
-    _type_RH          :: RecordType
-  , _requestId_RH     :: Int
-  , _payload_RH       :: B.ByteString
-    }
-    deriving (Show)
 
 
 readRecordFrame :: ATO.Parser RecordFrame

@@ -2,6 +2,9 @@
 module SecondTransfer.Http1.Proxy (
                  ioProxyToConnection
                , processHttp11Output
+
+               , processHttp11OutputFromPipe
+               , ResponseBodyHandling                                      (..)
         ) where
 
 import           Control.Lens
@@ -35,6 +38,7 @@ import           SecondTransfer.Http1.Parse                                (
                                                                             , Http1ParserCompletion(..)
                                                                             , addBytes
                                                                             , unwrapChunks
+                                                                            , leftoversFromParserCompletion
                                                                             , BodyStopCondition(..)
                                                                             )
 import           SecondTransfer.IOCallbacks.Types
@@ -101,9 +105,10 @@ ioProxyToConnection ioc request =
         method
 
 
--- | Takes IOCallbacks and reads from there an HTTP/1.1 response. Notice
+-- | Takes something that produces ByteStrings and reads from there an HTTP/1.1
+--   response. Notice
 --   that the returned structure handles the response body as a stream, therefore
---   this function creates some threads but it doesn't closs the passed callbacks.
+--   this function creates some threads.
 --   Use the fact that `m` can be any monad to control for resource deallocation
 --   upon exceptions.
 processHttp11Output ::
@@ -264,6 +269,93 @@ processHttp11Output bepa method =
                     _headers_Rp = headers
                   , _body_Rp = return ()
                     }
+
+        MustContinue_H1PC _ ->
+            error "UnexpectedIncompleteParse"
+
+        -- TODO: See what happens when this exception passes from place to place.
+        RequestIsMalformed_H1PC msg -> do
+            liftIO . E.throwIO $ HTTP11SyntaxException msg
+
+
+-- | Takes something that produces ByteStrings and reads from there an HTTP/1.1
+--   response, and a something to do with the body
+--   that the returned structure handles the response body as a stream, therefore
+--   this function creates some threads.
+--   Use the fact that `m` can be any monad to control for resource deallocation
+--   upon exceptions.
+processHttp11OutputFromPipe ::
+  (MonadIO m) =>
+  B.ByteString ->
+  Sink B.ByteString m (He.Headers, ResponseBodyHandling)
+processHttp11OutputFromPipe  method =
+  do
+    -- So, say that we are here, that means we haven't exploded
+    -- in the process of sending this request. now let's Try to
+    -- fetch the answer...
+    let
+        incremental_http_parser = newIncrementalHttp1Parser
+
+        -- pump0 :: IncrementalHttp1Parser -> m Http1ParserCompletion
+        -- pump0  :: IncrementalHttp1Parser -> Sink B.ByteString m Http1ParserCompletion
+        pump0 p =
+         do
+            maybe_some_bytes <- await
+            case maybe_some_bytes of
+                Nothing -> return $ RequestIsMalformed_H1PC "InputIsTooShort"
+                Just some_bytes -> do
+                    let completion = addBytes p some_bytes
+                    case completion of
+                       MustContinue_H1PC new_parser -> pump0 new_parser
+
+                       -- In any other case, just return
+                       a -> do
+                           let
+                               leftovers = leftoversFromParserCompletion a
+                           leftover leftovers
+                           return a
+
+        -- unwrapChunks
+
+
+    parser_completion <- pump0 incremental_http_parser
+
+    case parser_completion of
+
+        OnlyHeaders_H1PC headers _leftovers -> do
+            return (headers, None_RBH)
+
+        HeadersAndBody_H1PC headers (UseBodyLength_BSC _n) _leftovers -> do
+            --  HEADs must be handled differently!
+            if methodHasResponseBody method
+              then
+                return (headers, PlainBytes_RBH)
+
+              else
+                return (headers, None_RBH)
+
+        HeadersAndBody_H1PC headers Chunked_BSC  _leftovers -> do
+            --  HEADs must be handled differently!
+            if methodHasResponseBody method
+              then
+                return (headers, Chunked_RBH)
+
+              else
+                return (headers, None_RBH)
+
+        HeadersAndBody_H1PC _headers SemanticAbort_BSC  _leftovers -> do
+            --  TODO: Check how this works in practice
+            liftIO . E.throwIO $ HTTP11SyntaxException "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
+
+        HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC _leftovers -> do
+            -- The parser will assume that most responses have a body in the absence of
+            -- content-length, and that's probably as well. We work around that for
+            -- "HEAD" kind responses
+            if methodHasResponseBody method
+              then
+                return (headers, PlainBytes_RBH)
+              else
+                return (headers, None_RBH)
 
         MustContinue_H1PC _ ->
             error "UnexpectedIncompleteParse"

@@ -8,7 +8,7 @@ import           Control.Lens
 import qualified Control.Exception                                         as E
 import           Control.Monad                                             (when)
 import           Control.Concurrent                                        hiding (yield)
---import           Control.Monad.Morph                                       (hoist, lift)
+import           Control.Monad.Morph                                       (hoist, lift)
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 import qualified Control.Monad.Trans.Resource                              as ReT
 import           Control.Monad.Catch                                       (MonadCatch)
@@ -26,6 +26,7 @@ import qualified Data.Binary.Put                                           as Bi
 import           Data.Char                                                 (toLower)
 import           Data.Conduit
 import qualified Data.Conduit.List                                         as CL
+import qualified Data.Conduit.Attoparsec                                   as DCA
 
 import qualified Data.ByteString                                           as B
 
@@ -35,10 +36,11 @@ import           SecondTransfer.IOCallbacks.Types
 -- neat features of HTTP/2
 import           SecondTransfer.Http1.Types
 import           SecondTransfer.Http1.Proxy                               (
-                                                                           processHttp11Output
+                                                                           processHttp11OutputFromPipe
                                                                           )
 import           SecondTransfer.Http1.Parse                               (
                                                                            methodHasRequestBody
+                                                                          ,unwrapChunks
                                                                           )
 
 import qualified SecondTransfer.Utils.HTTPHeaders                          as He
@@ -46,6 +48,7 @@ import           SecondTransfer.Exception                                  (reso
 import           SecondTransfer.MainLoop.CoherentWorker                    (Headers,
                                                                            HeaderName,
                                                                            HeaderValue,
+                                                                           AwareWorkerStack,
                                                                            Header)
 import           SecondTransfer.FastCGI.Records
 
@@ -71,13 +74,9 @@ makeLenses ''SessionSeed
 
 
 ioProxyToConnection ::
-   forall m . (MonadIO m,
-               ReT.MonadBaseControl IO m,
-               MonadCatch m
-               ) =>
    SessionSeed ->
-   HttpRequest (ReT.ResourceT m) ->
-   ReT.ResourceT m (HttpResponse (ReT.ResourceT m))
+   HttpRequest AwareWorkerStack ->
+   AwareWorkerStack (HttpResponse AwareWorkerStack)
 ioProxyToConnection session_seed  request =
   do
     let
@@ -100,8 +99,7 @@ ioProxyToConnection session_seed  request =
 
 
 sendHeadersToApplication ::
-  (MonadIO m) =>
-  SessionSeed -> Headers -> ReT.ResourceT m ()
+  SessionSeed -> Headers -> AwareWorkerStack ()
 sendHeadersToApplication session_seed http_headers =
   do
     let
@@ -143,19 +141,40 @@ sendHeadersToApplication session_seed http_headers =
 
 
 processOutputAndStdErr ::
-    forall m . (MonadIO m,
-                ReT.MonadBaseControl IO m,
-                MonadCatch m
-                ) =>
     Int ->
     B.ByteString ->
-    Source (ReT.ResourceT m) B.ByteString ->
+    Source AwareWorkerStack B.ByteString ->
     IOCallbacks ->
-        ReT.ResourceT m (HttpResponse (ReT.ResourceT m))
+        AwareWorkerStack (HttpResponse AwareWorkerStack)
 processOutputAndStdErr request_id method client_input ioc =
   do
     let
         push = ioc ^. pushAction_IOC
+        bepa = (ioc ^. bestEffortPullAction_IOC) True
+
+        conn_source = do
+            -- Will throw exceptions
+            b <- liftIO bepa
+            yield b
+            conn_source
+
+        frames_parser =
+            DCA.conduitParser readRecordFrame
+            =$=
+            CL.map snd
+
+        frames_interpreter =
+          do
+            maybe_frame <- await
+            case maybe_frame of
+                Just frame -> case frame ^. type_RH of
+                    EndRequest_RT -> return ()
+                    Stdout_RT -> do
+                        yield $ frame ^. payload_RH
+                        frames_interpreter
+                    _ ->
+                        -- Discard frames I can't undestand.
+                        frames_interpreter
 
     -- TODO: Check method has input etc.
     _ <- resourceForkIOExc "fastCGIOutputThread" $
@@ -179,11 +198,47 @@ processOutputAndStdErr request_id method client_input ioc =
                 (CL.mapM_  (liftIO `fmap` push ) )
                 )
 
-    (http_response, _io_callbacks) <- processHttp11Output
-        ioc
-        method
+    (resumable_source, (headers, do_with_body)) <-
+        (
+          conn_source
+          =$=
+          frames_parser
+          =$=
+          frames_interpreter
+        )
+        $$+
+        processHttp11OutputFromPipe method
 
-    return http_response
+    let
+
+        unwrapped_plain :: Source AwareWorkerStack B.ByteString
+        unwrapped_plain = do
+            (source, finalizer) <- lift $ unwrapResumable resumable_source
+            source
+            lift finalizer
+
+        unwrapped_chunked = do
+            (source, finalizer) <- lift $ unwrapResumable resumable_source
+            source =$= unwrapChunks
+            lift finalizer
+
+    return $ case do_with_body of
+        None_RBH   -> HttpResponse {
+            _headers_Rp = headers
+          , _body_Rp = return ()
+            }
+
+        PlainBytes_RBH -> HttpResponse {
+            _headers_Rp = headers
+          , _body_Rp = unwrapped_plain
+            }
+
+        Chunked_RBH -> HttpResponse {
+            _headers_Rp = headers
+          , _body_Rp = unwrapped_chunked
+            }
+
+
 
 
 shortCircuit :: HeaderName -> HeaderName   -> (Header -> Header) -> (Header -> Header )
