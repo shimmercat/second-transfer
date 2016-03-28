@@ -104,6 +104,11 @@ ioProxyToConnection ioc request =
     processHttp11Output ioc method
 
 
+-- | Takes IOCallbacks and reads from there an HTTP/1.1 response. Notice
+--   that the returned structure handles the response body as a stream, therefore
+--   this function creates some threads but it doesn't closs the passed callbacks.
+--   Use the fact that `m` can be any monad to control for resource deallocation
+--   upon exceptions.
 processHttp11Output ::
   (MonadIO m) =>
   IOCallbacks ->
