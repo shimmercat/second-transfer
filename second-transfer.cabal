@@ -82,6 +82,7 @@ library
 
                   , SecondTransfer.Sessions
                   , SecondTransfer.Sessions.Config
+                  , SecondTransfer.Sessions.RequesterPool
 
                   , SecondTransfer.Http1.Parse
                   , SecondTransfer.Http1.Types
@@ -183,7 +184,8 @@ library
                  time >= 1.5.0 && < 1.8,
                  vector >= 0.10 && < 0.13,
                  vector-algorithms >= 0.7,
-                 mmorph >= 1.0
+                 mmorph >= 1.0,
+                 random >= 1.0
 
   -- Directories containing source files.
   hs-source-dirs: hs-src

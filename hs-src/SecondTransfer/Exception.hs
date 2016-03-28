@@ -1,4 +1,6 @@
-{-# LANGUAGE DeriveDataTypeable, ExistentialQuantification, ScopedTypeVariables #-}
+{-# LANGUAGE
+    DeriveDataTypeable, FlexibleContexts,
+    ExistentialQuantification, ScopedTypeVariables #-}
 {-|
 Module      : SecondTransfer.Exception
 -}
@@ -34,6 +36,8 @@ module SecondTransfer.Exception (
     , reportExceptions
     , keyedReportExceptions
     , forkIOExc
+    , mKeyedReportExceptions
+    , resourceForkIOExc
 
       -- * Proxies
     , blockedIndefinitelyOnMVar
@@ -47,7 +51,9 @@ module SecondTransfer.Exception (
 import           Control.Exception
 import           Data.Typeable
 import           Control.Concurrent               (forkIO, ThreadId)
-
+import qualified Control.Monad.Trans.Resource     as ReT
+import qualified Control.Monad.Catch              as CMC
+import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 
 -- | Abstract exception. All HTTP/2 exceptions derive from here
 data HTTP2SessionException = forall e . Exception e => HTTP2SessionException e
@@ -304,11 +310,50 @@ keyedReportExceptions key comp =
         Right a -> do
             return a
 
+
+mKeyedReportExceptions ::
+  forall m a .
+  (
+    CMC.MonadCatch m,
+    MonadIO m
+  ) =>
+  String ->
+  m a -> m a
+mKeyedReportExceptions key comp =
+  do
+    ei <- CMC.try comp
+    case (ei :: Either SomeException a) of
+        Left e@(SomeException ee) -> do
+            liftIO . putStrLn $
+                "Bubbling exc " ++
+                displayException e ++
+                " (with type " ++
+                (show $ typeOf ee) ++
+                ") at " ++
+                key
+            CMC.throwM e
+
+        Right a -> do
+            return a
+
+
 -- | Just report all unhandled and un-ignored exceptions
 ---  in forked threads
 forkIOExc :: String -> IO () -> IO ThreadId
 forkIOExc msg comp = forkIO $ keyedReportExceptions msg  comp
 
+-- resourceForkIO :: MonadBaseControl IO m => ResourceT m () -> ResourceT m ThreadId
+resourceForkIOExc  ::
+    (
+      ReT.MonadBaseControl IO m,
+      MonadIO m,
+      CMC.MonadCatch m
+    ) =>
+    String  ->
+    ReT.ResourceT m () ->
+       ReT.ResourceT m ThreadId
+resourceForkIOExc msg comp =
+    ReT.resourceForkIO $ mKeyedReportExceptions msg comp
 
 blockedIndefinitelyOnMVar :: Proxy BlockedIndefinitelyOnMVar
 blockedIndefinitelyOnMVar = Proxy
