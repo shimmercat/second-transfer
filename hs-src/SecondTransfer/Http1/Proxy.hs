@@ -59,7 +59,11 @@ fragmentMaxLength = 16384
 
 -- | Takes an IOCallbacks  and serializes a request (encoded HTTP/2 style in headers and streams)
 --   on top of the callback, waits for the results, and returns the response. Notice that this proxy
---   may fail for any reason, do take measures and handle exceptions. Also, must headers manipulations
+--   may fail for any reason, do take measures and handle exceptions.
+--
+--  The use of a generic monad for the operations helps by making ResourceT a possibility.
+--
+--   Also, most headers manipulations
 --   (e.g. removing the Connection header) are left to the upper layers. And this doesn't include
 --   managing any kind of pipelining in the http/1.1 connection, however, close is not done, so
 --   keep-alive (not pipelineing) should be OK.
