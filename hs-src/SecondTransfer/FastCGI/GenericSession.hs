@@ -9,6 +9,9 @@ module SecondTransfer.FastCGI.GenericSession (
                , requestId_GeS
                , ioc_GeS
                , config_GeS
+
+               , framesSource
+               , framesParser
     ) where
 
 import           Control.Lens
@@ -147,6 +150,57 @@ sendHeadersToApplication session_seed http_headers =
         )
 
 
+framesParser :: (MonadCatch m) => Conduit B.ByteString m RecordFrame
+framesParser =
+    DCA.conduitParser readRecordFrame
+    =$=
+    CL.map snd
+
+
+-- | It yields the payload of frames with a type Stdout_RT.
+--   ATTENTION(IMPORTANT): No control for request_id is being made
+--   here.
+framesSource ::
+    (MonadIO m, MonadCatch m) =>
+    IO B.ByteString ->
+    Source  m B.ByteString
+framesSource bepa =
+  let
+        conn_source = do
+            -- Will throw exceptions
+            b <- liftIO bepa
+            yield b
+            conn_source
+
+        frames_interpreter =
+          do
+            maybe_frame <- await
+            case maybe_frame of
+                Just frame -> case frame ^. type_RH of
+                    EndRequest_RT -> return ()
+                    Stdout_RT -> do
+                        let
+                            payload = frame ^. payload_RH
+                        if B.length payload > 0
+                          then do
+                            yield payload
+                            frames_interpreter
+                          else
+                            return ()
+                    _ ->
+                        -- Discard frames I can't undestand.
+                        frames_interpreter
+
+  in
+    (
+        conn_source
+        =$=
+        framesParser
+        =$=
+        frames_interpreter
+    )
+
+
 processOutputAndStdErr ::
     Int ->
     B.ByteString ->
@@ -159,31 +213,7 @@ processOutputAndStdErr request_id method client_input ioc =
         push = ioc ^. pushAction_IOC
         bepa = (ioc ^. bestEffortPullAction_IOC) True
 
-        conn_source = do
-            -- Will throw exceptions
-            b <- liftIO bepa
-            yield b
-            conn_source
-
-        frames_parser =
-            DCA.conduitParser readRecordFrame
-            =$=
-            CL.map snd
-
-        frames_interpreter =
-          do
-            maybe_frame <- await
-            case maybe_frame of
-                Just frame -> case frame ^. type_RH of
-                    EndRequest_RT -> return ()
-                    Stdout_RT -> do
-                        yield $ frame ^. payload_RH
-                        frames_interpreter
-                    _ ->
-                        -- Discard frames I can't undestand.
-                        frames_interpreter
-
-    -- TODO: Check method has input etc.
+    -- Send the input
     _ <- resourceForkIOExc "fastCGIOutputThread" $
         if methodHasRequestBody method
           then
@@ -205,14 +235,10 @@ processOutputAndStdErr request_id method client_input ioc =
                 (CL.mapM_  (liftIO `fmap` push ) )
                 )
 
+    -- Receive the headers as soon as possible, and prepare to receive
+    -- any data to the application and forward it immediately to the inner side.
     (resumable_source, (headers, do_with_body)) <-
-        (
-          conn_source
-          =$=
-          frames_parser
-          =$=
-          frames_interpreter
-        )
+        framesSource  bepa
         $$+
         processHttp11OutputFromPipe method
 

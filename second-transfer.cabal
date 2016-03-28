@@ -83,12 +83,14 @@ library
                   , SecondTransfer.Sessions
                   , SecondTransfer.Sessions.Config
                   , SecondTransfer.Sessions.RequesterPool
+                  , SecondTransfer.Sessions.ApplicationPortProbe
 
                   , SecondTransfer.Http1.Parse
                   , SecondTransfer.Http1.Types
                   , SecondTransfer.Http1.Proxy
 
                   , SecondTransfer.FastCGI.GenericSession
+                  , SecondTransfer.FastCGI.Probe
 
                   -- These ones should probably go in their own package
                   , SecondTransfer.IOCallbacks.Types

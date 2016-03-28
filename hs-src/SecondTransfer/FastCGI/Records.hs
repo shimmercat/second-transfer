@@ -2,6 +2,7 @@
 module SecondTransfer.FastCGI.Records (
                 writeOneOrFourLength
               , RecordType                              (..)
+
               , putBeginRequest
               , BeginRequest_Rec                        (..)
 
@@ -12,6 +13,7 @@ module SecondTransfer.FastCGI.Records (
 
               , writeParameterPair
 
+              , RecordFrame
               , type_RH
               , payload_RH
               , requestId_RH
@@ -149,11 +151,10 @@ writeParameterPair (hn, hv) =
         ]
 
 
-
 readRecordFrame :: ATO.Parser RecordFrame
 readRecordFrame =
   do
-    _ <- ATO.word8 1 -- The reserved
+    _ <- ATO.word8 1 -- The reserved version number
     packet_type <- (toEnum . fromIntegral) <$> ATO.anyWord8
     request_id_b1 <- ATO.anyWord8
     request_id_b0 <- ATO.anyWord8
