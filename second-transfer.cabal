@@ -88,6 +88,8 @@ library
                   , SecondTransfer.Http1.Types
                   , SecondTransfer.Http1.Proxy
 
+                  , SecondTransfer.FastCGI.GenericSession
+
                   -- These ones should probably go in their own package
                   , SecondTransfer.IOCallbacks.Types
                   , SecondTransfer.IOCallbacks.SocketServer
@@ -128,7 +130,7 @@ library
                   , SecondTransfer.Socks5.Serializers
                   , SecondTransfer.Socks5.Parsers
 
-                  , SecondTransfer.FastCGI.GenericSession
+                  , SecondTransfer.FastCGI.Records
 
                   , SecondTransfer.Http2.MakeAttendant
                   , SecondTransfer.Http2.SimpleClient
