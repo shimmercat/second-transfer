@@ -35,6 +35,7 @@ module SecondTransfer.Utils.HTTPHeaders (
     ,combineAuthorityAndHost
     ,removeConnectionHeaders
     ,fusionHeaders
+    ,setIfNeeded
 
     , PrettyPrintHeadersConfig        (..)
     , indentSpace_PPHC
@@ -297,6 +298,32 @@ replaceHeaderValue (HeaderEditor m) header_name maybe_header_value =
     at3 = rebase 0 at2
   in HeaderEditor . Ms.fromList $ at3
 
+-- | Sets only a header that is not set
+setIfNeeded :: HeaderEditor -> HeaderName ->  HeaderValue -> HeaderEditor
+setIfNeeded (HeaderEditor m) header_name header_value =
+  let
+    lst = Ms.toList m
+
+    rpl :: Int -> [(Autosorted, HeaderValue)] -> [(Autosorted, HeaderValue)]
+    rpl rc (e1@(Autosorted (_hp, hn,_n), _hv):rest)
+        | hn == header_name  =
+            e1 : rpl 1 rest
+        | otherwise =
+            e1:(rpl rc rest)
+
+    rpl rc []
+        | rc > 0 =
+            []
+        | rc == 0  =
+            [(Autosorted (headerPriority header_name, header_name, 0), header_value)]
+        | otherwise =
+            []
+
+    at1 = rpl 0 lst
+    ms1 = Ms.fromList at1
+    at2 = Ms.toList ms1
+    at3 = rebase 0 at2
+  in HeaderEditor . Ms.fromList $ at3
 
 
 -- | headerLens header_name represents a lens into the headers,

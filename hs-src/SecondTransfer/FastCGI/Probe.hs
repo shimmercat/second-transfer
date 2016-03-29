@@ -12,7 +12,7 @@ module SecondTransfer.FastCGI.Probe (
 import           Control.Lens
 import qualified Control.Exception                                    as E
 import           Control.Monad.IO.Class                               (liftIO)
-
+import           Control.Concurrent                                   hiding (yield)
 
 --import qualified Data.ByteString                                      as B
 --import qualified Data.ByteString.Lazy                                 as LB
@@ -50,11 +50,13 @@ probe ioc =
 
         source = do
             b <- liftIO bepa
+            --liftIO $ putStrLn $ "Got data: " ++ show b
             yield b
             source
 
     packet_sent <- E.try $
         (ioc ^. pushAction_IOC) (Bin.runPut open_packet)
+    --putStrLn "Probe packet sent"
 
     case packet_sent :: Either IOProblem () of
         Left e -> return . Left $ E.displayException e
@@ -62,12 +64,20 @@ probe ioc =
             -- Next step it is to see if I can get an answer from the application, without
             -- the application crashing in a million fragments...
             -- TODO: Is it any danger of time-out here?
+            -- Yes, there is danger of time-out
+            --putStrLn "Waiting for response"
+
+            forkIOExc "probeTimeOutExc" $ do
+                threadDelay (1000*1000)
+                (ioc ^. closeAction_IOC)
+
             either_response_frame <- E.try . runConduit $
                 source
                 =$=
                 framesParser
                 =$=
                 CL.take 1
+            --putStrLn "Response received"
 
             case either_response_frame :: Either E.SomeException [RecordFrame] of
                 Left e -> return . Left $ E.displayException e

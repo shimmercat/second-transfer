@@ -41,7 +41,7 @@ import qualified Data.ByteString.Builder                as Bu
 import           Data.ByteString.Char8                  (pack, unpack)
 import qualified Data.ByteString.Char8                  as Ch8
 import qualified Data.ByteString.Lazy                   as Lb
-import           Data.Char                              (toLower)
+import           Data.Char                              (toLower, isSpace)
 import           Data.Maybe                             (isJust, fromMaybe)
 
 import qualified Data.Attoparsec.ByteString             as Ap
@@ -125,11 +125,16 @@ data BodyStopCondition =
      deriving (Show, Eq)
 
 
-data RequestOrResponseLine =
-    -- First argument is the URI, second the method
+-- | What can we parse from the first line?
+data FirstLineDatum =
+    -- | First argument is the URI, second the method
     Request_RoRL B.ByteString B.ByteString
-    -- First argument is the status code
+    -- | First argument is the status code
     |Response_RoRL Int
+    -- | First line is just part of the mime message , this is used
+    --   by HTTP/1.1. First argument is the header "name", second
+    --   is the header value.
+    |NormalMime_RoRL B.ByteString B.ByteString
     deriving (Show, Eq)
 
 
@@ -260,6 +265,26 @@ elaborateHeaders full_text crlf_positions last_headers_position =
           in
             ((":status", status_str): headers_1, not excludes_body)
 
+        NormalMime_RoRL hn hv ->
+          let
+            headers_interin =
+                (bsToLower hn, hv):headers_1
+            (status_str, hh) = case lookup "status" headers_interin of
+                Nothing -> ("200", headers_interin)
+                Just x ->  (x,
+                               filter
+                                   (
+                                   \(hhn, _hv) -> hhn /= "status")
+                                   headers_interin
+                            )
+            excludes_body =
+                ( (Ch8.head status_str) == '1')
+                ||
+                ( status_str == "204" || status_str == "304" )
+
+          in ((":status", status_str): hh, not excludes_body)
+
+
     -- Still we need to lower-case header names, and trim them
     headers_3 = [
         ( (stripBsHName . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
@@ -330,7 +355,7 @@ verifyHeaderSyntax :: (B.ByteString, B.ByteString) -> Bool
 verifyHeaderSyntax (a,b) = verifyHeaderName a && verifyHeaderValue b
 
 
-parseFirstLine :: B.ByteString -> Maybe RequestOrResponseLine
+parseFirstLine :: B.ByteString -> Maybe FirstLineDatum
 parseFirstLine s =
   let
     either_error_or_rrl = Ap.parseOnly (httpFirstLine <* Ap.endOfInput ) s
@@ -432,7 +457,7 @@ space :: Ap.Parser Word8
 space = Ap.word8 32
 
 
-requestLine :: Ap.Parser RequestOrResponseLine
+requestLine :: Ap.Parser FirstLineDatum
 requestLine =
     flip Request_RoRL
     <$>
@@ -448,7 +473,7 @@ digit :: Ap.Parser Word8
 digit = Ap.satisfy (Ap.inClass "0-9")
 
 
-responseLine :: Ap.Parser RequestOrResponseLine
+responseLine :: Ap.Parser FirstLineDatum
 responseLine =
     (pure Response_RoRL)
     <*
@@ -462,9 +487,30 @@ responseLine =
     <*
     Ap.takeByteString
 
+classStuff :: String
+classStuff =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
-httpFirstLine :: Ap.Parser RequestOrResponseLine
-httpFirstLine = requestLine <|> responseLine
+-- Another type of first line
+normalMimeLine :: Ap.Parser FirstLineDatum
+normalMimeLine =
+    (pure NormalMime_RoRL )
+    <*
+    (Ap.many' space)
+    <*>
+    Ap.takeWhile1 ( Ap.inClass classStuff )
+    <*
+    (Ap.many' space)
+    <*
+    Ap8.char ':'
+    <*
+    (Ap.many' space)
+    <*>
+    (fst . Ch8.spanEnd isSpace <$> Ap8.takeByteString )
+
+
+httpFirstLine :: Ap.Parser FirstLineDatum
+httpFirstLine = requestLine <|> responseLine <|> normalMimeLine
 
 -- A parser for chunked  messages ....
 chunkParser :: Ap.Parser B.ByteString

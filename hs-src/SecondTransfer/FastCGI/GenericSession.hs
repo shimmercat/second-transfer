@@ -33,12 +33,11 @@ import qualified Data.ByteString.Lazy                                      as LB
 import qualified Data.Binary                                               as Bin
 import qualified Data.Binary.Put                                           as Bin
 
-import           Data.Char                                                 (toLower)
+import           Data.Char                                                 (toLower, toUpper, isLower)
 import           Data.Conduit
 import qualified Data.Conduit.List                                         as CL
 import qualified Data.Conduit.Attoparsec                                   as DCA
-
-import qualified Data.ByteString                                           as B
+import           System.FilePath                                           ( (</>) )
 
 import           SecondTransfer.IOCallbacks.Types
 
@@ -115,7 +114,10 @@ sendHeadersToApplication session_seed http_headers =
     let
         request_id = session_seed ^. requestId_GeS
         document_root = session_seed ^. config_GeS . documentRoot_cgiSC
-        push = session_seed ^. ( ioc_GeS . pushAction_IOC)
+        push = \ d -> do
+            -- putStrLn $ "push " ++ show (LB.length d)
+            session_seed ^. ( ioc_GeS . pushAction_IOC) $ d
+
         -- Packet with the begin request.... this is a Bin.Put
         begin_request_packet :: Bin.Put
         begin_request_packet =
@@ -142,7 +144,10 @@ sendHeadersToApplication session_seed http_headers =
           Bu.toLazyByteString . mconcat . map writeParameterPair $ params_as_such
 
     (
-        (yield encoded_params)
+        (do
+            yield encoded_params
+            yield ""
+        )
         $$
         (toWrappedStream Params_RT request_id)
         =$=
@@ -177,7 +182,12 @@ framesSource bepa =
             maybe_frame <- await
             case maybe_frame of
                 Just frame -> case frame ^. type_RH of
-                    EndRequest_RT -> return ()
+                    Stderr_RT -> do
+                        -- TODO: Properly propagate to the server
+                        liftIO $
+                            putStrLn $
+                                "ErrorData FastCGI: " ++ show (frame ^. payload_RH)
+                        frames_interpreter
                     Stdout_RT -> do
                         let
                             payload = frame ^. payload_RH
@@ -185,11 +195,16 @@ framesSource bepa =
                           then do
                             yield payload
                             frames_interpreter
-                          else
+                          else do
                             return ()
-                    _ ->
+                    EndRequest_RT -> do
+                        return ()
+                    _fr -> do
                         -- Discard frames I can't undestand.
                         frames_interpreter
+
+                Nothing -> do
+                    return ()
 
   in
     (
@@ -214,9 +229,9 @@ processOutputAndStdErr request_id method client_input ioc =
         bepa = (ioc ^. bestEffortPullAction_IOC) True
 
     -- Send the input
-    _ <- resourceForkIOExc "fastCGIOutputThread" $
-        if methodHasRequestBody method
-          then
+    if methodHasRequestBody method
+      then do
+        _ <- resourceForkIOExc "fastCGIOutputThread" $
             (
                 client_input
                 =$=
@@ -226,14 +241,16 @@ processOutputAndStdErr request_id method client_input ioc =
                 =$=
                 (CL.mapM_  (liftIO `fmap` push ) )
                 )
-          else
-            (
-                (yield "")
-                $$
-                (toWrappedStream Stdin_RT request_id)
-                =$=
-                (CL.mapM_  (liftIO `fmap` push ) )
-                )
+        return ()
+      else do
+        -- return ()
+        (
+            (yield "")
+            $$
+            (toWrappedStream Stdin_RT request_id)
+            =$=
+            (CL.mapM_  (liftIO `fmap` push ) )
+            )
 
     -- Receive the headers as soon as possible, and prepare to receive
     -- any data to the application and forward it immediately to the inner side.
@@ -242,23 +259,37 @@ processOutputAndStdErr request_id method client_input ioc =
         $$+
         processHttp11OutputFromPipe method
 
+    (source, finalizer) <-  unwrapResumable resumable_source
+
     let
+
+
 
         unwrapped_plain :: Source AwareWorkerStack B.ByteString
         unwrapped_plain = do
-            (source, finalizer) <- lift $ unwrapResumable resumable_source
-            source
+            -- liftIO $ putStrLn "entering plain"
+            (
+                source =$=
+                CL.filter (\x -> B.length x > 0) =$=
+                CL.mapM ( \x -> do
+                       -- liftIO $ putStrLn $ " fetched length = " ++ show (B.length x)
+                       return x
+                    )
+                )
+            -- liftIO $ putStrLn "exiting plain"
             lift finalizer
 
         unwrapped_chunked = do
-            (source, finalizer) <- lift $ unwrapResumable resumable_source
-            source =$= unwrapChunks
+            -- liftIO $ putStrLn "entering chunked"
+            source =$= CL.filter (\x -> B.length x > 0) =$= unwrapChunks
+            -- liftIO $ putStrLn "exiting chunks"
             lift finalizer
 
     return $ case do_with_body of
         None_RBH   -> HttpResponse {
             _headers_Rp = headers
-          , _body_Rp = return ()
+          , _body_Rp = do
+                            return ()
             }
 
         PlainBytes_RBH -> HttpResponse {
@@ -290,6 +321,19 @@ notThis forbid_name f =
   in test
 
 
+capitalize :: Header -> Header
+capitalize o@(hn, hv) =
+  let
+    maybe_low =  Ch8.unpack $ hn
+    high =  map toUpper maybe_low
+    high2 ='H':'T':'T':'P':'_': replaceUnderscore high
+    replaceUnderscore ('-': rest) = '_' : replaceUnderscore rest
+    replaceUnderscore (ch: rest) = ch : replaceUnderscore rest
+    replaceUnderscore [] = []
+    has_lower = any isLower maybe_low
+  in if has_lower then (Ch8.pack high2, hv) else o
+
+
 -- | We really need some value for the document root so that we can reason with
 --   things like PHP.
 requestHeadersToCGI :: B.ByteString -> He.Headers -> He.Headers
@@ -301,14 +345,17 @@ requestHeadersToCGI document_root headers_http =
     --
     basic_transformer_0 :: Header -> Header
     basic_transformer_0 =
-        shortCircuit "cookie" "HTTP_COOKIE" .
+        -- shortCircuit "cookie" "HTTP_COOKIE" .
         shortCircuit ":authority" "HTTP_HOST" .
-        shortCircuit "host" "HTTP_HOST" .
-        shortCircuit "referer" "HTTP_REFERER" .
-        shortCircuit "user-agent" "HTTP_USER_AGENT" .
+        -- shortCircuit "host" "HTTP_HOST" .
+        -- shortCircuit "referer" "HTTP_REFERER" .
+        -- shortCircuit "user-agent" "HTTP_USER_AGENT" .
         shortCircuit ":method" "REQUEST_METHOD" .
-        shortCircuit "content-length" "CONTENT_LENGTH" .
+        shortCircuit ":scheme" "SCHEME" .
+        shortCircuit ":path" "HTTP_URI_PATH" .
+        --shortCircuit "content-length" "CONTENT_LENGTH" .
         shortCircuit "accept" "HTTP_ACCEPT" .
+        shortCircuit "accept-charset" "HTTP_ACCEPT_CHARSET" .
         shortCircuit "accept-encoding" "HTTP_ACCEPT_ENCODING" .
         shortCircuit "accept-language" "HTTP_ACCEPT_LANGUAGE" .
         -- From here on, we need some help to get these expressed.
@@ -322,17 +369,9 @@ requestHeadersToCGI document_root headers_http =
         id
 
     -- Let's go for the first iteration
-    h1 = map basic_transformer_0 h0
+    h10 = map basic_transformer_0 h0
 
-    -- We need a path
-    path = case lookup ":path" headers_http of
-        Nothing -> "/"  -- Actually invalid, but this is too late to be raising
-                        -- exceptions
-        Just p -> p
-
-    (fcgi_uri, fcgi_query) = Ch8.span (/= '?') path
-     -- Now let's drop some interesting bits, like the :path
-    h2 = filter (
+    h100 = filter (
         notThis ":path"         .
         notThis ":authority"    .
         notThis "host"          .
@@ -341,11 +380,59 @@ requestHeadersToCGI document_root headers_http =
         notThis "document_root" .
         notThis "script_name"   $
         const True
-        ) h1
+        ) h10
 
-    h3 = ("QUERY_STRING", fcgi_query)     :
-         ("REQUEST_URI",  fcgi_uri)       :
+    h2 = h100 `seq` map capitalize h10
+
+    -- We need a path
+    path = case lookup ":path" headers_http of
+        Nothing -> "/"  -- Actually invalid, but this is too late to be raising
+                        -- exceptions
+        Just p -> p
+
+    (fcgi_uri, fcgi_query) = Ch8.span (/= '?') path
+    no_start =
+        let
+           (fch, rest) = B.splitAt 1 fcgi_uri
+        in
+           if B.length fcgi_uri > 0
+             then
+               if fch == "/" then sanitize rest
+                             else sanitize fcgi_uri
+             else
+               fcgi_uri
+    script_filename = Ch8.pack $  Ch8.unpack document_root </> Ch8.unpack  no_start
+     -- Now let's drop some interesting bits, like the :path
+
+
+    h3 = ( if B.length fcgi_query > 0
+              then ( ("QUERY_STRING", B.drop 1 fcgi_query) : )
+              else id
+         ) $
+         ("REQUEST_URI",  path)           :
+         ("SCRIPT_NAME", fcgi_uri)        :
+         ("SCRIPT_FILENAME", script_filename) :
          ("HTTPS", "on")                  :   -- TODO: Fix this
          ("DOCUMENT_ROOT", document_root) : h2
 
   in h3
+
+
+sanitize :: B.ByteString -> B.ByteString
+sanitize bs = Ch8.pack . go0 . Ch8.unpack $ bs
+  where
+    go0 :: String -> String
+    go0 ('/':rest) = '/' : danger0 rest
+    go0 (x: rest) = x : go0 rest
+    go0 [] = []
+
+    danger0 ('.': rest) = '.' : danger1 rest
+    danger0 ('/': rest) = danger0 rest
+    danger0 (x: rest ) = x: go0 rest
+    danger0 [] = []
+
+    -- Just break the spell
+    danger1 ('/': rest) = 'I':'N':'V' : go0 rest
+    danger1 ('.': rest) = 'I':'N':'V' : go0 rest
+    danger1 (x : rest ) = x : go0 rest
+    danger1 [] = []

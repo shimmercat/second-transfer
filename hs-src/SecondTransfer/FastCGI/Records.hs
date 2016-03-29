@@ -197,6 +197,7 @@ wrapRecordFrame record_type request_id payload =
     putWord8 content_length_b0
 
     putWord8 0 -- Padding length
+    putWord8 0 -- Reserved
 
     -- Now finally put the data
     putLazyByteString payload
@@ -233,8 +234,14 @@ toWrappedStream record_type request_id =
           maybe_new_data <- await
           case maybe_new_data of
               Nothing -> do
-                  yield ""
                   return ()
-              Just fragment -> go fragment
+              Just fragment
+                 | LB.length fragment > 0 -> go fragment
+                 | otherwise -> do
+                       let
+                           wrapped_frame = runPut $
+                               wrapRecordFrame record_type request_id ""
+                       yield wrapped_frame
+                       go ""
   in
     go ""
