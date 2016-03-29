@@ -183,10 +183,11 @@ framesSource bepa =
             case maybe_frame of
                 Just frame -> case frame ^. type_RH of
                     Stderr_RT -> do
-                        -- TODO: Properly propagate to the server
-                        liftIO $
-                            putStrLn $
-                                "ErrorData FastCGI: " ++ show (frame ^. payload_RH)
+                        -- TODO: Properly propagate to the server logs.
+                        -- See #26
+                        -- liftIO $
+                        --     putStrLn $
+                        --         "ErrorData FastCGI: " ++ show (frame ^. payload_RH)
                         frames_interpreter
                     Stdout_RT -> do
                         let
@@ -262,8 +263,6 @@ processOutputAndStdErr request_id method client_input ioc =
     (source, finalizer) <-  unwrapResumable resumable_source
 
     let
-
-
 
         unwrapped_plain :: Source AwareWorkerStack B.ByteString
         unwrapped_plain = do
