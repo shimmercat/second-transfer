@@ -29,10 +29,10 @@ ghc_includes=$(stack path --global-pkg-db)/../include/
 if [[ $platform == 'darwin' ]] ; then 
     libname=libsecond_transfer__enable_tls.dylib
     iplace=/usr/local/shimmercat-build/
-    CXX=g++-5.0
+    CXX=g++-5
     botan_name=botan-1.11 
     botan_location=/usr/local
-    botan_includes=$botan_location/include/botan-11
+    botan_includes=$botan_location/include/botan-1.11
     botan_lib_dir=/usr/local/shimmercat-build 
     pushd $THIS_DIR/..
     placement_path=`stack path --local-install-root`/lib/x86_64-osx-ghc-$GHC_VERSION/
