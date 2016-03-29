@@ -345,19 +345,10 @@ requestHeadersToCGI document_root headers_http =
     --
     basic_transformer_0 :: Header -> Header
     basic_transformer_0 =
-        -- shortCircuit "cookie" "HTTP_COOKIE" .
         shortCircuit ":authority" "HTTP_HOST" .
-        -- shortCircuit "host" "HTTP_HOST" .
-        -- shortCircuit "referer" "HTTP_REFERER" .
-        -- shortCircuit "user-agent" "HTTP_USER_AGENT" .
         shortCircuit ":method" "REQUEST_METHOD" .
         shortCircuit ":scheme" "SCHEME" .
         shortCircuit ":path" "HTTP_URI_PATH" .
-        --shortCircuit "content-length" "CONTENT_LENGTH" .
-        shortCircuit "accept" "HTTP_ACCEPT" .
-        shortCircuit "accept-charset" "HTTP_ACCEPT_CHARSET" .
-        shortCircuit "accept-encoding" "HTTP_ACCEPT_ENCODING" .
-        shortCircuit "accept-language" "HTTP_ACCEPT_LANGUAGE" .
         -- From here on, we need some help to get these expressed.
         -- TODO:  Create a function that translates the perception to enhanced
         -- headers ....
