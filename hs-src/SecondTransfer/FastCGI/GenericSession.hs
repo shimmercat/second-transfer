@@ -56,7 +56,7 @@ import qualified SecondTransfer.Utils.HTTPHeaders                          as He
 import           SecondTransfer.Exception                                  (resourceForkIOExc)
 import           SecondTransfer.MainLoop.CoherentWorker                    (Headers,
                                                                            HeaderName,
-                                                                           HeaderValue,
+                                                                           --HeaderValue,
                                                                            AwareWorkerStack,
                                                                            Header)
 import           SecondTransfer.FastCGI.Records
@@ -66,7 +66,7 @@ type RawFilePath = B.ByteString
 
 
 data SessionConfig = SessionConfig {
-    _documentRoot_cgiSC     :: RawFilePath
+    _documentRoot_cgiSC     :: Maybe RawFilePath
     }
     deriving Show
 
@@ -335,8 +335,8 @@ capitalize o@(hn, hv) =
 
 -- | We really need some value for the document root so that we can reason with
 --   things like PHP.
-requestHeadersToCGI :: B.ByteString -> He.Headers -> He.Headers
-requestHeadersToCGI document_root headers_http =
+requestHeadersToCGI :: Maybe B.ByteString -> He.Headers -> He.Headers
+requestHeadersToCGI maybe_document_root headers_http =
   let
     t1 :: Header -> Header
     t1 =  over _1 (Ch8.pack . map toLower . Ch8.unpack)
@@ -391,19 +391,31 @@ requestHeadersToCGI document_root headers_http =
                              else sanitize fcgi_uri
              else
                fcgi_uri
+
+    Just document_root = maybe_document_root
+
     script_filename = Ch8.pack $  Ch8.unpack document_root </> Ch8.unpack  no_start
      -- Now let's drop some interesting bits, like the :path
 
 
-    h3 = ( if B.length fcgi_query > 0
-              then ( ("QUERY_STRING", B.drop 1 fcgi_query) : )
-              else id
-         ) $
-         ("REQUEST_URI",  path)           :
-         ("SCRIPT_NAME", fcgi_uri)        :
-         ("SCRIPT_FILENAME", script_filename) :
-         ("HTTPS", "on")                  :   -- TODO: Fix this
-         ("DOCUMENT_ROOT", document_root) : h2
+    h3 = case maybe_document_root of
+        Just _ -> ( if B.length fcgi_query > 0
+                           then ( ("QUERY_STRING", B.drop 1 fcgi_query) : )
+                           else id
+                      ) $
+                      ("REQUEST_URI",  path)           :
+                      ("SCRIPT_NAME", fcgi_uri)        :
+                      ("SCRIPT_FILENAME", script_filename) :
+                      ("HTTPS", "on")                  :   -- TODO: Fix this
+                      ("DOCUMENT_ROOT", document_root) : h2
+
+        Nothing -> ( if B.length fcgi_query > 0
+                           then ( ("QUERY_STRING", B.drop 1 fcgi_query) : )
+                           else id
+                      ) $
+                      ("REQUEST_URI",  path)           :
+                      ("SCRIPT_NAME", fcgi_uri)        :
+                      ("HTTPS", "on")                  : h2
 
   in h3
 
