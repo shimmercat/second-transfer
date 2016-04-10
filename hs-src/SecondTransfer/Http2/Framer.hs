@@ -963,20 +963,15 @@ resetTime :: Double
 resetTime = 2.0
 
 sizeSequence :: DVec.Vector Int
-sizeSequence = DVec.fromList [1000,
-                              1000,
-                              1000,
-                              1000,
-                              1000,
-                              1000,
+sizeSequence = DVec.fromList [500,
                               1000,
                               1000,
                               2448,
                               2448,
                               2448,
-                              2448,
-                              2448,
-                              2448,
+                              4248,
+                              4248,
+                              4248,
                               8448,
                               8448,
                               8448,
@@ -1022,7 +1017,7 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
             )
 
         use_size = if sequence_number >= DVec.length sizeSequence
-            then 8200  -- Should end in something close to 16 kb
+            then DVec.last sizeSequence  -- Should end in something close to 16 kb
             else sizeSequence DVec.! sequence_number
 
     builder <- liftIO $ getDataUpTo pss use_size
