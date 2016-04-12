@@ -208,9 +208,12 @@ instance TLSServerIO TLSServer
 
 -- | A connection number
 newtype ConnectionId = ConnectionId Int64
-    deriving (Eq, Ord, Show, Enum)
+    deriving (Eq, Ord,  Enum)
 
 makeLenses ''ConnectionId
+
+instance Show ConnectionId where
+    show (ConnectionId c) = "C/" ++ (show c)
 
 -- | Some context  related to a connection
 data ConnectionData =  ConnectionData {

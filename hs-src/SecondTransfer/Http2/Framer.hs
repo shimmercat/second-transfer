@@ -184,10 +184,14 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         push_action = io_callbacks ^. pushAction_IOC
         pull_action = io_callbacks ^. pullAction_IOC
         close_action = io_callbacks ^. closeAction_IOC
+        (ConnectionId new_session_id') = connection_info ^. connId_CnD
+        new_session_id = fromIntegral new_session_id'
 
-    new_session_id <- modifyMVarMasked
-        session_id_mvar $
-        \ session_id -> return $ session_id `seq` (session_id + 1, session_id)
+    -- new_session_id <- modifyMVarMasked
+    --     session_id_mvar $
+    --     \ session_id -> return $ session_id `seq` (session_id + 1, session_id)
+
+
 
     (session_input, session_output) <- case session_payload of
         AwareWorker_SP aware_worker ->  http2ServerSession

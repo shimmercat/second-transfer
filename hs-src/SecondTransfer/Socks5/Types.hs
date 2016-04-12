@@ -52,7 +52,10 @@ import           SecondTransfer.IOCallbacks.Types                          (IOCa
 
 -- | Connection ID for SOCKS5 Connections
 newtype S5ConnectionId = S5ConnectionId Int64
-    deriving (Eq, Ord, Show, Enum)
+    deriving (Eq, Ord, Enum)
+
+instance Show S5ConnectionId where
+    show (S5ConnectionId c) = "S5/" ++ (show c)
 
 -- | SOCKS5 Connections, and where are they handled
 data Socks5ConnectEvent =
