@@ -190,7 +190,7 @@ data GatewayAbortedException = GatewayAbortedException
 
 instance Exception GatewayAbortedException where
     toException = convertHTTP500PrecursorExceptionToException
-    fromException = getHTTP11ExceptionFromException
+    fromException = getHTTP500PrecursorExceptionFromException
 
 gatewayAbortedException :: Proxy GatewayAbortedException
 gatewayAbortedException = Proxy
