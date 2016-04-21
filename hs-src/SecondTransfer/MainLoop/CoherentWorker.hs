@@ -60,6 +60,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , interrupt_Ef
 
     , defaultEffects
+    , defaultPerception
     , coherentToAwareWorker
 
     , tupledPrincipalStreamToPrincipalStream
@@ -110,6 +111,10 @@ type AwareWorkerStack = ResourceT IO
 type InputDataStream = Source AwareWorkerStack B.ByteString
 
 
+-- | Latency, in pairs (bytes-send, time)
+type SessionLatencyRegister = [(Int, Double)]
+
+
 -- | Data related to the request
 data Perception = Perception {
     -- | The HTTP/2 stream id. Or the serial number of the request in an
@@ -128,10 +133,26 @@ data Perception = Perception {
     -- | tuple with something like the IPv4 number for the requesting host
     _peerAddress_Pr       :: Maybe HashableSockAddr,
     -- | Say if this connection enables Push
-    _pushIsEnabled_Pr    :: Bool
+    _pushIsEnabled_Pr    :: Bool,
+    -- | Records any values of latencies reported for this session
+    _sessionLatencyRegister :: SessionLatencyRegister
   }
 
 makeLenses ''Perception
+
+
+defaultPerception :: Perception
+defaultPerception = Perception {
+    _streamId_Pr = 0
+  , _sessionId_Pr = 0
+  , _startedTime_Pr = error "StartedTimeNotSet"
+  , _protocol_Pr = Http11_HPV
+  , _anouncedProtocols_Pr = Nothing
+  , _peerAddress_Pr = Nothing
+  , _pushIsEnabled_Pr = False
+  , _sessionLatencyRegister = []
+  }
+
 
 
 -- | A request is a set of headers and a request body....

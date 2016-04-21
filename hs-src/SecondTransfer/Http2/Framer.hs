@@ -38,6 +38,7 @@ import           Data.Conduit
 import           Data.Foldable                          (find)
 import           Data.IORef
 import qualified Data.Vector                            as DVec
+import           Data.Word                              (Word64)
 --import qualified Data.PQueue.Min                        as PQ
 --import           Data.Maybe                             (fromMaybe)
 
@@ -99,8 +100,12 @@ type Stream2AvailSpace = HashTable GlobalStreamId (Chan FlowControlCommand)
 -- | To measure and tune packet size as a measure of how much data
 --   has been put into the network so far.
 data TrayMeter  = TrayMeter {
+    -- | When the last packet was sent
     _lastSentPacket_TrM      :: !TimeSpec
+    -- | How many packets are in the current trend
   , _packetsInTrend_TrM      :: !Int
+    -- | Is this the first time we are at the meter?
+  , _isFresh_TrM             :: !Bool
     }
     deriving Show
 
@@ -153,6 +158,7 @@ data FramerSessionData = FramerSessionData {
 
     -- A flag to set when signaling goAway
     , _goAwaySignaled        :: IORef Bool
+
     }
 
 L.makeLenses ''FramerSessionData
@@ -221,7 +227,6 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
     priority_send_state       <- newPriorityChannelState
 
     go_away_signaled_ioref    <- liftIO $ newIORef False
-
     -- TODO: this one should be comming from the SessionsConfig struct at Sessions/Config.hs
     let max_recv_frame_size   =  16384
 
@@ -936,7 +941,6 @@ goAwaySend  datum =
     liftIO $ writeIORef goaway_ioref True
 
 
-
 serializeMany :: [OutputFrame] -> LB.ByteString
 serializeMany frames =
     Bu.toLazyByteString $ mconcat (map (\ (a,b,_) -> Bu.byteString $ NH2.encodeFrame a b ) frames)
@@ -960,8 +964,20 @@ pushGoAwayFrame frame_encode_info frame_payload =
 startTrayMeter :: TimeSpec -> TrayMeter
 startTrayMeter starttime = TrayMeter {
     _lastSentPacket_TrM  = starttime
-  , _packetsInTrend_TrM   = 0
+  , _packetsInTrend_TrM  = 0
+  , _isFresh_TrM         = True
     }
+
+
+-- | Called to create a new TrayMeter when the connection is timing out...
+restartTrayMeter :: TimeSpec -> TrayMeter
+restartTrayMeter starttime = TrayMeter {
+    _lastSentPacket_TrM  = starttime
+  , _packetsInTrend_TrM  = 0
+  , _isFresh_TrM         = False
+    }
+
+
 
 resetTime :: Double
 resetTime = 2.0
@@ -988,6 +1004,7 @@ sizeSequence = DVec.fromList [500,
                               15448
                              ]
 
+
 -- | In charge of actually sending the  frames, in a special thread (create said thread
 -- in the caller).
 --
@@ -1007,16 +1024,19 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
     let
         (sequence_number, new_meter ) = if
             (
-              (fromIntegral $ timeSpecAsNanoSecs (  now - tray_meter ^. lastSentPacket_TrM  ))) / 1.0e9 > resetTime
+              (fromIntegral $
+                   timeSpecAsNanoSecs (  now - tray_meter ^. lastSentPacket_TrM  )
+              )
+            ) / 1.0e9 > resetTime
           then
-            (0, startTrayMeter now)
+            (0, restartTrayMeter now)
           else
             (
               tray_meter ^. packetsInTrend_TrM,
               (
                 L.over packetsInTrend_TrM (+ 1 ) .
                 L.set lastSentPacket_TrM now $
-                tray_meter
+                    tray_meter
               )
             )
 
@@ -1024,7 +1044,17 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
             then DVec.last sizeSequence  -- Should end in something close to 16 kb
             else sizeSequence DVec.! sequence_number
 
-    builder <- liftIO $ getDataUpTo pss use_size
+    should_report_latency <- shouldReportLatency tray_meter
+
+    -- If latency should be reported, send out a Ping frame
+    builder <- if  should_report_latency
+      then  do
+        b0 <- liftIO $ getDataUpTo pss use_size
+        let
+            bf = pingFrameOut sequence_number
+        return $ bf `mappend` b0
+      else do
+        liftIO $ getDataUpTo pss use_size
 
     let
         entries_data = Bu.toLazyByteString builder
@@ -1039,3 +1069,34 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
       else do
         sendBytesN entries_data
         sendReordering new_meter
+
+
+-- | Checks the local environment and the configuration to decide if this is a good
+--   point to emit a ping frame
+shouldReportLatency :: TrayMeter -> FramerSession Bool
+shouldReportLatency tm =
+  do
+    collect_latency <- view (sessionsContext . sessionsConfig . collectLatencyData)
+    let
+        seq_no = tm ^. packetsInTrend_TrM
+    return $
+       ( tm ^. isFresh_TrM )    &&
+       (
+           seq_no == 1 ||
+           seq_no == 4 ||
+           seq_no == 7
+        )  &&
+        collect_latency
+
+
+pingFrameOut :: Int -> Bu.Builder
+pingFrameOut seq_no =
+    mconcat . map Bu.byteString $
+        NH2.encodeFrameChunks
+          (NH2.EncodeInfo 0 0 Nothing)
+          (NH2.PingFrame seq_no_8)
+  where
+    seq_no_word64 :: Word64
+    seq_no_word64 = fromIntegral seq_no
+
+    seq_no_8 = LB.toStrict . Bu.toLazyByteString . Bu.word64BE $ seq_no_word64

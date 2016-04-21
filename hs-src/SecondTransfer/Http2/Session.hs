@@ -201,14 +201,15 @@ type Stream2HeaderBlockFragment = HashTable GlobalStreamId Bu.Builder
 type WorkerMonad = ReaderT WorkerThreadEnvironment IO
 
 
--- Have to figure out which are these...but I would expect to have things
+-- |Have to figure out which are these...but I would expect to have things
 -- like unexpected aborts here in this type.
 data SessionInputCommand =
-    FirstFrame_SIC InputFrame               -- This frame is special
-    |MiddleFrame_SIC InputFrame             -- Ordinary frame
-    |InternalAbort_SIC                      -- Internal abort from the session itself
-    |InternalAbortStream_SIC GlobalStreamId  -- Internal abort, but only for a frame
-    |CancelSession_SIC                      -- Cancel request from the framer
+    FirstFrame_SIC InputFrame               -- | This frame is special
+    |MiddleFrame_SIC InputFrame             -- | Ordinary frame
+    |InternalAbort_SIC                      -- | Internal abort from the session itself
+    |InternalAbortStream_SIC GlobalStreamId  -- | Internal abort, but only for a frame
+    |CancelSession_SIC                      -- |Cancel request from the framer
+    |PingFrameEmitted_SIC (Int, TimeSpec)   -- |The Framer decided to emit a ping request, this is the sequence number (of the packet it was sent on) and the time
   deriving Show
 
 
@@ -378,6 +379,9 @@ data SessionData = SessionData {
 
     -- Used to decide what to do when some exceptions bubble
     ,_sessionIsEnding            :: DIO.IORef Bool
+
+    -- Used to store latency reports
+    ,_latencyReports             :: MVar [(Int, Double)]
     }
 
 
@@ -442,6 +446,9 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
     -- What about stream cancellation?
     cancelled_streams_mvar    <- newMVar $ NS.empty :: IO (MVar NS.IntSet)
 
+    -- Empty initial latency report
+    latency_reports           <- newMVar []
+
     let
         for_worker_thread = WorkerThreadEnvironment {
              _streamId_WTE = error "NotInitialized"
@@ -480,6 +487,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
         ,_startTime                  = start_time
         ,_peerAddress                = maybe_hashable_addr
         ,_sessionIsEnding            = session_is_ending_ioref
+        ,_latencyReports             = latency_reports
         }
 
     let
@@ -627,6 +635,9 @@ sessionInputThread  = do
             -- Bad, incorrect id or god knows only what ....
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
+
+        PingFrameEmitted_SIC (seq_no, timepec) -> do
+            continue
 
         CancelSession_SIC -> do
             -- Good place to tear down worker threads... Let the rest of the finalization
@@ -1070,6 +1081,12 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
                     liftIO . DIO.readIORef $
                         session_settings ^. pushEnabled_SeS
 
+                latency_report_mvar <-
+                    view latencyReports
+                latency_report <-
+                    liftIO . readMVar $ latency_report_mvar
+
+
                 let
                     perception = Perception {
                         _startedTime_Pr = headers_arrived_time,
@@ -1078,7 +1095,8 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
                         _protocol_Pr = Http2_HPV,
                         _anouncedProtocols_Pr = Nothing,
                         _peerAddress_Pr = maybe_hashable_addr,
-                        _pushIsEnabled_Pr = push_enabled
+                        _pushIsEnabled_Pr = push_enabled,
+                        _sessionLatencyRegister = latency_report
                         }
                     request' = Request {
                         _headers_RQ = header_list_after,

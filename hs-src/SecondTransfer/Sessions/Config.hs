@@ -20,6 +20,7 @@ module SecondTransfer.Sessions.Config(
                , pushEnabled
                , firstPushStream
                , trayMaxSize
+               , collectLatencyData
 
                , SessionComponent                       (..)
                , SessionCoordinates                     (..)
@@ -183,6 +184,8 @@ data SessionsConfig = SessionsConfig {
    --   that more memory is used by the packets have a higher chance of going
    --   out in a favourable order.
  , _trayMaxSize               :: Int
+   -- | Should we collect latency data?
+ , _collectLatencyData        :: Bool
    }
 
 makeLenses ''SessionsConfig
@@ -208,10 +211,11 @@ defaultSessionsConfig = SessionsConfig {
   , _dataFrameSize = 16*1024
   , _pushEnabled = True
   , _firstPushStream = 8
-  -- Max number of packets that can be waiting to exit. A big number here
+  -- | Max number of packets that can be waiting to exit. A big number here
   -- is desirable, but counts towards the memory consumption when the network is slow...
   -- so for now let's make it a little bit lower. In the future we may want to adjust
   -- this number dynamically.
   -- , _trayMaxSize = 128
   , _trayMaxSize = 16
+  , _collectLatencyData = False
     }
