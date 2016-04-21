@@ -306,7 +306,7 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ ignoreException blockedIndefinitelyOnSTM  ()
         $ close_on_error new_session_id sessions_context
-        $ runReaderT (sendReordering $ startTrayMeter now) framer_session_data
+        $ runReaderT (sendReordering session_input $ startTrayMeter now) framer_session_data
 
     return ()
 
@@ -1014,8 +1014,8 @@ sizeSequence = DVec.fromList [500,
 -- As long as all the pipes connecting components of the system are bound, terminating
 -- this function and it's thread should propagate as blocked-indefinitely errors to
 -- all the other threads to pipes.
-sendReordering :: TrayMeter -> FramerSession ()
-sendReordering tray_meter = {-# SCC sndReo  #-} do
+sendReordering :: SessionInput -> TrayMeter -> FramerSession ()
+sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
     pss <- view prioritySendState
     close_action <- view closeAction
     now <- liftIO . getTime $ Monotonic
@@ -1052,6 +1052,10 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
         b0 <- liftIO $ getDataUpTo pss use_size
         let
             bf = pingFrameOut sequence_number
+        liftIO $
+            sendCommandToSession
+                session_input
+                (PingFrameEmitted_SIC (sequence_number, now))
         return $ bf `mappend` b0
       else do
         liftIO $ getDataUpTo pss use_size
@@ -1068,7 +1072,7 @@ sendReordering tray_meter = {-# SCC sndReo  #-} do
         liftIO close_action
       else do
         sendBytesN entries_data
-        sendReordering new_meter
+        sendReordering session_input new_meter
 
 
 -- | Checks the local environment and the configuration to decide if this is a good

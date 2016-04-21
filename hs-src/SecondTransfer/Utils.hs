@@ -11,6 +11,7 @@ module SecondTransfer.Utils (
     ,stripString
     ,domainFromUrl
     ,subByteString
+    ,bs8toWord64
     ) where
 
 
@@ -25,6 +26,7 @@ import           Data.ByteString.Char8     (pack, unpack)
 import           Data.Conduit
 import qualified Data.Text                 as T
 import           Data.Text.Encoding
+import           Data.Word                 (Word64)
 import qualified Network.URI               as U
 
 
@@ -110,3 +112,20 @@ domainFromUrl url = let
 subByteString :: Int -> Int -> B.ByteString -> B.ByteString
 subByteString start_pos end_pos  =
     B.take (end_pos - start_pos ) . B.drop start_pos
+
+
+-- | Kind of inefficient...
+bs8toWord64 :: B.ByteString  -> Word64
+bs8toWord64 b =
+  let
+    (b0: b1 : b2 : b3 : b4 : b5 : b6 : b7 : []) = B.unpack b
+    bb0 = fromIntegral b0 `shiftL` (64 - 8)
+    bb1 = fromIntegral b1 `shiftL` (64 - 16)
+    bb2 = fromIntegral b1 `shiftL` (64 - 24)
+    bb3 = fromIntegral b1 `shiftL` (64 - 32)
+    bb4 = fromIntegral b1 `shiftL` (64 - 40)
+    bb5 = fromIntegral b1 `shiftL` (64 - 48)
+    bb6 = fromIntegral b1 `shiftL` (64 - 56)
+    bb7 = fromIntegral b1
+  in
+    bb0 + bb1 + bb2 + bb3 + bb4 + bb5 + bb6 + bb7

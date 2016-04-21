@@ -75,6 +75,7 @@ import qualified Network.HTTP2                          as NH2
 import qualified Control.Monad.Trans.Resource           as ReT
 import           System.Clock                            ( getTime
                                                          , Clock(..)
+                                                         , timeSpecAsNanoSecs
                                                          , TimeSpec
                                                          )
 
@@ -90,7 +91,7 @@ import           SecondTransfer.IOCallbacks.Types       (ConnectionData, addr_Cn
 import           SecondTransfer.Sessions.Internal       (--sessionExceptionHandler,
                                                          SessionsContext,
                                                          sessionsConfig)
-import           SecondTransfer.Utils                   (unfoldChannelAndSource)
+import           SecondTransfer.Utils                   (unfoldChannelAndSource, bs8toWord64)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import qualified SecondTransfer.Http2.TransferTypes     as TT
@@ -382,6 +383,10 @@ data SessionData = SessionData {
 
     -- Used to store latency reports
     ,_latencyReports             :: MVar [(Int, Double)]
+
+    -- Used to store information about an emitted ping
+    -- frame in the connection
+    ,_emittedPings               :: MVar [(Int, TimeSpec)]
     }
 
 
@@ -448,6 +453,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
 
     -- Empty initial latency report
     latency_reports           <- newMVar []
+    emitted_pings             <- newMVar []
 
     let
         for_worker_thread = WorkerThreadEnvironment {
@@ -488,6 +494,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
         ,_peerAddress                = maybe_hashable_addr
         ,_sessionIsEnding            = session_is_ending_ioref
         ,_latencyReports             = latency_reports
+        ,_emittedPings               = emitted_pings
         }
 
     let
@@ -636,7 +643,10 @@ sessionInputThread  = do
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
-        PingFrameEmitted_SIC (seq_no, timepec) -> do
+        PingFrameEmitted_SIC x@(seq_no, timespec) -> do
+            emitted_pings_mvar <- view emittedPings
+            liftIO . modifyMVar_ emitted_pings_mvar $ \ emitted_pings ->
+                return $ x : emitted_pings
             continue
 
         CancelSession_SIC -> do
@@ -774,8 +784,8 @@ sessionInputThread  = do
                     closePostDataSource stream_id
                   else
                     return ()
-
                 continue
+
               else do
                 -- For some reason there is no PostInput processing mechanism, therefore,
                 -- we were not expecting data at this point
@@ -786,9 +796,33 @@ sessionInputThread  = do
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
-        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _)) | NH2.testAck flags-> do
-            -- Deal with pings: this is an Ack, so do nothing
-            -- In the future we may have some metric information here....
+        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame ping_payload)) | NH2.testAck flags-> do
+            -- Deal with pings: this is an Ack, register it if possible...
+            let
+                seq_no = fromIntegral $ bs8toWord64 ping_payload
+            emitted_pings_mvar <- view emittedPings
+            latency_report_mvar <- view latencyReports
+            liftIO $ do
+                now <- getTime Monotonic
+                modifyMVar_ emitted_pings_mvar $ \ emitted_pings ->
+                    modifyMVar latency_report_mvar $ \ latency_report -> do
+                        let
+                            lookupX ((sn, ws):rest) | sn == seq_no = (Just ws, rest)
+                                                    | otherwise =
+                                                       let
+                                                           (r , n) = lookupX rest
+                                                        in (r, (sn, ws):n)
+                            lookupX [] = (Nothing, [])
+                            (maybe_when_sent, new_emitted_pings) =  lookupX emitted_pings
+                        case maybe_when_sent of
+                            Nothing -> return (latency_report, emitted_pings)
+                            Just when_sent -> do
+                                let
+                                    milliseconds = (fromIntegral $
+                                        timeSpecAsNanoSecs ( now - when_sent)) / 1.0e6
+                                    new_latency_report = (seq_no, milliseconds) : latency_report
+                                return (new_latency_report, new_emitted_pings)
+
             continue
 
         MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do
@@ -1096,7 +1130,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
                         _anouncedProtocols_Pr = Nothing,
                         _peerAddress_Pr = maybe_hashable_addr,
                         _pushIsEnabled_Pr = push_enabled,
-                        _sessionLatencyRegister = latency_report
+                        _sessionLatencyRegister_Pr = latency_report
                         }
                     request' = Request {
                         _headers_RQ = header_list_after,

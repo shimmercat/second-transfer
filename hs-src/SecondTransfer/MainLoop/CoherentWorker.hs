@@ -54,6 +54,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , peerAddress_Pr
     , protocol_Pr
     , pushIsEnabled_Pr
+    , sessionLatencyRegister_Pr
 
     , fragmentDeliveryCallback_Ef
     , priorityEffect_Ef
@@ -135,7 +136,7 @@ data Perception = Perception {
     -- | Say if this connection enables Push
     _pushIsEnabled_Pr    :: Bool,
     -- | Records any values of latencies reported for this session
-    _sessionLatencyRegister :: SessionLatencyRegister
+    _sessionLatencyRegister_Pr :: SessionLatencyRegister
   }
 
 makeLenses ''Perception
@@ -150,7 +151,7 @@ defaultPerception = Perception {
   , _anouncedProtocols_Pr = Nothing
   , _peerAddress_Pr = Nothing
   , _pushIsEnabled_Pr = False
-  , _sessionLatencyRegister = []
+  , _sessionLatencyRegister_Pr = []
   }
 
 
