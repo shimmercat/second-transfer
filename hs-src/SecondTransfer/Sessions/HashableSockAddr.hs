@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts, Rank2Types, TemplateHaskell, OverloadedStrings, GADTs, DeriveGeneric #-}
 module SecondTransfer.Sessions.HashableSockAddr (
-                 HashableSockAddr
+                 HashableSockAddr                        (..)
                , hashableSockAddrFromNSSockAddr
         ) where
 

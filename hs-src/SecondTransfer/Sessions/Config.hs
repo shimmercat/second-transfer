@@ -31,7 +31,7 @@ module SecondTransfer.Sessions.Config(
                , ErrorCallback
                , DataFrameDeliveryCallback
                , NewSessionCallback                     (..)
-               , HashableSockAddr
+               , HashableSockAddr                       (..)
 
                , ActivityMeteredSession                 (..)
                , CleanlyPrunableSession                 (..)
@@ -50,7 +50,7 @@ import           Control.Lens                             (makeLenses)
 import           System.Clock                             (TimeSpec)
 
 import           SecondTransfer.IOCallbacks.Types         (IOCallbacks)
-import           SecondTransfer.Sessions.HashableSockAddr (HashableSockAddr)
+import           SecondTransfer.Sessions.HashableSockAddr (HashableSockAddr (..))
 
 -- | Information used to identify a particular session.
 newtype SessionCoordinates = SessionCoordinates  Int

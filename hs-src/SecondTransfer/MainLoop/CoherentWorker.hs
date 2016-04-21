@@ -32,6 +32,8 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , FragmentDeliveryCallback
     , InterruptEffect(..)
     , PriorityEffect(..)
+    , HttpProtocolVersion(..)
+    , HashableSockAddr(..)
 
     , headers_RQ
     , inputData_RQ
@@ -73,8 +75,8 @@ import           Data.Conduit
 import           Data.Foldable                         (find)
 import           System.Clock                          (TimeSpec)
 
-import           SecondTransfer.MainLoop.Protocol      (HttpProtocolVersion)
-import           SecondTransfer.Sessions.Config        (HashableSockAddr)
+import           SecondTransfer.MainLoop.Protocol      (HttpProtocolVersion (..))
+import           SecondTransfer.Sessions.Config        (HashableSockAddr (..))
 
 
 -- | The name part of a header
