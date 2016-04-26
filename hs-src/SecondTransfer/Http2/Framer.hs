@@ -1089,7 +1089,7 @@ shouldReportLatency tm =
         seq_no = tm ^. packetsInTrend_TrM
     return $
        (
-           seq_no == 0 ||
+           seq_no == 1 ||
            seq_no == 3 ||
            seq_no == 5 ||
            seq_no == 7

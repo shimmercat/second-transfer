@@ -751,40 +751,50 @@ sessionInputThread  = do
                 -- After that data has been received and forwarded downstream, we can issue a windows update
                 --
                 --
-                -- TODO: Consider that the best place to output these frames can be somewhere else...
-                --
-                -- TODO: Use a special, with-quota queue here to do flow control. Don't send meaningless
-                --       WindowUpdateFrame's
-                sendOutPriorityTrainMany [
-                      (
-                        (NH2.EncodeInfo
-                            NH2.defaultFlags
-                            nh2_stream_id
-                            Nothing
-                        ),
-                        (NH2.WindowUpdateFrame
-                            (fromIntegral (B.length somebytes))
-                        )
-                      ),
-
-                      (
-                        (NH2.EncodeInfo
-                            NH2.defaultFlags
-                            0
-                            Nothing
-                        ),
-                        (NH2.WindowUpdateFrame
-                            (fromIntegral (B.length somebytes))
-                        )
-                      )
-                    ]
+                -- TODO: I think we are sending data the correct way, but there are no warranties
 
                 if frameEndsStream frame
                   then do
                     -- Good place to close the source ...
                     closePostDataSource stream_id
+                    when (B.length somebytes > 0) $ do
+                        sendOutPriorityTrainMany [
+                          (
+                            (NH2.EncodeInfo
+                                NH2.defaultFlags
+                                0
+                                Nothing
+                            ),
+                            (NH2.WindowUpdateFrame
+                                (fromIntegral (B.length somebytes))
+                            )
+                          )
+                          ]
                   else
-                    return ()
+                    when (B.length somebytes > 0) $ do
+                        sendOutPriorityTrainMany [
+                          (
+                            (NH2.EncodeInfo
+                                NH2.defaultFlags
+                                nh2_stream_id
+                                Nothing
+                            ),
+                            (NH2.WindowUpdateFrame
+                                (fromIntegral (B.length somebytes))
+                            )
+                          ),
+
+                          (
+                            (NH2.EncodeInfo
+                                NH2.defaultFlags
+                                0
+                                Nothing
+                            ),
+                            (NH2.WindowUpdateFrame
+                                (fromIntegral (B.length somebytes))
+                            )
+                          )
+                          ]
                 continue
 
               else do
