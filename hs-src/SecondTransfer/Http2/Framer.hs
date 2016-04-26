@@ -1050,7 +1050,8 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
 
     should_report_latency <- shouldReportLatency tray_meter
 
-    -- If latency should be reported, send out a Ping frame
+    -- If latency should be reported, send out a Ping frame.
+    -- Also, send it alone.
     builder <- if  should_report_latency
       then  do
         b0 <- liftIO $ getDataUpTo pss $ fromIntegral use_size
@@ -1060,7 +1061,7 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
             sendCommandToSession
                 session_input
                 (PingFrameEmitted_SIC (fromIntegral sequence_number, now))
-        return $  b0 `mappend` bf
+        return $  bf `mappend` b0
       else do
         liftIO $ getDataUpTo pss $ fromIntegral use_size
 
@@ -1089,7 +1090,7 @@ shouldReportLatency tm =
         seq_no = tm ^. packetsInTrend_TrM
     return $
        (
-           seq_no == 1 ||
+           seq_no == 2 ||
            seq_no == 3 ||
            seq_no == 5 ||
            seq_no == 7
