@@ -76,6 +76,7 @@ import qualified Control.Monad.Trans.Resource           as ReT
 import           System.Clock                            ( getTime
                                                          , Clock(..)
                                                          , timeSpecAsNanoSecs
+                                                         , diffTimeSpec
                                                          , TimeSpec
                                                          )
 
@@ -91,7 +92,7 @@ import           SecondTransfer.IOCallbacks.Types       (ConnectionData, addr_Cn
 import           SecondTransfer.Sessions.Internal       (--sessionExceptionHandler,
                                                          SessionsContext,
                                                          sessionsConfig)
-import           SecondTransfer.Utils                   (unfoldChannelAndSource, bs8toWord64)
+import           SecondTransfer.Utils                   (unfoldChannelAndSource, bs8BEtoWord64)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import qualified SecondTransfer.Http2.TransferTypes     as TT
@@ -100,7 +101,7 @@ import           SecondTransfer.MainLoop.Logging        (logit)
 
 #endif
 
--- import           Debug.Trace                            (traceStack)
+import           Debug.Trace                            (traceShowId)
 
 
 type InputFrame  = NH2.Frame
@@ -643,7 +644,7 @@ sessionInputThread  = do
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
-        PingFrameEmitted_SIC x@(seq_no, timespec) -> do
+        PingFrameEmitted_SIC x -> do
             emitted_pings_mvar <- view emittedPings
             liftIO . modifyMVar_ emitted_pings_mvar $ \ emitted_pings ->
                 return $ x : emitted_pings
@@ -799,11 +800,12 @@ sessionInputThread  = do
         MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame ping_payload)) | NH2.testAck flags-> do
             -- Deal with pings: this is an Ack, register it if possible...
             let
-                seq_no = fromIntegral $ bs8toWord64 ping_payload
+                seq_no = fromIntegral $ bs8BEtoWord64 ping_payload
             emitted_pings_mvar <- view emittedPings
             latency_report_mvar <- view latencyReports
             liftIO $ do
                 now <- getTime Monotonic
+                -- putStrLn $ "Received ack for " ++ (show seq_no)
                 modifyMVar_ emitted_pings_mvar $ \ emitted_pings ->
                     modifyMVar latency_report_mvar $ \ latency_report -> do
                         let
@@ -813,16 +815,22 @@ sessionInputThread  = do
                                                            (r , n) = lookupX rest
                                                         in (r, (sn, ws):n)
                             lookupX [] = (Nothing, [])
-                            (maybe_when_sent, new_emitted_pings) =  lookupX emitted_pings
+                            (maybe_when_sent, new_emitted_pings) =  lookupX $
+                                emitted_pings
                         case maybe_when_sent of
-                            Nothing -> return (latency_report, emitted_pings)
-                            Just when_sent -> do
+                            Just when_sent
+                              | length latency_report < 8 -> do
                                 let
+                                    tspec = now `diffTimeSpec` when_sent
                                     milliseconds = (fromIntegral $
-                                        timeSpecAsNanoSecs ( now - when_sent)) / 1.0e6
-                                    new_latency_report = (seq_no, milliseconds) : latency_report
+                                        timeSpecAsNanoSecs tspec ) / 1.0e6
+                                    new_latency_report = latency_report ++ [(seq_no, milliseconds)]
                                 return (new_latency_report, new_emitted_pings)
+                              | otherwise -> do
+                                -- Just remote the old ping
+                                return (latency_report, new_emitted_pings)
 
+                            _ -> return (latency_report, emitted_pings)
             continue
 
         MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do
