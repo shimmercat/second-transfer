@@ -708,8 +708,8 @@ sessionInputThread  = do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
               else do
+                reportSituation (StreamResetReceived_SWC stream_id)
                 liftIO $ do
-                    -- putStrLn $ "StreamReset " ++ show (_error_code_id)
                     cancelled_streams <- takeMVar cancelled_streams_mvar
                     putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
                 closePostDataSource stream_id
@@ -721,6 +721,7 @@ sessionInputThread  = do
              let frame_length = frameLength frame_header
              if frame_length /= 4
                then do
+                 reportSituation $ PeerErrored_SWC "WindowUpdateFrameIncorrectSize"
                  closeConnectionBecauseIsInvalid NH2.FrameSizeError
                  return ()
                else
@@ -788,10 +789,12 @@ sessionInputThread  = do
               else do
                 -- For some reason there is no PostInput processing mechanism, therefore,
                 -- we were not expecting data at this point
+                reportSituation (PeerErrored_SWC "DataReceivedOnUnreadyStream")
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
         MiddleFrame_SIC (NH2.Frame frame_header (NH2.PingFrame _)) | not (isStreamZero frame_header)  || frameLength frame_header /= 8  -> do
+            reportSituation (PeerErrored_SWC "PingFrameWithStreamIdNotZero")
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
@@ -846,7 +849,7 @@ sessionInputThread  = do
 
         MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame settings_list))
           | frameLength frame_header `mod` 6 /= 0 -> do
-            liftIO . putStrLn $ "FrameSizeError"
+            reportSituation (PeerErrored_SWC "SettingsFrameSizeError")
             closeConnectionBecauseIsInvalid NH2.FrameSizeError
             return ()
 
@@ -860,7 +863,7 @@ sessionInputThread  = do
 
           | otherwise  -> do
             -- Frame was received by the peer, do nothing here...
-            liftIO . putStrLn $ "SettingsHasWrongSize"
+            reportSituation (PeerErrored_SWC "SettingsFrameSizeError")
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
@@ -868,6 +871,7 @@ sessionInputThread  = do
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
                 --liftIO . putStrLn $ "Received GoAway frame"
+                reportSituation $ConnectionCloseReceived_SWC
                 quietlyCloseConnection NH2.NoError
                 return ()
 
@@ -879,6 +883,7 @@ sessionInputThread  = do
 
         MiddleFrame_SIC (NH2.Frame  (NH2.FrameHeader _ _ nh2_stream_id) (NH2.PriorityFrame NH2.Priority {NH2.exclusive=_e, NH2.streamDependency=dep_id, NH2.weight=_w}  ) )
             | nh2_stream_id == dep_id -> do
+                reportSituation (PeerErrored_SWC "InvalidPriorityFrame")
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
@@ -887,7 +892,7 @@ sessionInputThread  = do
 
         MiddleFrame_SIC _somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
-            liftIO $ putStrLn $ "Unhandled " ++ show _somethingelse
+            reportSituation UnknownFrame_SWC
             continue
 
   where
@@ -969,6 +974,16 @@ sessionInputThread  = do
           else
             return ()
 
+
+reportSituation :: SituationWithClient -> ReaderT SessionData IO ()
+reportSituation situation =
+  do
+    session_id <- view sessionIdAtSession
+    maybe_situation_callback <- view
+        (sessionsContext . sessionsConfig . sessionsCallbacks . situationCallback_SC)
+    case maybe_situation_callback of
+        Nothing -> return ()
+        Just callback -> liftIO $ callback session_id situation
 
 
 streamIsIdle :: GlobalStreamId -> ReaderT SessionData IO Bool
