@@ -132,7 +132,6 @@ data SessionSettings = SessionSettings {
 makeLenses ''SessionSettings
 
 
-
 -- Whatever a worker thread is going to need comes here....
 -- this is to make refactoring easier, but not strictly needed.
 data WorkerThreadEnvironment = WorkerThreadEnvironment {
@@ -645,6 +644,8 @@ sessionInputThread  = do
             return ()
 
         PingFrameEmitted_SIC x -> do
+            -- Used by the Forwarded infra-structure to assess the latency to
+            -- the client.
             emitted_pings_mvar <- view emittedPings
             liftIO . modifyMVar_ emitted_pings_mvar $ \ emitted_pings ->
                 return $ x : emitted_pings
@@ -712,19 +713,6 @@ sessionInputThread  = do
                     cancelled_streams <- takeMVar cancelled_streams_mvar
                     putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
                 closePostDataSource stream_id
-                liftIO $ do
-                    maybe_thread_id <- H.lookup stream2workerthread stream_id
-                    case maybe_thread_id  of
-                        Nothing ->
-                            -- This is can actually happen in some implementations: we are asked to
-                            -- cancel an stream we know nothing about.
-                            return ()
-
-                        Just thread_id -> do
-                            -- INSTRUMENTATION( infoM "HTTP2.Session" $ "Stream successfully interrupted" )
-                            throwTo thread_id StreamCancelledException
-                            H.delete stream2workerthread stream_id
-
                 continue
 
         MiddleFrame_SIC _frame@(NH2.Frame frame_header (NH2.WindowUpdateFrame _credit) ) -> do
@@ -1371,6 +1359,7 @@ validateIncomingHeadersServer headers_editor = do
         else
             return Nothing
 
+
 validateIncomingHeadersClient :: He.HeaderEditor -> ReaderT SessionData IO (Maybe He.HeaderEditor)
 validateIncomingHeadersClient headers_editor = do
     -- Check that the headers block comes with all mandatory headers.
@@ -1567,6 +1556,14 @@ isStreamCancelled stream_id = do
     return $ NS.member stream_id cancelled_streams
 
 
+markStreamCancelled :: GlobalStreamId  -> WorkerMonad ()
+markStreamCancelled stream_id = do
+    cancelled_streams_mvar <- view streamsCancelled_WTE
+    liftIO . modifyMVar_ cancelled_streams_mvar $ \ cancelled_streams ->
+        return $ NS.insert  stream_id cancelled_streams
+    return ()
+
+
 sendPrimitive500Error :: IO TupledPrincipalStream
 sendPrimitive500Error =
   return (
@@ -1639,6 +1636,7 @@ normallyHandleStream principal_stream = do
     session_settings <- view sessionSettings_WTE
     next_push_stream_mvar <-  view nextPushStream_WTE
     reset_button <- view resetStreamButton_WTE
+    this_environment <- ask
 
     -- Pieces of the header
     let
@@ -1693,12 +1691,17 @@ normallyHandleStream principal_stream = do
         -- This threadlet should block here waiting for the headers to finish going
         -- NOTE: Exceptions generated here inheriting from HTTP500PrecursorException
         -- are let to bubble and managed in this thread fork point...
+        let
+            check_if_cancelled =
+                runReaderT
+                    (isStreamCancelled stream_id)
+                    this_environment
         _ <- liftIO . ReT.runResourceT $ do
             resource_key <- ReT.register reset_button
             _ <- runConduit $
                (data_and_conclusion)
                `fuseBothMaybe`
-               (sendDataOfStream stream_id data_output)
+               (sendDataOfStream check_if_cancelled data_output)
             ReT.unprotect resource_key
 
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
@@ -1745,6 +1748,14 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
     liftIO . writeChan headers_output
         $ NormalResponse_HM (child_stream_id,  response_headers, effects, pusher_data_output)
 
+    this_environment <- ask
+
+    let
+        check_if_cancelled =
+            runReaderT
+                (isStreamCancelled child_stream_id)
+                this_environment
+
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
     -- streams
@@ -1755,38 +1766,38 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
             _ <- runConduit $
                  pushed_data_and_conclusion
                 `fuseBothMaybe`
-                sendDataOfStream child_stream_id pusher_data_output
+                sendDataOfStream check_if_cancelled pusher_data_output
             ReT.unprotect k
 
         return ()
 
 
 --                                                       v-- comp. monad.
-sendDataOfStream :: MonadIO m => GlobalStreamId -> MVar TT.OutputDataFeed  -> Sink B.ByteString m ()
-sendDataOfStream _stream_id data_output  =
+sendDataOfStream :: MonadIO m => (IO Bool) -> MVar TT.OutputDataFeed  -> Sink B.ByteString m ()
+sendDataOfStream  check_if_cancelled data_output  =
   do
     consumer
   where
     consumer  = do
         maybe_bytes <- await
-        -- use_size_ioref  <- view (sessionSettings_WTE . frameSize_SeS)
-        -- use_size <- liftIO $ DIO.readIORef use_size_ioref
-        case maybe_bytes of
+        is_stream_cancelled <- liftIO check_if_cancelled
+        unless is_stream_cancelled $ do
+            case maybe_bytes of
 
-            Nothing -> do
-                -- This is how we finish sending data
-                liftIO $ putMVar data_output  ""
+                Nothing -> do
+                    -- This is how we finish sending data
+                    liftIO $ putMVar data_output  ""
 
-            Just bytes
-                | lng <- B.length bytes, lng > 0   -> do
+                Just bytes
+                    | lng <- B.length bytes, lng > 0   -> do
 
-                    liftIO $ do
-                        putMVar data_output bytes
-                    consumer
+                        liftIO $ do
+                            putMVar data_output bytes
+                        consumer
 
-                | otherwise -> do
-                    -- Finish sending data, finish in general
-                    liftIO $ putMVar data_output ""
+                    | otherwise -> do
+                        -- Finish sending data, finish in general
+                        liftIO $ putMVar data_output ""
 
 
 -- Returns if the frame is the first in the stream
@@ -2018,29 +2029,22 @@ sessionPollThread  session_data headers_output = do
             Left _ -> writeChan session_input $ InternalAbortStream_SIC new_stream_id
             Right _ -> return ()
 
-     -- E.catch
-     --        (runReaderT
-     --            (clientWorkerThread new_stream_id effects headers_sent input_data_stream )
-     --            worker_environment
-     --        )
-     --        (
-     --            (   \ _ ->  do
-     --                -- Actions to take when the thread breaks....
-     --                writeChan session_input InternalAbort_SIC
-     --            )
-     --            :: HTTP500PrecursorException -> IO ()
-     --        )
-
     sessionPollThread session_data headers_output
 
 
 clientWorkerThread :: GlobalStreamId  -> MVar TT.OutputDataFeed -> InputDataStream -> WorkerMonad ()
 clientWorkerThread stream_id  output_mvar input_data_stream = do
     -- And now work on sending the data, if any...
+    this_environment <- ask
+    let
+        check_if_cancelled =
+            runReaderT
+                (isStreamCancelled stream_id)
+                this_environment
     _ <- liftIO . ReT.runResourceT . runConduit $
         input_data_stream
         `fuseBothMaybe`
-        sendDataOfStream stream_id output_mvar
+        sendDataOfStream check_if_cancelled output_mvar
     return ()
 
 

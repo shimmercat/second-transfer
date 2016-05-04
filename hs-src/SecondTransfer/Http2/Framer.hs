@@ -376,13 +376,14 @@ finishFlowControlForStream stream_id =
 readNextFrame ::
     Int
     -> (Int -> IO B.ByteString)                      -- ^ Generator action
-    -> Source IO (Maybe NH2.Frame)                -- ^ Packet and leftovers, if we could get them
+    -> Source IO (Either String NH2.Frame)                -- ^ Packet and leftovers, if we could get them
 readNextFrame max_acceptable_size pull_action  = do
     -- First get 9 bytes with the frame header
     either_frame_header_bs <- lift $ E.try $ pull_action 9
     case either_frame_header_bs :: Either IOProblem B.ByteString of
 
         Left _ -> do
+            yield $ Left "CouldNotDecodeHTTP/2FrameHeader"
             return ()
 
         Right frame_header_bs -> do
@@ -393,7 +394,7 @@ readNextFrame max_acceptable_size pull_action  = do
             -- liftIO . putStrLn $ "payload length: " ++ (show payload_length) ++ " max sz " ++ show max_acceptable_size
             if payload_length + 9 > max_acceptable_size
               then do
-                liftIO $ putStrLn "Frame too big"
+                yield $ Left "ReceivedHTTP/2FrameExceedingLegalSize"
                 return ()
               else do
                 -- Get as many bytes as the payload length identifies
@@ -412,10 +413,10 @@ readNextFrame max_acceptable_size pull_action  = do
                             either_frame = NH2.decodeFramePayload frame_type_id frame_header payload_bs
                         case either_frame of
                             Right frame_payload -> do
-                                yield . Just $ NH2.Frame frame_header frame_payload
+                                yield . Right $ NH2.Frame frame_header frame_payload
                                 readNextFrame max_acceptable_size pull_action
                             Left  _     ->
-                                yield   Nothing
+                                yield . Left $ "CouldNotDecodeHTTP/2FramePayload"
 
 
 -- This works by pulling bytes from the input side of the pipeline and converting them to frames.
@@ -444,9 +445,10 @@ inputGatherer pull_action session_input = do
                 throwIO BadPrefaceException
 
     let
-        source::Source FramerSession (Maybe NH2.Frame)
+        source::Source FramerSession (Either String NH2.Frame)
         source = transPipe liftIO $ readNextFrame max_recv_size  pull_action
     source $$ consume True
+
   where
 
     sendToSession :: Bool -> InputFrame -> IO ()
@@ -458,9 +460,19 @@ inputGatherer pull_action session_input = do
         else
           sendMiddleFrameToSession session_input frame
 
-    abortSession :: Sink a FramerSession ()
-    abortSession = do
+    abortSession :: String -> Sink a FramerSession ()
+    abortSession msg = do
       --liftIO $ putStrLn  "Framer called Abort Session"
+      maybe_situation_callback  <- view
+           (sessionsContext . sessionsConfig . sessionsCallbacks . situationCallback_SC)
+
+      case maybe_situation_callback of
+          Just callback -> do
+              session_id <- view sessionIdAtFramer
+              liftIO $ callback session_id (PeerErrored_SWC msg)
+
+          Nothing -> return ()
+
       lift $ do
         sendGoAwayFrame NH2.ProtocolError
         -- Inform the session that it can tear down itself
@@ -470,33 +482,32 @@ inputGatherer pull_action session_input = do
 
     consume_continue = consume False
 
-    consume :: Bool -> Sink (Maybe NH2.Frame) FramerSession ()
+    consume :: Bool -> Sink (Either String NH2.Frame) FramerSession ()
     consume starting = do
-        maybe_maybe_frame <- await
-
-        -- liftIO . putStrLn . show  $ maybe_maybe_frame
+        maybe_either_frame <- await
 
         output_is_forbidden_mvar <- view outputIsForbidden
         output_is_forbidden <- liftIO $ readMVar output_is_forbidden_mvar
 
         -- Consumption ends automatically when the output is forbidden, this might help avoiding
         -- attacks where a peer refuses to close its socket.
-        unless output_is_forbidden $ case maybe_maybe_frame of
+        unless output_is_forbidden $ case maybe_either_frame of
 
-            Just Nothing      -> do
+            Just (Left msg)     -> do
                 -- Only way to get here is by a closed connection condition, or because some decoding failed
                 -- in a very bad way, or because frame size was exceeded. All of those are error conditions,
                 -- and therefore we should undo the session
-                abortSession
+                abortSession msg
 
-            Just (Just right_frame) -> do
+            Just (Right right_frame) -> do
+
                 case right_frame of
 
                     frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do
                         -- Bookkeep the increase on bytes on that stream
                         succeeded <- lift $ addCapacity stream_id (fromIntegral credit)
                         if not succeeded then
-                          abortSession
+                          abortSession "FlowControlOutOfBounds"
                         else do
                           liftIO $ sendToSession starting $! frame
                           consume_continue

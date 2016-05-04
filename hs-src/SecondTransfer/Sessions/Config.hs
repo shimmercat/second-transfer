@@ -14,6 +14,7 @@ module SecondTransfer.Sessions.Config(
                , reportErrorCallback_SC
                , dataDeliveryCallback_SC
                , newSessionCallback_SC
+               , situationCallback_SC
 
                , dataFrameSize
                , addUsedProtocol
@@ -28,6 +29,7 @@ module SecondTransfer.Sessions.Config(
                , SessionsEnrichedHeaders                (..)
                , SessionsConfig                         (..)
                , SessionGenericHandle                   (..)
+               , SituationWithClient                    (..)
 
                , ErrorCallback
                , DataFrameDeliveryCallback
@@ -91,13 +93,32 @@ data SessionComponent =
 --     |HTTP2_UsP
 
 -- | Used by this session engine to report an error at some component, in a particular
---   session.
+--   session. This callback is/was used mainly during component tests, not on
+--   actual production use.
 type ErrorCallback = (SessionComponent, SessionCoordinates, SomeException) -> IO ()
+
+-- | Only used for HTTP/2 connections.
+type GlobalStreamId = Int
+
+-- | When something happens in a client...
+data SituationWithClient =
+    PeerReportsProtocolError_SWC
+   |PeerErrored_SWC String    -- Second argument gives an idea of the location
+   |ConnectionCloseReceived_SWC
+   |StreamResetReceived_SWC GlobalStreamId
+    deriving (Show, Eq)
+
+
+-- | This is the reporting callback used in actual production use.
+--   First argument is the SessionId of the session where the
+--   issue is being reported
+type SituationCallback = Int -> SituationWithClient -> IO ()
 
 
 -- | Sessions follow this class, so that they can be rescinded on inactivity
 class ActivityMeteredSession a where
     sessionLastActivity :: a -> IO TimeSpec
+
 
 -- | Clean-cut of sessions
 class CleanlyPrunableSession a where
@@ -133,8 +154,10 @@ newtype NewSessionCallback =  NewSessionCallback ( HashableSockAddr -> SessionGe
 data SessionsCallbacks = SessionsCallbacks {
     -- | Used to report errors during this session
     _reportErrorCallback_SC  :: Maybe ErrorCallback
+    -- | "Ordinary" situations
+ ,  _situationCallback_SC :: Maybe SituationCallback
     -- | Used to report delivery of individual data frames
-  ,  _dataDeliveryCallback_SC :: Maybe DataFrameDeliveryCallback
+  , _dataDeliveryCallback_SC :: Maybe DataFrameDeliveryCallback
     -- | Used to notify the session manager of new sessions, so
     --   that the session manager registers them (in a weak map)
     --   if need comes
@@ -205,6 +228,7 @@ defaultSessionsConfig = SessionsConfig {
      _sessionsCallbacks = SessionsCallbacks {
             _reportErrorCallback_SC = Nothing,
             _dataDeliveryCallback_SC = Nothing,
+            _situationCallback_SC = Nothing,
             _newSessionCallback_SC = Nothing
         }
   , _sessionsEnrichedHeaders = defaultSessionsEnrichedHeaders
