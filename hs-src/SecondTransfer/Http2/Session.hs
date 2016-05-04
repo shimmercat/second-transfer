@@ -1088,7 +1088,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
 
         case maybe_table of
             Left _ -> do
-                liftIO $ putStrLn "InvalidHeadersReceived"
+                reportSituation (PeerErrored_SWC "InvalidHeaders")
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
 
             Right (new_table, header_list ) -> do
@@ -1737,7 +1737,10 @@ normallyHandleStream principal_stream = do
                                     pushed_data_and_conclusion
                                     effects
                   -- And let the action run in its own thread
-                  liftIO . forkIOExc "s2f8" $ runReaderT action environment
+                  liftIO .
+                      forkIOExc "s2f8" .
+                      ignoreException blockedIndefinitelyOnMVar () $
+                      runReaderT action environment
 
         return ()
 

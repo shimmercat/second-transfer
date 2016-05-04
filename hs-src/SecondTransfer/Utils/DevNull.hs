@@ -12,7 +12,7 @@ import qualified Control.Monad.Trans.Resource            as ReT
 
 import SecondTransfer.MainLoop.CoherentWorker
 
-import SecondTransfer.Exception                       (forkIOExc)
+import SecondTransfer.Exception
 
 -- TODO: Handling unnecessary data should be done in some other, less
 -- harmfull way... need to think about that.
@@ -24,8 +24,10 @@ import SecondTransfer.Exception                       (forkIOExc)
 dropIncomingData :: MonadIO m => Maybe InputDataStream -> m ()
 dropIncomingData Nothing = return ()
 dropIncomingData (Just data_source) = do
-    _ <- liftIO . forkIOExc "dropIncomingData" . ReT.runResourceT $
-         data_source $$ awaitForever (\ _ -> do
+    _ <- liftIO . forkIOExc "dropIncomingData" .
+        ignoreException blockedIndefinitelyOnMVar () .
+        ReT.runResourceT $
+             data_source $$ awaitForever (\ _ -> do
                                          return () )
     return ()
 
