@@ -75,7 +75,7 @@ import qualified Network.HTTP2                          as NH2
 import qualified Control.Monad.Trans.Resource           as ReT
 import           System.Clock                            ( getTime
                                                          , Clock(..)
-                                                         , timeSpecAsNanoSecs
+                                                         , toNanoSecs
                                                          , diffTimeSpec
                                                          , TimeSpec
                                                          )
@@ -84,7 +84,7 @@ import           System.Clock                            ( getTime
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
 import           SecondTransfer.MainLoop.Tokens
-import           SecondTransfer.MainLoop.Protocol
+--import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.MainLoop.ClientPetitioner
 
 import           SecondTransfer.Sessions.Config
@@ -421,7 +421,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
     stream_request_headers    <- H.new :: IO Stream2HeaderBlockFragment
 
     -- Warning: we should find a way of coping with different table sizes.
-    decode_headers_table      <- HP.newDynamicTableForDecoding 4096
+    decode_headers_table      <- HP.newDynamicTableForDecoding 4096 8192
     decode_headers_table_mvar <- newMVar decode_headers_table
 
     encode_headers_table      <- HP.newDynamicTableForEncoding 4096
@@ -613,7 +613,7 @@ sessionInputThread  = do
     -- coherent_worker           <- view awareWorker
 
     -- for_worker_thread_uns     <- view forWorkerThread
-    stream2workerthread       <- view stream2WorkerThread
+    -- stream2workerthread       <- view stream2WorkerThread
     -- receiving_headers_mvar    <- view receivingHeaders
     -- last_good_stream_mvar     <- view lastGoodStream
     -- current_session_id        <- view sessionIdAtSession
@@ -824,7 +824,7 @@ sessionInputThread  = do
                                 let
                                     tspec = now `diffTimeSpec` when_sent
                                     milliseconds = (fromIntegral $
-                                        timeSpecAsNanoSecs tspec ) / 1.0e6
+                                        toNanoSecs tspec ) / 1.0e6
                                     new_latency_report = latency_report ++ [(seq_no, milliseconds)]
                                 return (new_latency_report, new_emitted_pings)
                               | otherwise -> do
@@ -1078,27 +1078,23 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
 
         -- Let's decode the headers
         headers_bytes             <- getHeaderBytes stream_id
-        dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
-        maybe_table <- liftIO $
+        either_header_list <- liftIO . withMVar decode_headers_table_mvar $ \ dyn_table -> do
             E.catch
                 (do
                    r  <- HP.decodeHeader dyn_table headers_bytes
                    return . Right $ r )
-                ((const $ return $ Left () ):: HP.DecodeError -> IO (Either () (HP.DynamicTable, HP.HeaderList)))
+                ((const $ return $ Left () ):: HP.DecodeError -> IO (Either ()  HP.HeaderList))
 
-        case maybe_table of
+        case either_header_list of
             Left _ -> do
                 reportSituation (PeerErrored_SWC "InvalidHeaders")
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
 
-            Right (new_table, header_list ) -> do
-
-                -- /DEBUG
+            Right (header_list ) -> do
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here
                 liftIO $ do
                     H.delete stream_request_headers stream_id
-                    putMVar decode_headers_table_mvar new_table
 
                 -- TODO: Validate headers, abort session if the headers are invalid.
                 -- Otherwise other invariants will break!!
@@ -1270,14 +1266,13 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders f
         -- headers_arrived_time      <- liftIO $ getTime Monotonic
         -- Let's decode the headers
         headers_bytes             <- getHeaderBytes stream_id
-        dyn_table                 <- liftIO $ takeMVar decode_headers_table_mvar
-        (new_table, header_list ) <- liftIO $ HP.decodeHeader dyn_table headers_bytes
+        header_list <- liftIO . withMVar decode_headers_table_mvar $ \ dyn_table ->
+            HP.decodeHeader dyn_table headers_bytes
 
         -- Good moment to remove the headers from the table.... we don't want a space
         -- leak here
         liftIO $ do
             H.delete stream_request_headers stream_id
-            putMVar decode_headers_table_mvar new_table
 
         -- TODO: Validate headers, abort session if the headers are invalid.
         -- Otherwise other invariants will break!!
@@ -1877,9 +1872,9 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             -- First encode the headers using the table
             encode_dyn_table_mvar <- view toEncodeHeaders
 
-            encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
-            (new_dyn_table, data_to_send ) <- liftIO $ HP.encodeHeader HP.defaultEncodeStrategy encode_dyn_table headers
-            liftIO $ putMVar encode_dyn_table_mvar new_dyn_table
+            -- encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
+            data_to_send  <- liftIO . withMVar encode_dyn_table_mvar $ \ encode_dyn_table ->
+                HP.encodeHeader HP.defaultEncodeStrategy 8192 encode_dyn_table headers
 
             -- Now split the bytestring in chunks of the needed size....
             -- Note that the only way we can
@@ -1900,10 +1895,11 @@ headersOutputThread input_chan session_output_mvar = forever $ do
         PushPromise_HM (parent_stream_id, child_stream_id, promise_headers, effect) -> do
 
             encode_dyn_table_mvar <- view toEncodeHeaders
-            encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
 
-            (new_dyn_table, data_to_send ) <- liftIO $ HP.encodeHeader HP.defaultEncodeStrategy encode_dyn_table promise_headers
-            liftIO $ putMVar encode_dyn_table_mvar new_dyn_table
+            -- encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
+
+            data_to_send  <- liftIO . withMVar encode_dyn_table_mvar $ \ encode_dyn_table ->
+                HP.encodeHeader HP.defaultEncodeStrategy 8192 encode_dyn_table promise_headers
 
             -- Now split the bytestring in chunks of the needed size....
             bs_chunks <- return $! bytestringChunk use_chunk_length data_to_send
