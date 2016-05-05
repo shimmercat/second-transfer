@@ -382,8 +382,9 @@ readNextFrame max_acceptable_size pull_action  = do
     either_frame_header_bs <- lift $ E.try $ pull_action 9
     case either_frame_header_bs :: Either IOProblem B.ByteString of
 
-        Left _ -> do
-            yield $ Left "CouldNotDecodeHTTP/2FrameHeader"
+        Left _e -> do
+            -- If coming here, we are done with this connection. Just let it go
+            -- yield . Left $ "Connection was closed"
             return ()
 
         Right frame_header_bs -> do

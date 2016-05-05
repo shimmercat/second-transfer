@@ -695,6 +695,14 @@ sessionInputThread  = do
             liftIO $ closeStreamLocal stream_state_table stream_id
             continue
 
+        MiddleFrame_SIC (NH2.Frame
+               (NH2.FrameHeader _ _ stream_id)
+               (NH2.HeadersFrame (Just (NH2.Priority _ dep_id _ ) )  _)
+           )  | stream_id == dep_id -> do
+
+            reportSituation $ (PeerErrored_SWC "StreamDependsOnItself")
+            closeConnectionBecauseIsInvalid NH2.ProtocolError
+
         -- The block below will process both HEADERS and CONTINUATION frames.
         -- TODO: As it stands now, the server will happily start a new stream with
         -- a CONTINUATION frame instead of a HEADERS frame. That's against the
@@ -709,6 +717,10 @@ sessionInputThread  = do
                 Client_SR -> do
                     clientProcessIncomingHeaders frame
                     continue
+
+        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader lng _ _) (NH2.RSTStreamFrame _))  | lng /= 4 -> do
+             closeConnectionBecauseIsInvalid NH2.FrameSizeError
+             reportSituation $ PeerErrored_SWC "InvalidResetFrame"
 
         -- Peer can order a stream aborted, meaning that we shall not send any more data
         -- on it.
@@ -899,6 +911,11 @@ sessionInputThread  = do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
+            | nh2_stream_id == 0 -> do
+                reportSituation (PeerErrored_SWC "InvalidPriorityFrame")
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
+                return ()
+
             | otherwise ->
                 continue
 
@@ -913,6 +930,7 @@ sessionInputThread  = do
     -- TODO: Do use the settings!!!
     handleSettingsFrame :: NH2.SettingsList -> ReaderT SessionData IO ()
     handleSettingsFrame _settings_list = do
+        --liftIO $ putStrLn "SettingsFRame RECEIVED"
         session_settings <- view sessionSettings
         sessions_config <- view $ sessionsContext . sessionsConfig
         let
