@@ -883,6 +883,7 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
           else do
             -- I can not send because flow-control is full, wait for a command instead.
             -- Lazily computed new_calm have no effect in this case.
+            liftIO $ putStrLn "Flow control FFA"
             command <- liftIO $ {-# SCC t2 #-} readChan commands_chan
             case  {-# SCC t3 #-} command of
                 AddBytes_FCM delta_cap -> do
@@ -1061,6 +1062,8 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
         ping_id = freshness + sequence_number
 
     should_report_latency <- shouldReportLatency tray_meter
+    -- let
+    --   should_report_latency = False
 
     -- If latency should be reported, send out a Ping frame.
     -- Also, send it alone.
