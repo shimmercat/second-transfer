@@ -687,7 +687,7 @@ sessionInputThread  = do
         -- TODO: As it stands now, the server will happily start a new stream with
         -- a CONTINUATION frame instead of a HEADERS frame. That's against the
         -- protocol.
-        MiddleFrame_SIC frame | Just (_stream_id, _bytes) <- isAboutHeaders frame ->
+        MiddleFrame_SIC frame | Just (_stream_id, _bytes, _is_cont) <- isAboutHeaders frame ->
             case session_role of
                 Server_SR -> do
                     -- Just append the frames to streamRequestHeaders
@@ -906,6 +906,7 @@ sessionInputThread  = do
         let
             enable_push = lookup NH2.SettingsEnablePush _settings_list
             max_frame_size = lookup NH2.SettingsMaxFrameSize _settings_list
+            max_dynamic_table_size = lookup NH2.SettingsHeaderTableSize _settings_list
 
             -- Handled by the framer, but errors should be reported here.
             max_flow_control_size = lookup NH2.SettingsInitialWindowSize _settings_list
@@ -961,8 +962,20 @@ sessionInputThread  = do
                  else
                    return False
 
+        ok4 <- if ok3
+                 then
+                   case max_dynamic_table_size of
+                       Just new_size -> do
+                           encode_dyn_table_mvar <- view toEncodeHeaders
+                           liftIO . withMVar encode_dyn_table_mvar  $
+                               \ enc_dynamic_table -> HP.setLimitForEncoding new_size enc_dynamic_table
+                           return True
 
-        if ok3
+                       Nothing -> return True
+                 else
+                   return False
+
+        if ok4
           then
             sendOutPriorityTrain
                 (NH2.EncodeInfo
@@ -972,6 +985,7 @@ sessionInputThread  = do
                 )
                 (NH2.SettingsFrame [])
           else
+            -- TODO: React to incorrect Settings values
             return ()
 
 
@@ -995,7 +1009,7 @@ streamIsIdle stream_id =
 
 
 serverProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
-serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders frame = do
+serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAboutHeaders frame = do
 
     -- Just append the frames to streamRequestHeaders
     opens_stream              <- appendHeaderFragmentBlock stream_id bytes
@@ -1011,8 +1025,8 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
     maybe_hashable_addr       <- view peerAddress
     session_settings          <- view sessionSettings
 
-    if opens_stream
-      then {-# SCC gpAb #-} do
+    case (opens_stream, is_cont) of
+      (True, False) -> {-# SCC gpAb #-} do
         --maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         all_ok <- liftIO . modifyMVar receiving_headers_mvar $ \  maybe_rcv_headers_of ->
             case maybe_rcv_headers_of of
@@ -1024,30 +1038,35 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
                     return (Just stream_id, True)
         if all_ok
           then do
-              -- And go to check if the stream id is valid
-              ok2 <- liftIO . modifyMVar last_good_stream_mvar $  \ last_good_stream ->
-                  if (odd stream_id ) && (stream_id > last_good_stream)
-                    then
-                        -- We are golden, set the new good stream
-                        return (stream_id, True)
-                    else
-                        -- The new oppened stream has a new id
-                        return (stream_id, False)
-              unless ok2 $
-                  closeConnectionBecauseIsInvalid NH2.ProtocolError
+            -- And go to check if the stream id is valid
+            ok2 <- liftIO . modifyMVar last_good_stream_mvar $  \ last_good_stream ->
+                if (odd stream_id ) && (stream_id > last_good_stream)
+                  then
+                      -- We are golden, set the new good stream
+                      return (stream_id, True)
+                  else
+                      -- The new oppened stream has a new id
+                      return (stream_id, False)
+            unless ok2 $
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
           else do
             closeConnectionBecauseIsInvalid NH2.ProtocolError
-      else {-# SCC gpcb #-} do
+
+
+      (False, True) -> do
         maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         case maybe_rcv_headers_of of
             Just a_stream_id
               | a_stream_id == stream_id -> do
                   -- Nothing to complain about
-                  liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
+                   liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
               | otherwise ->
-                  error "IncorrectStreamId1"
+                   error "IncorrectStreamId1"
 
             Nothing -> error "InternalError, this should be set"
+
+      _ -> closeConnectionBecauseIsInvalid NH2.ProtocolError
+
 
     if frameEndsHeaders frame then
       do
@@ -1212,7 +1231,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes) <- isAboutHeaders 
 serverProcessIncomingHeaders _ = error "serverProcessIncomingHeadersNotDefined"
 
 clientProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
-clientProcessIncomingHeaders frame | Just (stream_id, bytes) <- isAboutHeaders frame = do
+clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAboutHeaders frame = do
 
     opens_stream              <- appendHeaderFragmentBlock stream_id bytes
     receiving_headers_mvar    <- view receivingHeaders
@@ -1838,11 +1857,12 @@ getHeaderBytes global_stream_id = do
     return $ Bl.toStrict $ Bu.toLazyByteString bytes
 
 
-isAboutHeaders :: InputFrame -> Maybe (GlobalStreamId, B.ByteString)
+-- | Thirs parameter is for continuation frames
+isAboutHeaders :: InputFrame -> Maybe (GlobalStreamId, B.ByteString, Bool)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame _ block_fragment   ) )
-    = Just (stream_id, block_fragment)
+    = Just (stream_id, block_fragment, False)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.ContinuationFrame block_fragment) )
-    = Just (stream_id, block_fragment)
+    = Just (stream_id, block_fragment, True)
 isAboutHeaders _
     = Nothing
 
