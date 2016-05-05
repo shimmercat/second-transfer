@@ -35,7 +35,7 @@ module SecondTransfer.Http2.Session(
 import           Control.Concurrent                     (ThreadId)
 import           Control.Concurrent.Chan
 import qualified Control.Concurrent.BoundedChan         as BC
-import           Control.Exception                      (throwTo)
+-- import           Control.Exception                      (throwTo)
 import qualified Control.Exception                      as E
 import           Control.Monad                          (
                                                          forever,
@@ -96,19 +96,19 @@ import           SecondTransfer.Utils                   (unfoldChannelAndSource,
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import qualified SecondTransfer.Http2.TransferTypes     as TT
+import           SecondTransfer.Http2.StreamState
+
+
 #ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging        (logit)
 
 #endif
 
-import           Debug.Trace                            (traceShowId)
+--import           Debug.Trace                            (traceShowId)
 
 
 type InputFrame  = NH2.Frame
 
-
---useChunkLength :: Int
--- useChunkLength = 2048
 
 
 -- What to do regarding headers
@@ -154,6 +154,8 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
     ,_resetStreamButton_WTE       :: IO ()
 
     ,_childResetStreamButton_WTE  :: GlobalStreamId -> IO ()
+
+    ,_streamStateTable_WTE        :: StreamStateTable
     }
 
 makeLenses ''WorkerThreadEnvironment
@@ -196,7 +198,7 @@ getFrameFromSession (SOCA chan) = BC.readChan chan
 type HashTable k v = H.CuckooHashTable k v
 
 
-type Stream2HeaderBlockFragment = HashTable GlobalStreamId Bu.Builder
+-- type Stream2HeaderBlockFragment = HashTable GlobalStreamId Bu.Builder
 
 
 type WorkerMonad = ReaderT WorkerThreadEnvironment IO
@@ -334,7 +336,7 @@ data SessionData = SessionData {
 
     -- Used for decoding the headers... actually, this dictionary should
     -- even contain just one entry... BIG TODO!!!
-    ,_stream2HeaderBlockFragment :: Stream2HeaderBlockFragment
+    ,_stream2HeaderBlockFragment :: MVar Bu.Builder
 
     -- Used for worker threads... this is actually a pre-filled template
     -- I make copies of it in different contexts, and as needed.
@@ -387,6 +389,9 @@ data SessionData = SessionData {
     -- Used to store information about an emitted ping
     -- frame in the connection
     ,_emittedPings               :: MVar [(Int, TimeSpec)]
+
+    -- Bookeep the state of the streams
+    , _streamStateTable           :: StreamStateTable
     }
 
 
@@ -418,7 +423,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
 
 
     -- For incremental construction of headers...
-    stream_request_headers    <- H.new :: IO Stream2HeaderBlockFragment
+    stream_request_headers    <- newEmptyMVar
 
     -- Warning: we should find a way of coping with different table sizes.
     decode_headers_table      <- HP.newDynamicTableForDecoding 4096 8192
@@ -455,6 +460,8 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
     latency_reports           <- newMVar []
     emitted_pings             <- newMVar []
 
+    stream_state_table        <- H.newSized 100
+
     let
         for_worker_thread = WorkerThreadEnvironment {
              _streamId_WTE = error "NotInitialized"
@@ -465,6 +472,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
           ,  _resetStreamButton_WTE = error "Not initialized"
           ,  _childResetStreamButton_WTE = error "Not initialized"
           ,  _streamBytesSink_WTE = error "Not initialized"
+          ,  _streamStateTable_WTE = error "Not initialized"
         }
 
         maybe_hashable_addr = case maybe_connection_data of
@@ -495,6 +503,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
         ,_sessionIsEnding            = session_is_ending_ioref
         ,_latencyReports             = latency_reports
         ,_emittedPings               = emitted_pings
+        ,_streamStateTable           = stream_state_table
         }
 
     let
@@ -618,6 +627,8 @@ sessionInputThread  = do
     -- last_good_stream_mvar     <- view lastGoodStream
     -- current_session_id        <- view sessionIdAtSession
 
+    stream_state_table        <- view streamStateTable
+
     input                     <- {-# SCC session_input #-} liftIO $ readChan session_input
     session_role              <- view sessionRole
 
@@ -681,6 +692,7 @@ sessionInputThread  = do
                 )
                 (NH2.RSTStreamFrame NH2.InternalError
                 )
+            liftIO $ closeStreamLocal stream_state_table stream_id
             continue
 
         -- The block below will process both HEADERS and CONTINUATION frames.
@@ -1024,8 +1036,9 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
     stream2workerthread       <- view stream2WorkerThread
     maybe_hashable_addr       <- view peerAddress
     session_settings          <- view sessionSettings
+    stream_state_table        <- view streamStateTable
 
-    case (opens_stream, is_cont) of
+    its_ok <- case (opens_stream, is_cont) of
       (True, False) -> {-# SCC gpAb #-} do
         --maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         all_ok <- liftIO . modifyMVar receiving_headers_mvar $ \  maybe_rcv_headers_of ->
@@ -1047,10 +1060,25 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                   else
                       -- The new oppened stream has a new id
                       return (stream_id, False)
-            unless ok2 $
+            if not  ok2
+              then do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
+                return False
+              else do
+                --
+                num_active_streams <- liftIO $ countActiveStreams stream_state_table
+                -- TODO: Make the number of concurrent streems configurable !!!
+                if (num_active_streams + 1) < 100
+                  then do
+                    -- Report the stream as opened
+                    liftIO $ openStream stream_state_table stream_id
+                    return True
+                  else do
+                    closeConnectionBecauseIsInvalid NH2.EnhanceYourCalm
+                    return False
           else do
             closeConnectionBecauseIsInvalid NH2.ProtocolError
+            return False
 
 
       (False, True) -> do
@@ -1059,16 +1087,19 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
             Just a_stream_id
               | a_stream_id == stream_id -> do
                   -- Nothing to complain about
-                   liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
+                   _ <- liftIO $ putMVar receiving_headers_mvar maybe_rcv_headers_of
+                   return True
               | otherwise ->
-                   error "IncorrectStreamId1"
+                   return False
 
             Nothing -> error "InternalError, this should be set"
 
-      _ -> closeConnectionBecauseIsInvalid NH2.ProtocolError
+      _ -> do
+        closeConnectionBecauseIsInvalid NH2.ProtocolError
+        return False
 
 
-    if frameEndsHeaders frame then
+    if its_ok && frameEndsHeaders frame then
       do
         -- Ok, let it be known that we are not receiving more headers
         liftIO $ modifyMVar_
@@ -1082,6 +1113,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
 
         let
             reset_button  = writeChan session_input (InternalAbortStream_SIC stream_id)
+            -- Will even take care of signaling the stream as closed.
             child_reset_button = \stream_id' -> writeChan session_input  (InternalAbortStream_SIC stream_id')
             -- Prepare the environment for the new working thread
             for_worker_thread     =
@@ -1092,6 +1124,8 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                 (set resetStreamButton_WTE reset_button)
                 .
                 (set childResetStreamButton_WTE child_reset_button)
+                .
+                (set streamStateTable_WTE stream_state_table)
                 $
                 for_worker_thread_uns
 
@@ -1112,8 +1146,8 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
             Right (header_list ) -> do
                 -- Good moment to remove the headers from the table.... we don't want a space
                 -- leak here
-                liftIO $ do
-                    H.delete stream_request_headers stream_id
+                _ <- liftIO $ do
+                    tryTakeMVar stream_request_headers
 
                 -- TODO: Validate headers, abort session if the headers are invalid.
                 -- Otherwise other invariants will break!!
@@ -1134,7 +1168,6 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                 let
                     headers_extra_good = good_headers
                     header_list_after = He.toList headers_extra_good
-                -- liftIO $ putStrLn $ "header list after " ++ (show header_list_after)
 
                 -- If the headers end the request....
                 post_data_source <- if not (frameEndsStream frame)
@@ -1143,6 +1176,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                     let source = postDataSourceFromMechanism mechanism
                     return $ Just source
                   else do
+                    liftIO $ closeStreamRemote stream_state_table stream_id
                     return Nothing
 
                 -- We are going to read this here because we want to
@@ -1155,7 +1189,6 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                     view latencyReports
                 latency_report <-
                     liftIO . readMVar $ latency_report_mvar
-
 
                 let
                     perception = Perception {
@@ -1220,8 +1253,6 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                     H.insert stream2workerthread stream_id thread_id
                     takeMVar ready
 
-
-
                 return ()
     else
         -- Frame doesn't end the headers... it was added before... so
@@ -1237,8 +1268,8 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAbou
     receiving_headers_mvar    <- view receivingHeaders
     last_good_stream_mvar     <- view lastGoodStream
     decode_headers_table_mvar <- view toDecodeHeaders
-    stream_request_headers    <- view stream2HeaderBlockFragment
     response2waiter           <- view (simpleClient . response2Waiter_ClS)
+    stream_state_table        <- view streamStateTable
 
     if opens_stream
       then do
@@ -1251,19 +1282,29 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAbou
             -- An exception will be thrown above, so to not complicate
             -- control flow here too much.
           Nothing -> do
-            -- Signal that we are receiving headers now, for this stream
-            liftIO $ putMVar receiving_headers_mvar (Just stream_id)
-            -- And go to check if the stream id is valid
-            --last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
-            stream_initiated_by_client <- streamInitiatedByClient stream_id
-            if (odd stream_id ) && stream_initiated_by_client
+            -- CAn we open the stream?
+            num_active_streams <- liftIO $ countActiveStreams stream_state_table
+            -- XXXXXX TODO: Make this limit configurable. At the moment, we are saying in the
+            -- setting that we won't accept more than 100 simultaneous streams.
+            -- Check code in Framer .
+            if (num_active_streams + 1) > 100
               then do
-                -- We are golden, set the new good stream
-                liftIO $ putMVar last_good_stream_mvar (stream_id)
+                reportSituation (PeerErrored_SWC "TryingToOpenTooManyStreams")
+                closeConnectionBecauseIsInvalid NH2.RefusedStream
               else do
-                -- We are not golden
-                -- TODO: Control for pushed streams here.
-                closeConnectionBecauseIsInvalid NH2.ProtocolError
+                -- Signal that we are receiving headers now, for this stream
+                liftIO $ putMVar receiving_headers_mvar (Just stream_id)
+                -- And go to check if the stream id is valid
+                --last_good_stream <- liftIO $ takeMVar last_good_stream_mvar
+                stream_initiated_by_client <- streamInitiatedByClient stream_id
+                if (odd stream_id ) && stream_initiated_by_client
+                  then do
+                    -- We are golden, set the new good stream
+                    liftIO $ putMVar last_good_stream_mvar (stream_id)
+                  else do
+                    -- We are not golden
+                    -- TODO: Control for pushed streams here.
+                    closeConnectionBecauseIsInvalid NH2.ProtocolError
       else do
         maybe_rcv_headers_of <- liftIO $ takeMVar receiving_headers_mvar
         case maybe_rcv_headers_of of
@@ -1287,11 +1328,6 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAbou
         headers_bytes             <- getHeaderBytes stream_id
         header_list <- liftIO . withMVar decode_headers_table_mvar $ \ dyn_table ->
             HP.decodeHeader dyn_table headers_bytes
-
-        -- Good moment to remove the headers from the table.... we don't want a space
-        -- leak here
-        liftIO $ do
-            H.delete stream_request_headers stream_id
 
         -- TODO: Validate headers, abort session if the headers are invalid.
         -- Otherwise other invariants will break!!
@@ -1463,16 +1499,16 @@ cancellAllStreams :: ReaderT SessionData IO ()
 cancellAllStreams =
   do
     session_is_ending_ioref <- view sessionIsEnding
-    stream2workerthread <- view stream2WorkerThread
+    -- stream2workerthread <- view stream2WorkerThread
 
     liftIO $ do
         DIO.writeIORef session_is_ending_ioref True
-        -- Close all active threads for this session
-        H.mapM_
-            ( \(_stream_id, thread_id) ->
-                    throwTo thread_id StreamCancelledException
-            )
-            stream2workerthread
+        -- -- Close all active threads for this session
+        -- H.mapM_
+        --     ( \(_stream_id, thread_id) ->
+        --             throwTo thread_id StreamCancelledException
+        --     )
+        --     stream2workerthread
 
 
 requestTermination :: GlobalStreamId -> NH2.ErrorCodeId -> ReaderT SessionData IO ()
@@ -1585,12 +1621,12 @@ isStreamCancelled stream_id = do
     return $ NS.member stream_id cancelled_streams
 
 
-markStreamCancelled :: GlobalStreamId  -> WorkerMonad ()
-markStreamCancelled stream_id = do
-    cancelled_streams_mvar <- view streamsCancelled_WTE
-    liftIO . modifyMVar_ cancelled_streams_mvar $ \ cancelled_streams ->
-        return $ NS.insert  stream_id cancelled_streams
-    return ()
+-- markStreamCancelled :: GlobalStreamId  -> WorkerMonad ()
+-- markStreamCancelled stream_id = do
+--     cancelled_streams_mvar <- view streamsCancelled_WTE
+--     liftIO . modifyMVar_ cancelled_streams_mvar $ \ cancelled_streams ->
+--         return $ NS.insert  stream_id cancelled_streams
+--     return ()
 
 
 sendPrimitive500Error :: IO TupledPrincipalStream
@@ -1623,6 +1659,7 @@ workerThread req aware_worker =
         -- (headers, _, data_and_conclussion)
         --
         -- TODO: Can we add debug information in a header here?
+        stream_state_table <- view streamStateTable_WTE
         principal_stream <-
             liftIO $ {-# SCC wTer1  #-} E.catch
                 (
@@ -1654,6 +1691,9 @@ workerThread req aware_worker =
                 -- to acknowledge reception of this stream then
                 let use_stream_id = stream_id - 1
                 liftIO . writeChan headers_output $ GoAway_HM (use_stream_id, effects)
+
+        -- And mark the stream as closed locally
+        liftIO $ closeStreamLocal stream_state_table stream_id
   where
     ignoreCancels = CMC.handle ((\_ -> return () ):: StreamCancelledException -> WorkerMonad ())
 
@@ -1766,8 +1806,8 @@ pusherThread :: GlobalStreamId -> Headers -> DataAndConclusion -> Effect  -> Wor
 pusherThread child_stream_id response_headers pushed_data_and_conclusion effects =
   do
     headers_output <- view headersOutput_WTE
-    -- session_settings <- view sessionSettings_WTE
     pushed_reset_button <- view childResetStreamButton_WTE
+    stream_state_table <- view streamStateTable_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
     --       throws an exception signaling that the request is ill-formed
@@ -1776,7 +1816,7 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
     -- (headers, _, data_and_conclussion)
     pusher_data_output <- liftIO $ newEmptyMVar
 
-    -- Now I send the headers, if that's possible at all. These are classes as "Normal response"
+    -- Now I send the headers, if that's possible at all. These are classed as "Normal response"
     liftIO . writeChan headers_output
         $ NormalResponse_HM (child_stream_id,  response_headers, effects, pusher_data_output)
 
@@ -1800,6 +1840,8 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
                 `fuseBothMaybe`
                 sendDataOfStream check_if_cancelled pusher_data_output
             ReT.unprotect k
+
+        liftIO $ closeStreamLocal stream_state_table child_stream_id
 
         return ()
 
@@ -1834,27 +1876,22 @@ sendDataOfStream  check_if_cancelled data_output  =
 
 -- Returns if the frame is the first in the stream
 appendHeaderFragmentBlock :: GlobalStreamId -> B.ByteString -> ReaderT SessionData IO Bool
-appendHeaderFragmentBlock global_stream_id bytes = do
+appendHeaderFragmentBlock _global_stream_id bytes = do
     ht <- view stream2HeaderBlockFragment
-    maybe_old_block <- liftIO $ H.lookup ht global_stream_id
-    (new_block, new_stream) <- case maybe_old_block of
+    initial <- liftIO $ tryPutMVar ht (Bu.byteString bytes)
 
-        Nothing -> do
-            -- TODO: Make the commented message below more informative
-            return $ (Bu.byteString bytes, True)
+    when (not initial) . liftIO . modifyMVar_ ht $ \ old_block_fragment ->
+        return $ old_block_fragment `mappend` (Bu.byteString bytes)
 
-        Just something ->
-            return $ (something `mappend` (Bu.byteString bytes), False)
-
-    liftIO $ H.insert ht global_stream_id new_block
-    return new_stream
+    return initial
 
 
 getHeaderBytes :: GlobalStreamId -> ReaderT SessionData IO B.ByteString
-getHeaderBytes global_stream_id = do
+getHeaderBytes _global_stream_id = do
     ht <- view stream2HeaderBlockFragment
-    Just bytes <- liftIO $ H.lookup ht global_stream_id
-    return $ Bl.toStrict $ Bu.toLazyByteString bytes
+    builder <- liftIO . takeMVar $ ht
+    return . Bl.toStrict . Bu.toLazyByteString $ builder
+
 
 
 -- | Thirs parameter is for continuation frames
