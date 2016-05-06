@@ -41,11 +41,13 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , headers_PS
     , pushedStreams_PS
     , dataAndConclusion_PS
+    , effect_PS
+    , label_PS
 
     , dataAndConclusion_Psh
     , requestHeaders_Psh
     , responseHeaders_Psh
-    , effect_PS
+    , label_Psh
 
     , startedTime_Pr
     , streamId_Pr
@@ -195,7 +197,8 @@ type DataAndConclusion = ConduitM () B.ByteString AwareWorkerStack Footers
 data PushedStream = PushedStream {
   _requestHeaders_Psh    :: Headers,
   _responseHeaders_Psh   :: Headers,
-  _dataAndConclusion_Psh :: DataAndConclusion
+  _dataAndConclusion_Psh :: DataAndConclusion,
+  _label_Psh             :: Maybe B.ByteString
   }
 
 makeLenses ''PushedStream
@@ -279,7 +282,8 @@ data PrincipalStream = PrincipalStream {
   _headers_PS              :: Headers,
   _pushedStreams_PS        :: PushedStreams,
   _dataAndConclusion_PS    :: DataAndConclusion,
-  _effect_PS               :: Effect
+  _effect_PS               :: Effect,
+  _label_PS                :: Maybe B.ByteString
   }
 
 makeLenses ''PrincipalStream
@@ -321,7 +325,8 @@ tupledPrincipalStreamToPrincipalStream (headers, pushed_streams, data_and_conclu
         _headers_PS = headers,
         _pushedStreams_PS = pushed_streams,
         _dataAndConclusion_PS = data_and_conclusion,
-        _effect_PS = defaultEffects
+        _effect_PS = defaultEffects,
+        _label_PS = Nothing
       }
 
 requestToTupledRequest ::  Request -> TupledRequest

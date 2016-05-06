@@ -4,6 +4,9 @@ module SecondTransfer.Http2.StreamState (
                , closeStreamLocal
                , countActiveStreams
                , getStreamState
+               , getStreamLabel
+               , relabelStream
+               , reserveStream
 
                , StreamState            (..)
                , StreamStateTable
@@ -13,11 +16,13 @@ module SecondTransfer.Http2.StreamState (
 import qualified Data.HashTable.IO                      as H
 import           Data.Word
 
+import qualified Data.ByteString                        as B
+
 type HashTable k v = H.CuckooHashTable k v
 
 type GlobalStreamId = Int
 
-type StreamStateTable = HashTable GlobalStreamId Word8
+type StreamStateTable = HashTable GlobalStreamId (Word8, Maybe B.ByteString)
 
 
 -- Bits:
@@ -29,12 +34,14 @@ type StreamStateTable = HashTable GlobalStreamId Word8
 --   1 : half-closed (local)
 --   2 : half-closed (remote)
 --   3 -> Delete : stream is closed or idle
+--   5 : stream is reserved for push
 
 data StreamState =
     Open_SS
   | HalfClosedLocal_SS
   | HalfClosedRemote_SS
   | Idle_SS
+  | Reserved_SS
   | Closed_SS
 
 
@@ -45,12 +52,22 @@ getStreamState statetable maxid queryid =
     case maybe_state of
         Nothing | maxid >= queryid -> return Closed_SS
                 | otherwise -> return Idle_SS
-        Just 0 -> return Open_SS
-        Just 1 -> return HalfClosedLocal_SS
-        Just 2 -> return HalfClosedRemote_SS
+        Just (0,_) -> return Open_SS
+        Just (1,_) -> return HalfClosedLocal_SS
+        Just (2,_) -> return HalfClosedRemote_SS
+        Just (5,_) -> return Reserved_SS
         Just _ -> do
              H.delete statetable queryid
              return $ Closed_SS
+
+
+getStreamLabel :: StreamStateTable -> GlobalStreamId ->  IO (Maybe B.ByteString)
+getStreamLabel statetable  queryid =
+  do
+    maybe_state <- H.lookup statetable queryid
+    case maybe_state of
+        Nothing -> return Nothing
+        Just (_,maybe_label) -> return maybe_label
 
 -- Debugging function
 -- report :: StreamStateTable -> String -> IO ()
@@ -59,10 +76,38 @@ getStreamState statetable maxid queryid =
 --   putStrLn $ "ActiveStreams: " ++ msg ++  " " ++  (show active_streams)
 
 
-openStream :: StreamStateTable  -> GlobalStreamId -> IO ()
-openStream statetable stream_id = do
+openStream :: StreamStateTable   -> GlobalStreamId -> Maybe B.ByteString -> IO ()
+openStream statetable stream_id maybe_label = do
+    maybe_state <- H.lookup statetable stream_id
+    case maybe_state of
+        Nothing ->
+            H.insert statetable stream_id (0, maybe_label)
+        Just (5,previous_label)
+          | Just _ <- maybe_label ->
+            H.insert statetable stream_id (0, maybe_label)
+          | otherwise ->
+            H.insert statetable stream_id (0, previous_label)
+
+        Just _ -> error "InternalError:TryingToOpenStreamInIncorrectState"
+
+
+reserveStream :: StreamStateTable   -> GlobalStreamId -> Maybe B.ByteString -> IO ()
+reserveStream statetable stream_id maybe_label = do
     -- report statetable "before-open"
-    H.insert statetable stream_id 0
+    H.insert statetable stream_id (5, maybe_label)
+
+
+relabelStream :: StreamStateTable -> GlobalStreamId -> Maybe B.ByteString -> IO ()
+relabelStream statetable stream_id  maybe_label = do
+    maybe_state <- H.lookup statetable stream_id
+    let
+        new_value = case maybe_state of
+            Nothing -> Nothing
+            Just (n,_) -> Just (n,maybe_label)
+
+    case new_value of
+        Just x -> H.insert statetable stream_id x
+        Nothing -> H.delete statetable stream_id
 
 
 closeStreamRemote :: StreamStateTable -> GlobalStreamId -> IO ()
@@ -71,9 +116,9 @@ closeStreamRemote statetable stream_id = do
     let
         new_value = case maybe_state of
             Nothing -> Nothing
-            Just 0 -> Just 2
-            Just 1 -> Nothing
-            Just 2 -> Just 2
+            Just (0,a) -> Just (2,a)
+            Just (1,_a) -> Nothing
+            Just (2,a) -> Just (2,a)
             Just _ -> Nothing
 
     case new_value of
@@ -89,9 +134,9 @@ closeStreamLocal statetable stream_id = do
     let
         new_value = case maybe_state of
             Nothing -> Nothing
-            Just 0 -> Just 1
-            Just 1 -> Just 1
-            Just 2 -> Nothing
+            Just (0,a) -> Just (1,a)
+            Just (1,a) -> Just (1,a)
+            Just (2,_a) -> Nothing
             Just _ -> Nothing
 
     case new_value of

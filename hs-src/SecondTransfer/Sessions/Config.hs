@@ -33,6 +33,7 @@ module SecondTransfer.Sessions.Config(
 
                , ErrorCallback
                , DataFrameDeliveryCallback
+               , SituationCallback
                , NewSessionCallback                     (..)
                , HashableSockAddr                       (..)
 
@@ -45,6 +46,8 @@ module SecondTransfer.Sessions.Config(
 -- import           Control.Concurrent.MVar (MVar)
 import           Control.Exception                        (SomeException)
 import           Control.Lens                             (makeLenses)
+
+import qualified Data.ByteString                          as B
 
 --import           GHC.Generics (Generic)
 --import           Data.Word                                (Word8)
@@ -105,7 +108,7 @@ data SituationWithClient =
     PeerReportsProtocolError_SWC
    |PeerErrored_SWC String    -- Second argument gives an idea of the location
    |ConnectionCloseReceived_SWC
-   |StreamResetReceived_SWC GlobalStreamId
+   |StreamResetReceived_SWC (GlobalStreamId, Maybe B.ByteString)
    |Http2DynamicHeaderTableChanged_SWC Int   -- Argument is the new size
    |PauseDueToHTTP2FlowControl_SWC
    |UnknownFrame_SWC -- Not an error

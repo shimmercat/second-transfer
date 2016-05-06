@@ -720,7 +720,8 @@ sessionInputThread  = do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
               else do
-                reportSituation (StreamResetReceived_SWC stream_id)
+                maybe_label <- liftIO $ getStreamLabel stream_state_table stream_id
+                reportSituation (StreamResetReceived_SWC (stream_id,maybe_label))
                 liftIO $ do
                     cancelled_streams <- takeMVar cancelled_streams_mvar
                     putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
@@ -1081,7 +1082,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                 if (num_active_streams + 1) < 100
                   then do
                     -- Report the stream as opened
-                    liftIO $ openStream stream_state_table stream_id
+                    liftIO $ openStream stream_state_table stream_id Nothing
                     return True
                   else do
                     closeConnectionBecauseIsInvalid NH2.EnhanceYourCalm
@@ -1716,6 +1717,7 @@ normallyHandleStream principal_stream = do
     next_push_stream_mvar <-  view nextPushStream_WTE
     reset_button <- view resetStreamButton_WTE
     this_environment <- ask
+    stream_state_table <- view streamStateTable_WTE
 
     -- Pieces of the header
     let
@@ -1723,8 +1725,11 @@ normallyHandleStream principal_stream = do
        data_and_conclusion  = principal_stream ^. dataAndConclusion_PS
        effects              = principal_stream ^. effect_PS
        pushed_streams       = principal_stream ^. pushedStreams_PS
+       label_of_main        = principal_stream ^. label_PS
 
        can_push_ioref       = session_settings ^. pushEnabled_SeS
+
+    liftIO $ relabelStream stream_state_table stream_id label_of_main
 
     can_push <- liftIO . DIO.readIORef $ can_push_ioref
       -- This gets executed in normal conditions, when no interruption is required.
@@ -1744,12 +1749,15 @@ normallyHandleStream principal_stream = do
                 -- are HTTP/2-specific.
                 response_headers           = pushed_stream ^. responseHeaders_Psh
                 pushed_data_and_conclusion = pushed_stream ^. dataAndConclusion_Psh
-
+                maybe_label_of_pushed      = pushed_stream ^. label_Psh
             child_stream_id <- liftIO $ modifyMVar next_push_stream_mvar
                                      $ (\ x -> return (x+2,x) )
 
-            liftIO . writeChan headers_output . PushPromise_HM $
-                (stream_id, child_stream_id, request_headers, effects)
+            liftIO $ do
+                writeChan headers_output . PushPromise_HM $
+                    (stream_id, child_stream_id, request_headers, effects)
+                reserveStream stream_state_table child_stream_id maybe_label_of_pushed
+
             return (child_stream_id, response_headers, pushed_data_and_conclusion, effects)
       else
         return []
@@ -1826,12 +1834,16 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
     -- (headers, _, data_and_conclussion)
     pusher_data_output <- liftIO $ newEmptyMVar
 
+
+    is_stream_cancelled_0 <- isStreamCancelled child_stream_id
+
     -- Now I send the headers, if that's possible at all. These are classed as "Normal response"
-    liftIO . writeChan headers_output
-        $ NormalResponse_HM (child_stream_id,  response_headers, effects, pusher_data_output)
+    unless (is_stream_cancelled_0) . liftIO $ do
+        openStream stream_state_table child_stream_id Nothing
+        writeChan headers_output
+            $ NormalResponse_HM (child_stream_id,  response_headers, effects, pusher_data_output)
 
     this_environment <- ask
-
     let
         check_if_cancelled =
             runReaderT
@@ -1842,7 +1854,7 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
     -- commiting to the work of sending addtitional data... this is important for pushed
     -- streams
     is_stream_cancelled <- isStreamCancelled child_stream_id
-    unless  is_stream_cancelled $ do
+    unless  (is_stream_cancelled || is_stream_cancelled_0) $ do
         _ <- liftIO . ReT.runResourceT $ do
             k <- ReT.register (pushed_reset_button child_stream_id)
             _ <- runConduit $
