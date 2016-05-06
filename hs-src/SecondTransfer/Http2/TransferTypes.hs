@@ -6,6 +6,8 @@ module SecondTransfer.Http2.TransferTypes (
      , SessionToFramerBlock                             (..)
      , OutputFrame
      , OutputDataFeed
+     , InputFrame
+     , SessionInputCommand                              (..)
      ) where
 
 --import Control.Lens
@@ -15,7 +17,15 @@ import qualified Data.ByteString                        as B
 import qualified Network.HTTP2                          as NH2
 import           Control.Concurrent                     (MVar)
 
-import SecondTransfer.MainLoop.CoherentWorker           (
+import           System.Clock                            ( --getTime
+                                                         --, Clock(..)
+                                                         --, toNanoSecs
+                                                         --, diffTimeSpec
+                                                         TimeSpec
+                                                         )
+
+
+import           SecondTransfer.MainLoop.CoherentWorker  (
                                                         Effect(..)
                                                         )
 
@@ -52,3 +62,21 @@ data SessionToFramerBlock =
 
 
 type SessionOutputPacket = SessionToFramerBlock
+
+
+
+
+-- |Have to figure out which are these...but I would expect to have things
+-- like unexpected aborts here in this type.
+data SessionInputCommand =
+    FirstFrame_SIC InputFrame               -- | This frame is special
+    |MiddleFrame_SIC InputFrame             -- | Ordinary frame
+    |InternalAbort_SIC                      -- | Internal abort from the session itself
+    |InternalAbortStream_SIC GlobalStreamId  -- | Internal abort, but only for a frame
+    |CancelSession_SIC                      -- |Cancel request from the framer
+    |PingFrameEmitted_SIC (Int, TimeSpec)   -- |The Framer decided to emit a ping request, this is the sequence number (of the packet it was sent on) and the time
+  deriving Show
+
+
+
+type InputFrame  = NH2.Frame

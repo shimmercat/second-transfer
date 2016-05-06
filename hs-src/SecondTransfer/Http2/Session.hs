@@ -15,7 +15,7 @@ module SecondTransfer.Http2.Session(
 
     ,CoherentSession
     ,SessionInput(..)
-    ,SessionInputCommand(..)
+    ,TT.SessionInputCommand(..)
     ,SessionOutput
     ,SessionCoordinates(..)
     ,SessionComponent(..)
@@ -26,7 +26,7 @@ module SecondTransfer.Http2.Session(
     ,SessionRole(..)
 
     -- Internal stuff
-    ,InputFrame
+    ,TT.InputFrame
     ,nextPushStream  -- Exporting just to hide the warning
     ) where
 
@@ -107,10 +107,6 @@ import           SecondTransfer.MainLoop.Logging        (logit)
 --import           Debug.Trace                            (traceShowId)
 
 
-type InputFrame  = NH2.Frame
-
-
-
 -- What to do regarding headers
 data HeaderOutputMessage =
     -- Send the headers of the principal stream
@@ -167,14 +163,14 @@ type Session = (SessionInput, SessionOutput)
 
 -- From outside, one can only write to this one ... the newtype is to enforce
 --    this.
-newtype SessionInput = SessionInput ( Chan SessionInputCommand )
-sendMiddleFrameToSession :: SessionInput  -> InputFrame -> IO ()
-sendMiddleFrameToSession (SessionInput chan) frame = writeChan chan $ MiddleFrame_SIC frame
+newtype SessionInput = SessionInput ( Chan TT.SessionInputCommand )
+sendMiddleFrameToSession :: SessionInput  -> TT.InputFrame -> IO ()
+sendMiddleFrameToSession (SessionInput chan) frame = writeChan chan $ TT.MiddleFrame_SIC frame
 
-sendFirstFrameToSession :: SessionInput -> InputFrame -> IO ()
-sendFirstFrameToSession (SessionInput chan) frame = writeChan chan $ FirstFrame_SIC frame
+sendFirstFrameToSession :: SessionInput -> TT.InputFrame -> IO ()
+sendFirstFrameToSession (SessionInput chan) frame = writeChan chan $ TT.FirstFrame_SIC frame
 
-sendCommandToSession :: SessionInput  -> SessionInputCommand -> IO ()
+sendCommandToSession :: SessionInput  -> TT.SessionInputCommand -> IO ()
 sendCommandToSession (SessionInput chan) command = writeChan chan command
 
 newtype SessionOutputChannelAbstraction = SOCA (BC.BoundedChan TT.SessionOutputPacket)
@@ -202,19 +198,6 @@ type HashTable k v = H.CuckooHashTable k v
 
 
 type WorkerMonad = ReaderT WorkerThreadEnvironment IO
-
-
--- |Have to figure out which are these...but I would expect to have things
--- like unexpected aborts here in this type.
-data SessionInputCommand =
-    FirstFrame_SIC InputFrame               -- | This frame is special
-    |MiddleFrame_SIC InputFrame             -- | Ordinary frame
-    |InternalAbort_SIC                      -- | Internal abort from the session itself
-    |InternalAbortStream_SIC GlobalStreamId  -- | Internal abort, but only for a frame
-    |CancelSession_SIC                      -- |Cancel request from the framer
-    |PingFrameEmitted_SIC (Int, TimeSpec)   -- |The Framer decided to emit a ping request, this is the sequence number (of the packet it was sent on) and the time
-  deriving Show
-
 
 
 -- The role of a session is either server or client. There are small
@@ -307,7 +290,7 @@ data SessionData = SessionData {
     -- ATTENTION: Ignore the warning coming from here for now
     _sessionsContext             :: SessionsContext
 
-    ,_sessionInput               :: Chan SessionInputCommand
+    ,_sessionInput               :: Chan TT.SessionInputCommand
 
     -- We need to lock this channel occassionally so that we can order multiple
     -- header frames properly....that's the reason for the outer MVar
@@ -634,7 +617,7 @@ sessionInputThread  = do
 
     case input of
 
-        FirstFrame_SIC
+        TT.FirstFrame_SIC
             (NH2.Frame
                 (NH2.FrameHeader _ 0 null_stream_id )
                 (NH2.SettingsFrame settings_list)
@@ -643,18 +626,18 @@ sessionInputThread  = do
             handleSettingsFrame settings_list
             continue
 
-        FirstFrame_SIC (NH2.Frame
+        TT.FirstFrame_SIC (NH2.Frame
             (NH2.FrameHeader _ 1 null_stream_id )  (NH2.SettingsFrame _ ) ) |  0 == null_stream_id  -> do
             -- This is a SETTINGS ACK frame, which is okej to have,
             -- do nothing here
             continue
 
-        FirstFrame_SIC _ -> do
+        TT.FirstFrame_SIC _ -> do
             -- Bad, incorrect id or god knows only what ....
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
-        PingFrameEmitted_SIC x -> do
+        TT.PingFrameEmitted_SIC x -> do
             -- Used by the Forwarded infra-structure to assess the latency to
             -- the client.
             emitted_pings_mvar <- view emittedPings
@@ -662,7 +645,7 @@ sessionInputThread  = do
                 return $ x : emitted_pings
             continue
 
-        CancelSession_SIC -> do
+        TT.CancelSession_SIC -> do
             -- Good place to tear down worker threads... Let the rest of the finalization
             -- to the framer.
             --
@@ -673,13 +656,13 @@ sessionInputThread  = do
             -- We do not continue here, but instead let it finish
             return ()
 
-        InternalAbort_SIC -> do
+        TT.InternalAbort_SIC -> do
             -- Message triggered because the worker failed to behave.
             -- When this is sent, the connection is closed
             closeConnectionBecauseIsInvalid NH2.InternalError
             return ()
 
-        InternalAbortStream_SIC stream_id -> do
+        TT.InternalAbortStream_SIC stream_id -> do
             -- Message triggered because the worker failed to behave, but
             -- here we believe that it is not necessary to tear down the
             -- entire session and therefore it's enough with a stream
@@ -695,7 +678,7 @@ sessionInputThread  = do
             liftIO $ closeStreamLocal stream_state_table stream_id
             continue
 
-        MiddleFrame_SIC (NH2.Frame
+        TT.MiddleFrame_SIC (NH2.Frame
                (NH2.FrameHeader _ _ stream_id)
                (NH2.HeadersFrame (Just (NH2.Priority _ dep_id _ ) )  _)
            )  | stream_id == dep_id -> do
@@ -707,7 +690,7 @@ sessionInputThread  = do
         -- TODO: As it stands now, the server will happily start a new stream with
         -- a CONTINUATION frame instead of a HEADERS frame. That's against the
         -- protocol.
-        MiddleFrame_SIC frame | Just (_stream_id, _bytes, _is_cont) <- isAboutHeaders frame ->
+        TT.MiddleFrame_SIC frame | Just (_stream_id, _bytes, _is_cont) <- isAboutHeaders frame ->
             case session_role of
                 Server_SR -> do
                     -- Just append the frames to streamRequestHeaders
@@ -718,13 +701,13 @@ sessionInputThread  = do
                     clientProcessIncomingHeaders frame
                     continue
 
-        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader lng _ _) (NH2.RSTStreamFrame _))  | lng /= 4 -> do
+        TT.MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader lng _ _) (NH2.RSTStreamFrame _))  | lng /= 4 -> do
              closeConnectionBecauseIsInvalid NH2.FrameSizeError
              reportSituation $ PeerErrored_SWC "InvalidResetFrame"
 
         -- Peer can order a stream aborted, meaning that we shall not send any more data
         -- on it.
-        MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
+        TT.MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             is_iddle <- streamIsIdle stream_id
             if ( stream_id == 0 || (is_iddle && odd stream_id ) )
@@ -739,7 +722,7 @@ sessionInputThread  = do
                 closePostDataSource stream_id
                 continue
 
-        MiddleFrame_SIC _frame@(NH2.Frame frame_header (NH2.WindowUpdateFrame _credit) ) -> do
+        TT.MiddleFrame_SIC _frame@(NH2.Frame frame_header (NH2.WindowUpdateFrame _credit) ) -> do
              -- The Framer is the one using this information, here I just merely inspect the length and destroy
              -- the session if that length is not good
              let frame_length = frameLength frame_header
@@ -751,7 +734,7 @@ sessionInputThread  = do
                else
                  continue
 
-        MiddleFrame_SIC frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) -> unlessReceivingHeaders $ do
+        TT.MiddleFrame_SIC frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) -> unlessReceivingHeaders $ do
             -- So I got data to process
             -- TODO: Handle end of stream
             let stream_id = nh2_stream_id
@@ -817,12 +800,12 @@ sessionInputThread  = do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
-        MiddleFrame_SIC (NH2.Frame frame_header (NH2.PingFrame _)) | not (isStreamZero frame_header)  || frameLength frame_header /= 8  -> do
+        TT.MiddleFrame_SIC (NH2.Frame frame_header (NH2.PingFrame _)) | not (isStreamZero frame_header)  || frameLength frame_header /= 8  -> do
             reportSituation (PeerErrored_SWC "PingFrameWithStreamIdNotZero")
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
-        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame ping_payload)) | NH2.testAck flags-> do
+        TT.MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame ping_payload)) | NH2.testAck flags-> do
             -- Deal with pings: this is an Ack, register it if possible...
             let
                 seq_no = fromIntegral $ bs8BEtoWord64 ping_payload
@@ -858,7 +841,7 @@ sessionInputThread  = do
                             _ -> return (latency_report, emitted_pings)
             continue
 
-        MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do
+        TT.MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do
             -- Deal with pings: NOT an Ack, so answer
             -- INSTRUMENTATION( debugM "HTTP2.Session" "Ping processed" )
             sendOutPriorityTrain
@@ -871,7 +854,7 @@ sessionInputThread  = do
 
             continue
 
-        MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame settings_list))
+        TT.MiddleFrame_SIC (NH2.Frame frame_header (NH2.SettingsFrame settings_list))
           | frameLength frame_header `mod` 6 /= 0 -> do
             reportSituation (PeerErrored_SWC "SettingsFrameSizeError")
             closeConnectionBecauseIsInvalid NH2.FrameSizeError
@@ -891,7 +874,7 @@ sessionInputThread  = do
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
-        MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
+        TT.MiddleFrame_SIC (NH2.Frame _ (NH2.GoAwayFrame _ _err _ ))
             | Server_SR <- session_role -> do
                 -- I was sent a go away, so go-away...
                 --liftIO . putStrLn $ "Received GoAway frame"
@@ -905,7 +888,7 @@ sessionInputThread  = do
                 _ <- closeConnectionForClient NH2.NoError
                 return ()
 
-        MiddleFrame_SIC (NH2.Frame  (NH2.FrameHeader _ _ nh2_stream_id) (NH2.PriorityFrame NH2.Priority {NH2.exclusive=_e, NH2.streamDependency=dep_id, NH2.weight=_w}  ) )
+        TT.MiddleFrame_SIC (NH2.Frame  (NH2.FrameHeader _ _ nh2_stream_id) (NH2.PriorityFrame NH2.Priority {NH2.exclusive=_e, NH2.streamDependency=dep_id, NH2.weight=_w}  ) )
             | nh2_stream_id == dep_id -> do
                 reportSituation (PeerErrored_SWC "InvalidPriorityFrame")
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
@@ -919,7 +902,7 @@ sessionInputThread  = do
             | otherwise ->
                 continue
 
-        MiddleFrame_SIC _somethingelse ->  unlessReceivingHeaders $ do
+        TT.MiddleFrame_SIC _somethingelse ->  unlessReceivingHeaders $ do
             -- An undhandled case here....
             reportSituation UnknownFrame_SWC
             continue
@@ -1130,9 +1113,9 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
         stream_bytes <- liftIO newEmptyMVar
 
         let
-            reset_button  = writeChan session_input (InternalAbortStream_SIC stream_id)
+            reset_button  = writeChan session_input (TT.InternalAbortStream_SIC stream_id)
             -- Will even take care of signaling the stream as closed.
-            child_reset_button = \stream_id' -> writeChan session_input  (InternalAbortStream_SIC stream_id')
+            child_reset_button = \stream_id' -> writeChan session_input  (TT.InternalAbortStream_SIC stream_id')
             -- Prepare the environment for the new working thread
             for_worker_thread     =
                 (set streamId_WTE stream_id)
@@ -1252,7 +1235,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                             session_is_ending <- DIO.readIORef session_is_ending_ioref
                             unless session_is_ending $ do
                                 putStrLn $ "ERROR: Aborting session after non-handled exception bubbled up " ++ E.displayException e
-                                writeChan session_input InternalAbort_SIC
+                                writeChan session_input TT.InternalAbort_SIC
                         io_closed_handle :: E.BlockedIndefinitelyOnMVar -> IO ()
                         io_closed_handle _e = return ()
                     thread_id <-
@@ -1541,7 +1524,7 @@ requestTermination stream_id error_code =
         sendOutputToFramer session_output message
 
 
-frameEndsStream :: InputFrame -> Bool
+frameEndsStream :: TT.InputFrame -> Bool
 frameEndsStream (NH2.Frame (NH2.FrameHeader _ flags _) _)  = NH2.testEndStream flags
 
 
@@ -1913,7 +1896,7 @@ getHeaderBytes _global_stream_id = do
 
 
 -- | Thirs parameter is for continuation frames
-isAboutHeaders :: InputFrame -> Maybe (GlobalStreamId, B.ByteString, Bool)
+isAboutHeaders :: TT.InputFrame -> Maybe (GlobalStreamId, B.ByteString, Bool)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame _ block_fragment   ) )
     = Just (stream_id, block_fragment, False)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.ContinuationFrame block_fragment) )
@@ -1922,11 +1905,11 @@ isAboutHeaders _
     = Nothing
 
 
-frameEndsHeaders  :: InputFrame -> Bool
+frameEndsHeaders  :: TT.InputFrame -> Bool
 frameEndsHeaders (NH2.Frame (NH2.FrameHeader _ flags _) _) = NH2.testEndHeader flags
 
 
-streamIdFromFrame :: InputFrame -> GlobalStreamId
+streamIdFromFrame :: TT.InputFrame -> GlobalStreamId
 streamIdFromFrame (NH2.Frame (NH2.FrameHeader _ _ stream_id) _) = stream_id
 
 
@@ -2115,7 +2098,7 @@ sessionPollThread  session_data headers_output = do
             (clientWorkerThread new_stream_id output_mvar input_data_stream )
             worker_environment
         case either_e0 :: Either HTTP500PrecursorException () of
-            Left _ -> writeChan session_input $ InternalAbortStream_SIC new_stream_id
+            Left _ -> writeChan session_input $ TT.InternalAbortStream_SIC new_stream_id
             Right _ -> return ()
 
     sessionPollThread session_data headers_output
