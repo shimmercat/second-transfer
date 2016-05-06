@@ -468,18 +468,8 @@ inputGatherer pull_action session_input = do
 
     abortSession :: String -> Sink a FramerSession ()
     abortSession msg = do
-      --liftIO $ putStrLn  "Framer called Abort Session"
-      maybe_situation_callback  <- view
-           (sessionsContext . sessionsConfig . sessionsCallbacks . situationCallback_SC)
-
-      case maybe_situation_callback of
-          Just callback -> do
-              session_id <- view sessionIdAtFramer
-              liftIO $ callback session_id (PeerErrored_SWC msg)
-
-          Nothing -> return ()
-
       lift $ do
+        reportSituation $ PeerErrored_SWC msg
         sendGoAwayFrame NH2.ProtocolError
         -- Inform the session that it can tear down itself
         liftIO $ sendCommandToSession session_input CancelSession_SIC
@@ -774,6 +764,17 @@ sendBytesN bs = do
     liftIO $ push_action bs
 
 
+reportSituation :: SituationWithClient -> FramerSession ()
+reportSituation situation = do
+    maybe_situation_callback  <- view
+        (sessionsContext . sessionsConfig . sessionsCallbacks . situationCallback_SC)
+    case maybe_situation_callback of
+        Just callback -> do
+            session_id <- view sessionIdAtFramer
+            liftIO $ callback session_id situation
+        Nothing -> return ()
+
+
 -- | A thread in charge of doing flow control transmission....This
 -- Reads payload data and formats it to DataFrames...
 --
@@ -890,7 +891,9 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
           else do
             -- I can not send because flow-control is full, wait for a command instead.
             -- Lazily computed new_calm have no effect in this case.
-            liftIO $ putStrLn "Flow control FFA"
+
+            reportSituation $  PauseDueToHTTP2FlowControl_SWC
+
             command <- liftIO $ {-# SCC t2 #-} readChan commands_chan
             case  {-# SCC t3 #-} command of
                 AddBytes_FCM delta_cap -> do

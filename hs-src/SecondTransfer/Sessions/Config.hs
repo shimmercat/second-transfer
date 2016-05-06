@@ -107,6 +107,7 @@ data SituationWithClient =
    |ConnectionCloseReceived_SWC
    |StreamResetReceived_SWC GlobalStreamId
    |Http2DynamicHeaderTableChanged_SWC Int   -- Argument is the new size
+   |PauseDueToHTTP2FlowControl_SWC
    |UnknownFrame_SWC -- Not an error
     deriving (Show, Eq)
 
