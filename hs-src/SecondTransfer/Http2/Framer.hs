@@ -49,7 +49,7 @@ import           System.Clock                           (
                                                           Clock(..)
                                                         , getTime
                                                         , TimeSpec
-                                                        , timeSpecAsNanoSecs
+                                                        , toNanoSecs
                                                         )
 -- import           System.Mem.Weak
 
@@ -461,6 +461,11 @@ inputGatherer pull_action session_input = do
         else
           sendMiddleFrameToSession session_input frame
 
+    sendPingToSession :: Bool -> InputFrame -> IO ()
+    sendPingToSession _starting frame = do
+      when_received <- getTime Monotonic
+      sendPingFrameToSession session_input when_received frame
+
     abortSession :: String -> Sink a FramerSession ()
     abortSession msg = do
       --liftIO $ putStrLn  "Framer called Abort Session"
@@ -539,9 +544,11 @@ inputGatherer pull_action session_input = do
                         liftIO $ sendToSession starting $! frame
                         consume_continue
 
+                    frame@(NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _ping_payload) ) | NH2.testAck flags -> do
+                        liftIO $ sendPingToSession starting frame
+                        consume_continue
+
                     a_frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) _ )   -> do
-                        -- Update the keep of last stream
-                        -- lift . startStreamOutputQueueIfNotExists (NH2.fromStreamIdentifier stream_id) priority
                         lift . updateLastInputStream $ stream_id
 
                         -- Send frame to the session
@@ -992,9 +999,9 @@ restartTrayMeter old starttime = TrayMeter {
     }
 
 
-
+-- | Time for the segmentation to reset
 resetTime :: Double
-resetTime = 2.0
+resetTime = 6.0
 
 sizeSequence :: DVec.Vector Word64
 sizeSequence = DVec.fromList [500,
@@ -1039,7 +1046,7 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
         (sequence_number, new_meter ) = if
             (
               (fromIntegral $
-                   timeSpecAsNanoSecs (  now - tray_meter ^. lastSentPacket_TrM  )
+                   toNanoSecs (  now - tray_meter ^. lastSentPacket_TrM  )
               )
             ) / 1.0e9 > resetTime
           then

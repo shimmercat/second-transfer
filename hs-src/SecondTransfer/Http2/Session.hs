@@ -10,6 +10,7 @@ module SecondTransfer.Http2.Session(
     ,sendFirstFrameToSession
     ,sendMiddleFrameToSession
     ,sendCommandToSession
+    ,sendPingFrameToSession
     ,makeClientState
     ,pendingRequests_ClS
 
@@ -169,6 +170,10 @@ sendMiddleFrameToSession (SessionInput chan) frame = writeChan chan $ TT.MiddleF
 
 sendFirstFrameToSession :: SessionInput -> TT.InputFrame -> IO ()
 sendFirstFrameToSession (SessionInput chan) frame = writeChan chan $ TT.FirstFrame_SIC frame
+
+sendPingFrameToSession :: SessionInput -> TimeSpec -> TT.InputFrame -> IO ()
+sendPingFrameToSession (SessionInput chan) time_spec frame =
+  writeChan chan $ TT.PingFrameReceived_SIC (frame, time_spec)
 
 sendCommandToSession :: SessionInput  -> TT.SessionInputCommand -> IO ()
 sendCommandToSession (SessionInput chan) command = writeChan chan command
@@ -805,15 +810,14 @@ sessionInputThread  = do
             closeConnectionBecauseIsInvalid NH2.ProtocolError
             return ()
 
-        TT.MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame ping_payload)) | NH2.testAck flags-> do
+        TT.PingFrameReceived_SIC ((NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame ping_payload)), when_recv)
+          | NH2.testAck flags-> do
             -- Deal with pings: this is an Ack, register it if possible...
             let
                 seq_no = fromIntegral $ bs8BEtoWord64 ping_payload
             emitted_pings_mvar <- view emittedPings
             latency_report_mvar <- view latencyReports
             liftIO $ do
-                now <- getTime Monotonic
-                -- putStrLn $ "Received ack for " ++ (show seq_no)
                 modifyMVar_ emitted_pings_mvar $ \ emitted_pings ->
                     modifyMVar latency_report_mvar $ \ latency_report -> do
                         let
@@ -829,7 +833,7 @@ sessionInputThread  = do
                             Just when_sent
                               | length latency_report < 8 -> do
                                 let
-                                    tspec = now `diffTimeSpec` when_sent
+                                    tspec = when_recv `diffTimeSpec` when_sent
                                     milliseconds = (fromIntegral $
                                         toNanoSecs tspec ) / 1.0e6
                                     new_latency_report = latency_report ++ [(seq_no, milliseconds)]
@@ -840,6 +844,9 @@ sessionInputThread  = do
 
                             _ -> return (latency_report, emitted_pings)
             continue
+
+            -- Ignore, olympically. This type of message is just for this frame
+        TT.PingFrameReceived_SIC _ -> continue
 
         TT.MiddleFrame_SIC (NH2.Frame (NH2.FrameHeader _ _ _) (NH2.PingFrame somebytes))  -> do
             -- Deal with pings: NOT an Ack, so answer
@@ -980,8 +987,10 @@ sessionInputThread  = do
                    case max_dynamic_table_size of
                        Just new_size -> do
                            encode_dyn_table_mvar <- view toEncodeHeaders
-                           liftIO . withMVar encode_dyn_table_mvar  $
-                               \ enc_dynamic_table -> HP.setLimitForEncoding new_size enc_dynamic_table
+                           liftIO $
+                             withMVar encode_dyn_table_mvar  $
+                                 \ enc_dynamic_table -> HP.setLimitForEncoding new_size enc_dynamic_table
+                           reportSituation $ Http2DynamicHeaderTableChanged_SWC new_size
                            return True
 
                        Nothing -> return True

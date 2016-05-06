@@ -69,12 +69,13 @@ type SessionOutputPacket = SessionToFramerBlock
 -- |Have to figure out which are these...but I would expect to have things
 -- like unexpected aborts here in this type.
 data SessionInputCommand =
-    FirstFrame_SIC InputFrame               -- | This frame is special
-    |MiddleFrame_SIC InputFrame             -- | Ordinary frame
-    |InternalAbort_SIC                      -- | Internal abort from the session itself
-    |InternalAbortStream_SIC GlobalStreamId  -- | Internal abort, but only for a frame
-    |CancelSession_SIC                      -- |Cancel request from the framer
-    |PingFrameEmitted_SIC (Int, TimeSpec)   -- |The Framer decided to emit a ping request, this is the sequence number (of the packet it was sent on) and the time
+    FirstFrame_SIC InputFrame                       -- | This frame is special
+    |MiddleFrame_SIC InputFrame                     -- | Ordinary frame
+    |InternalAbort_SIC                              -- | Internal abort from the session itself
+    |InternalAbortStream_SIC GlobalStreamId         -- | Internal abort, but only for a frame
+    |CancelSession_SIC                              -- |Cancel request from the framer
+    |PingFrameEmitted_SIC (Int, TimeSpec)           -- |The Framer decided to emit a ping request, this is the sequence number (of the packet it was sent on) and the time
+    |PingFrameReceived_SIC (InputFrame, TimeSpec)   -- |The Framer detected a Ping frame with an ACK flag, and a time-measurement was made
   deriving Show
 
 

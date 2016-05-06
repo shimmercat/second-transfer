@@ -106,6 +106,7 @@ data SituationWithClient =
    |PeerErrored_SWC String    -- Second argument gives an idea of the location
    |ConnectionCloseReceived_SWC
    |StreamResetReceived_SWC GlobalStreamId
+   |Http2DynamicHeaderTableChanged_SWC Int   -- Argument is the new size
    |UnknownFrame_SWC -- Not an error
     deriving (Show, Eq)
 
