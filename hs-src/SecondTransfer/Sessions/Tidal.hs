@@ -8,6 +8,7 @@ module SecondTransfer.Sessions.Tidal (
      , newTidalSession
      , defaultTidalContext
      , tidalConnectionManager
+     , closeAllConnections
        ) where
 
 
@@ -226,3 +227,10 @@ newTidalSession tidal_context = do
 tidalConnectionManager :: TidalS -> NewSessionCallback
 tidalConnectionManager tidals   =
     NewSessionCallback $ \ a b c -> runReaderT (whenAddingConnection a b c) tidals
+
+
+closeAllConnections :: TidalS -> IO ()
+closeAllConnections
+    (TidalS { _context_TdS = _tidal_context, _connections_TdS = connections_mvar }) = do
+    withMVar connections_mvar $ \ connections ->
+        dropConnections connections
