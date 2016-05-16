@@ -17,9 +17,9 @@ module SecondTransfer.IOCallbacks.SocketServer(
        ) where
 
 
---import           Control.Concurrent                                 (threadDelay)
+
 import qualified Control.Exception                                  as E
---import           Control.Lens                                       (makeLenses, (^.))
+import           Control.Monad                                      (unless)
 import           Control.Monad.IO.Class                             (liftIO)
 
 import           Data.Conduit
@@ -116,9 +116,9 @@ createAndBindListeningSocketNSSockAddr host_addr = do
 --   is run straight in the calling thread.
 --   For a typical server, you would be doing a forkIO in the provided action.
 --   Do prefer to use tcpItcli directly.
-tcpServe :: NS.Socket -> (Either AcceptErrorCondition NS.Socket -> IO () ) -> IO ()
-tcpServe  listen_socket action =
-    tcpItcli listen_socket $$
+tcpServe :: NS.Socket -> (IO Bool) -> (Either AcceptErrorCondition NS.Socket -> IO () ) -> IO ()
+tcpServe  listen_socket closing action =
+    tcpItcli listen_socket closing $$
        CL.mapM_
            (\ either_condition_or_pair ->
                case either_condition_or_pair of
@@ -129,8 +129,10 @@ tcpServe  listen_socket action =
 
 -- | Itcli is a word made from "ITerate-on-CLIents". This function makes an iterated
 --   listen...
-tcpItcli :: NS.Socket -> Source IO (Either AcceptErrorCondition  (NS.Socket, NS.SockAddr) )
-tcpItcli listen_socket =
+tcpItcli :: NS.Socket
+         -> (IO Bool)
+         -> Source IO (Either AcceptErrorCondition  (NS.Socket, NS.SockAddr) )
+tcpItcli listen_socket closing =
     -- NOTICE: The messages below should be considered traps. Whenever one
     -- of them shows up, we have hit a new abnormal condition that should
     -- be learn from
@@ -140,17 +142,19 @@ tcpItcli listen_socket =
               putStrLn "ERROR: TCP listen abstraction undone!!"
           -- TODO: System interrupts propagates freely!
           iterate' = do
-              either_x <- liftIO . E.try $ NS.accept listen_socket
-              case either_x of
-                  Left e  | ioeGetErrorString e  == "resource exhausted" -> do
-                              yield . Left $ ResourceExhausted_AEC
-                              iterate'
-                          | s <- ioeGetErrorString e  -> do
-                              yield . Left $ Misc_AEC s
-                              iterate'
-                  Right  (new_socket, sock_addr) -> do
-                      yieldOr  (Right  (new_socket, sock_addr)) report_abnormality
-                      iterate'
+              is_clossing <- liftIO closing
+              unless is_clossing $ do
+                  either_x <- liftIO . E.try $ NS.accept listen_socket
+                  case either_x of
+                      Left e  | ioeGetErrorString e  == "resource exhausted" -> do
+                                  yield . Left $ ResourceExhausted_AEC
+                                  iterate'
+                              | s <- ioeGetErrorString e  -> do
+                                  yield . Left $ Misc_AEC s
+                                  iterate'
+                      Right  (new_socket, sock_addr) -> do
+                          yieldOr  (Right  (new_socket, sock_addr)) report_abnormality
+                          iterate'
         iterate'
 
 
@@ -160,9 +164,9 @@ tcpItcli listen_socket =
 --   the rest of the conversation. If you do the TLS handshake in this thread, you will be in
 --   trouble when more than one client try to handshake simultaeneusly... ibidem if one of the
 --   clients blocks the handshake.
-tlsServe :: NS.Socket ->  ( TLSAcceptResult -> IO () ) -> IO ()
-tlsServe listen_socket tls_action =
-    tcpServe listen_socket tcp_action
+tlsServe :: (IO Bool) -> NS.Socket -> ( TLSAcceptResult -> IO () ) -> IO ()
+tlsServe closing listen_socket tls_action =
+    tcpServe listen_socket closing tcp_action
   where
     tcp_action either_active_socket =
       case either_active_socket of

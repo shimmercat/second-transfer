@@ -308,7 +308,7 @@ toSocks5Addr _                      = error "toSocks5Addr not fully implemented"
 --   encrypted contents over a SOCKS5 Socket
 newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks SocketIOCallbacks
 
-type TLSServerSOCKS5AcceptResult = Either AcceptErrorCondition TLSServerSOCKS5Callbacks
+-- type TLSServerSOCKS5AcceptResult = Either AcceptErrorCondition TLSServerSOCKS5Callbacks
 
 instance IOChannels TLSServerSOCKS5Callbacks where
     handshake (TLSServerSOCKS5Callbacks cb) = handshake cb
@@ -334,8 +334,13 @@ tlsSOCKS5Serve ::
  -> ( TLSServerSOCKS5Callbacks -> IO () )
  -> IO ()
 tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_socket onsocks5_action =
-     tcpServe listen_socket socks_action
+     tcpServe listen_socket service_is_closing  socks_action
   where
+
+     service_is_closing = case socks5_callbacks ^. serviceIsClosing_S5CC of
+         Nothing -> return False
+         Just clbk -> clbk
+
      socks_action either_condition_active_socket = do
          _ <- forkIOExc "tlsSOCKS5Serve/negotiation" $
              case either_condition_active_socket of
@@ -418,8 +423,12 @@ tlsSOCKS5Serve' ::
  -> ( Either AcceptErrorCondition TLSServerSOCKS5Callbacks -> IO () )
  -> IO ()
 tlsSOCKS5Serve' s5s_mvar socks5_callbacks approver forward_connections listen_socket onsocks5_action =
-     tcpServe listen_socket socks_action
+     tcpServe listen_socket service_is_closing socks_action
   where
+     service_is_closing = case socks5_callbacks ^. serviceIsClosing_S5CC of
+         Nothing -> return False
+         Just clbk -> clbk
+
      socks_action either_condition_active_socket = do
          _ <- forkIOExc "tlsSOCKS5Serve/negotiation" $
              case either_condition_active_socket of

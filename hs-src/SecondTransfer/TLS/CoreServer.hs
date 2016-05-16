@@ -107,7 +107,19 @@ tlsServeWithALPN proxy  conn_callbacks cert_filename key_filename interface_name
     -- let
     --     tls_serve socket
     listen_socket <- createAndBindListeningSocket interface_name interface_port
-    coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
+    coreListen
+        proxy
+        conn_callbacks
+        cert_filename
+        key_filename
+        listen_socket
+        (tlsServe closing)
+        attendants
+  where
+    closing = case conn_callbacks ^. serviceIsClosing_CoCa of
+        Just clbk -> clbk
+        Nothing -> (return False)
+
 
 -- | Use a previously given network address
 tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
@@ -121,7 +133,19 @@ tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
                  -> IO ()
 tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock_addr attendants = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
-    coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
+    coreListen
+        proxy
+        conn_callbacks
+        cert_filename
+        key_filename
+        listen_socket
+        (tlsServe closing)
+        attendants
+  where
+    closing = case conn_callbacks ^. serviceIsClosing_CoCa of
+        Just clbk -> clbk
+        Nothing -> (return False)
+
 
 data NormalTCPHold   = NormalTCPHold ( IO () )
 
@@ -141,8 +165,18 @@ tlsServeWithALPNNSSockAddr_Prepare proxy conn_callbacks  cert_filename key_filen
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
     return . NormalTCPHold $ do
         attendants <- make_attendants
-        coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
-
+        coreListen
+            proxy
+            conn_callbacks
+            cert_filename
+            key_filename
+            listen_socket
+            (tlsServe closing)
+            attendants
+  where
+    closing = case conn_callbacks ^. serviceIsClosing_CoCa of
+        Just clbk -> clbk
+        Nothing -> (return False)
 
 -- | Actually listen, possibly at the other side of the fork.
 tlsServeWithALPNNSSockAddr_Do :: NormalTCPHold  -> IO ()

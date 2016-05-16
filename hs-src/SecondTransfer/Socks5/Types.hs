@@ -26,6 +26,7 @@ module SecondTransfer.Socks5.Types (
                , Socks5ConnectionCallbacks                          (..)
                , logEvents_S5CC
                , blanketPlainTextIO_S5CC
+               , serviceIsClosing_S5CC
      ) where
 
 ---import           Control.Concurrent
@@ -68,6 +69,7 @@ data Socks5ConnectEvent =
 
 type Socks5LogCallback =  Socks5ConnectEvent -> IO ()
 
+
 -- | Callbacks used by  client applications to get notified about interesting
 --   events happening at a connection level, or to get asked about things
 --   (e.g, about if it is proper to accept a connection). These are used from CoreServer
@@ -79,6 +81,9 @@ data Socks5ConnectionCallbacks = Socks5ConnectionCallbacks {
     --   accepted. Handy for implementing metrics, or for slowing things down.
     --
  ,  _blanketPlainTextIO_S5CC   :: Maybe (IOCallbacks -> IO IOCallbacks)
+
+    -- | Function to say if the service is closing
+ ,  _serviceIsClosing_S5CC     :: Maybe (IO Bool)
     }
 
 makeLenses ''Socks5ConnectionCallbacks
