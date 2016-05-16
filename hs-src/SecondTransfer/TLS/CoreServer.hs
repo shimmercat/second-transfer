@@ -373,7 +373,21 @@ coreListen _ conn_callbacks certificate_pemfile_data key_pemfile_data listen_abs
                          Just lgfn -> lgfn $ AcceptError_CoEv connect_condition
 
                          Nothing -> return ()
-                 Right good -> tlsSessionHandler state_mvar attendants ctx good
+                 Right good ->
+                     case (conn_callbacks ^. serviceIsClosing_CoCa) of
+                         Nothing ->  tlsSessionHandler state_mvar attendants ctx good
+
+                         Just clbk -> do
+                             service_is_closing <- clbk
+                             if service_is_closing
+                               then
+                                 tlsSessionHandler state_mvar attendants ctx good
+                               else do
+                                 -- Close inmediately the connection, without doing
+                                 -- anything else
+                                 ioc <- handshake good
+                                 ioc ^. closeAction_IOC
+
      session_forker listen_abstraction tls_session_handler
 
 
