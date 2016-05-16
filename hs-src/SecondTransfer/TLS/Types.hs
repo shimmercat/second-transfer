@@ -13,9 +13,11 @@ module SecondTransfer.TLS.Types (
 
                , ConnectionTransformCallback
                , LogCallback
+               , ServiceIsClosingCallback
 
                , logEvents_CoCa
                , blanketPlainTextIO_CoCa
+               , serviceIsClosing_CoCa
 
                , defaultConnectionCallbacks
        ) where
@@ -34,6 +36,8 @@ import           SecondTransfer.IOCallbacks.Types                          (
                                                                            ConnectionData,
                                                                            ConnectionId (..)
                                                                            )
+
+import          SecondTransfer.IOCallbacks.WrapSocket
 
 -- | Singleton type. Used in conjunction with an `MVar`. If the MVar is full,
 --   the fuction `tlsServeWithALPNAndFinishOnRequest` knows that it should finish
@@ -68,6 +72,7 @@ data ConnectionEvent =
     Established_CoEv NS.SockAddr ConnectionId Int64        -- ^ New connection. The second member says how many live connections are now
   | ALPNFailed_CoEv ConnectionId                           -- ^ An ALPN negotiation failed
   | Ended_CoEv ConnectionId                                -- ^ A connection ended.
+  | AcceptError_CoEv AcceptErrorCondition                  -- ^. A condition
 
 
 -- | See the docs below
@@ -76,6 +81,9 @@ type LogCallback =  ConnectionEvent -> IO ()
 
 -- | See below
 type ConnectionTransformCallback = ConnectionData -> IOCallbacks -> IO IOCallbacks
+
+-- | The service is closing, stop accepting connections
+type ServiceIsClosingCallback = IO Bool
 
 
 -- | Callbacks used by  client applications to get notified about interesting
@@ -88,6 +96,11 @@ data ConnectionCallbacks = ConnectionCallbacks {
     -- | Function to transform the plain-text IOCallbacks when a connection is
     --   accepted. Handy for implementing metrics, or for slowing things down.
  ,  _blanketPlainTextIO_CoCa  :: Maybe ConnectionTransformCallback
+
+    -- | Invoked before accepting a new connection. If False, the connection
+    --   is accepted. If True, the connection is rejected, the socket is
+    --   closed and the thread finished
+ , _serviceIsClosing_CoCa     :: Maybe ServiceIsClosingCallback
     }
 
 makeLenses ''ConnectionCallbacks
@@ -97,4 +110,5 @@ defaultConnectionCallbacks :: ConnectionCallbacks
 defaultConnectionCallbacks = ConnectionCallbacks {
     _logEvents_CoCa = Nothing
   , _blanketPlainTextIO_CoCa = Nothing
+  , _serviceIsClosing_CoCa = Nothing
     }

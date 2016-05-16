@@ -7,6 +7,10 @@ module SecondTransfer.IOCallbacks.WrapSocket (
 
                , HasSocketPeer                                     (..)
                , SomeHasSocketPeer                                 (..)
+
+               , AcceptErrorCondition                              (..)
+
+               , AcceptResult
      ) where
 
 
@@ -26,11 +30,24 @@ import qualified Network.Socket.ByteString                          as NSB
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception
 
+
+-- | Error conditions that may happen sometimes upon
+--   trying to accept a new connection
+data AcceptErrorCondition =
+     ResourceExhausted_AEC
+  |  Signal_AEC Int
+  |  Misc_AEC  String
+
+
 -- | IOCallbacks around an active socket
 data SocketIOCallbacks = SocketIOCallbacks {
     _socket_SS    :: NS.Socket
   , _callbacks_SS :: IOCallbacks
     }
+
+
+type AcceptResult = Either AcceptErrorCondition SocketIOCallbacks
+
 
 makeLenses ''SocketIOCallbacks
 

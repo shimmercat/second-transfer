@@ -2,6 +2,7 @@
 module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
               , TLSServerSocketIOCallbacks                          (..)
+              , TLSAcceptResult
               , createAndBindListeningSocket
               , createAndBindListeningSocketNSSockAddr
               , socketIOCallbacks
@@ -12,11 +13,11 @@ module SecondTransfer.IOCallbacks.SocketServer(
 
               -- ** Socket server with iterators
               , tcpItcli
-              , tlsItcli
+              --, tlsItcli
        ) where
 
 
-import           Control.Concurrent                                 (threadDelay)
+--import           Control.Concurrent                                 (threadDelay)
 import qualified Control.Exception                                  as E
 --import           Control.Lens                                       (makeLenses, (^.))
 import           Control.Monad.IO.Class                             (liftIO)
@@ -24,22 +25,19 @@ import           Control.Monad.IO.Class                             (liftIO)
 import           Data.Conduit
 import qualified Data.Conduit.List                                  as CL
 
---import qualified Data.ByteString                                    as B
---import qualified Data.ByteString.Lazy                               as LB
---import           Data.ByteString.Char8                              (pack, unpack)
---import           Data.List                                          (find)
 
--- import           System.Exit
---import           System.Posix.Signals
 import           System.IO.Error                                    (ioeGetErrorString)
 
 import qualified Network.Socket                                     as NS
---import qualified Network.Socket.ByteString                          as NSB
-
 
 import           SecondTransfer.IOCallbacks.Types
-import           SecondTransfer.IOCallbacks.WrapSocket              (socketIOCallbacks, SocketIOCallbacks, HasSocketPeer(..))
---import           SecondTransfer.Exception                           (NoMoreDataException(..))
+import           SecondTransfer.IOCallbacks.WrapSocket              (
+                                                                     socketIOCallbacks,
+                                                                     SocketIOCallbacks,
+                                                                     HasSocketPeer(..),
+                                                                     AcceptErrorCondition(..)
+                                                                     )
+
 #include "instruments.cpphs"
 
 
@@ -47,6 +45,8 @@ import           SecondTransfer.IOCallbacks.WrapSocket              (socketIOCal
 --   encrypted contents
 newtype TLSServerSocketIOCallbacks = TLSServerSocketIOCallbacks SocketIOCallbacks
     deriving IOChannels
+
+type TLSAcceptResult = Either AcceptErrorCondition TLSServerSocketIOCallbacks
 
 instance TLSEncryptedIO TLSServerSocketIOCallbacks
 instance TLSServerIO TLSServerSocketIOCallbacks
@@ -116,14 +116,20 @@ createAndBindListeningSocketNSSockAddr host_addr = do
 --   is run straight in the calling thread.
 --   For a typical server, you would be doing a forkIO in the provided action.
 --   Do prefer to use tcpItcli directly.
-tcpServe :: NS.Socket -> ( NS.Socket -> IO () ) -> IO ()
+tcpServe :: NS.Socket -> (Either AcceptErrorCondition NS.Socket -> IO () ) -> IO ()
 tcpServe  listen_socket action =
-    tcpItcli listen_socket $$ CL.mapM_  (action . fst)
+    tcpItcli listen_socket $$
+       CL.mapM_
+           (\ either_condition_or_pair ->
+               case either_condition_or_pair of
+                   Left condition -> action $ Left condition
+                   Right (a,_b) -> action $ Right a
+           )
 
 
 -- | Itcli is a word made from "ITerate-on-CLIents". This function makes an iterated
 --   listen...
-tcpItcli :: NS.Socket -> Source IO (NS.Socket, NS.SockAddr)
+tcpItcli :: NS.Socket -> Source IO (Either AcceptErrorCondition  (NS.Socket, NS.SockAddr) )
 tcpItcli listen_socket =
     -- NOTICE: The messages below should be considered traps. Whenever one
     -- of them shows up, we have hit a new abnormal condition that should
@@ -137,17 +143,13 @@ tcpItcli listen_socket =
               either_x <- liftIO . E.try $ NS.accept listen_socket
               case either_x of
                   Left e  | ioeGetErrorString e  == "resource exhausted" -> do
-                              liftIO $ threadDelay  (1000 * 1000)
+                              yield . Left $ ResourceExhausted_AEC
                               iterate'
-                          | ioeGetErrorString e == "signal" -> do
-                              -- TODO: Some signals here should be processed differently, most likely!!
-                              return ()
-                          | otherwise                                                                  -> liftIO $ do
-                              -- TODO: Handle other interesting types of IOErrors in the loop above...
-                              putStrLn $ "XXERR: " ++ ioeGetErrorString e
-                              E.throwIO $ e
+                          | s <- ioeGetErrorString e  -> do
+                              yield . Left $ Misc_AEC s
+                              iterate'
                   Right  (new_socket, sock_addr) -> do
-                      yieldOr (new_socket, sock_addr) report_abnormality
+                      yieldOr  (Right  (new_socket, sock_addr)) report_abnormality
                       iterate'
         iterate'
 
@@ -158,21 +160,28 @@ tcpItcli listen_socket =
 --   the rest of the conversation. If you do the TLS handshake in this thread, you will be in
 --   trouble when more than one client try to handshake simultaeneusly... ibidem if one of the
 --   clients blocks the handshake.
-tlsServe :: NS.Socket ->  ( TLSServerSocketIOCallbacks -> IO () ) -> IO ()
+tlsServe :: NS.Socket ->  ( TLSAcceptResult -> IO () ) -> IO ()
 tlsServe listen_socket tls_action =
     tcpServe listen_socket tcp_action
   where
-    tcp_action active_socket = do
-        socket_io_callbacks <- socketIOCallbacks active_socket
-        tls_action (TLSServerSocketIOCallbacks socket_io_callbacks)
+    tcp_action either_active_socket =
+      case either_active_socket of
+          Left condition ->
+              tls_action $ Left condition
+
+          Right active_socket ->
+            do
+              socket_io_callbacks <- socketIOCallbacks active_socket
+              tls_action $
+                  Right (TLSServerSocketIOCallbacks socket_io_callbacks)
 
 
-tlsItcli :: NS.Socket -> Source IO (TLSServerSocketIOCallbacks, NS.SockAddr)
-tlsItcli listen_socket =
-    fuse
-        (tcpItcli listen_socket)
-        ( CL.mapM
-            $ \ (active_socket, address) -> do
-                socket_io_callbacks <- socketIOCallbacks active_socket
-                return (TLSServerSocketIOCallbacks socket_io_callbacks ,address)
-        )
+-- tlsItcli :: NS.Socket -> Source IO (TLSServerSocketIOCallbacks, NS.SockAddr)
+-- tlsItcli listen_socket =
+--     fuse
+--         (tcpItcli listen_socket)
+--         ( CL.mapM
+--             $ \ (active_socket, address) -> do
+--                 socket_io_callbacks <- socketIOCallbacks active_socket
+--                 return (TLSServerSocketIOCallbacks socket_io_callbacks ,address)
+--         )

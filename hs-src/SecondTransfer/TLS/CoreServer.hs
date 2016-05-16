@@ -61,9 +61,15 @@ import qualified Network.Socket                                            as NS
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.TLS.Types
 import           SecondTransfer.IOCallbacks.SocketServer
-import           SecondTransfer.IOCallbacks.WrapSocket                     (HasSocketPeer(..))
+import           SecondTransfer.IOCallbacks.WrapSocket                     (
+                                                                           HasSocketPeer(..),
+                                                                           AcceptErrorCondition(..)
+                                                                           )
 
-import           SecondTransfer.Socks5.Session                             (tlsSOCKS5Serve, initSocks5ServerState)
+import           SecondTransfer.Socks5.Session                             (
+                                                                           -- tlsSOCKS5Serve,
+                                                                           tlsSOCKS5Serve',
+                                                                           initSocks5ServerState)
 import           SecondTransfer.Socks5.Types                               (Socks5ConnectionCallbacks)
 import           SecondTransfer.Exception                                  (forkIOExc)
 
@@ -98,6 +104,8 @@ tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
                  -> Int                   -- ^ Port to listen for connections
                  -> IO ()
 tlsServeWithALPN proxy  conn_callbacks cert_filename key_filename interface_name attendants interface_port = do
+    -- let
+    --     tls_serve socket
     listen_socket <- createAndBindListeningSocket interface_name interface_port
     coreListen proxy conn_callbacks cert_filename key_filename listen_socket tlsServe attendants
 
@@ -168,13 +176,18 @@ tlsServeWithALPNUnderSOCKS5SockAddr
         approver name = isJust $ elemIndex name internal_hosts
     socks5_state_mvar <- newMVar initSocks5ServerState
     listen_socket <- createAndBindListeningSocketNSSockAddr host_addr
+    -- let
+    --      handler_fn :: NS.Socket
+    --          -> (Either AcceptErrorCondition b0 -> IO ()) -> IO ()
+    --      handler_fn socket =
+    --          tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal
     coreListen
        proxy
        conn_callbacks
        cert_filename
        key_filename
        listen_socket
-       (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
+       (tlsSOCKS5Serve' socks5_state_mvar socks5_callbacks approver forward_no_internal)
        attendants
 
 
@@ -217,7 +230,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
             cert_pemfile_data
             key_pemfile_data
             listen_socket
-            (tlsSOCKS5Serve socks5_state_mvar socks5_callbacks approver forward_no_internal)
+            (tlsSOCKS5Serve' socks5_state_mvar socks5_callbacks approver forward_no_internal)
             attendants
 
 
@@ -225,11 +238,12 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Do :: Socks5Hold -> IO ()
 tlsServeWithALPNUnderSOCKS5SockAddr_Do (Socks5Hold action) = action
 
 
-tlsSessionHandler ::  (TLSContext ctx session, TLSServerIO encrypted_io, HasSocketPeer encrypted_io) =>
+tlsSessionHandler ::
+       (TLSContext ctx session, TLSServerIO encrypted_io, HasSocketPeer encrypted_io) =>
        MVar SessionHandlerState
        -> NamedAttendants
-       ->  ctx
-       ->  encrypted_io
+       -> ctx
+       -> encrypted_io
        -> IO ()
 tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
     -- Have the handshake happen in another thread
@@ -332,7 +346,7 @@ coreListen ::
      -> B.ByteString                      -- ^ PEM-encoded certificate chain, in this string
      -> B.ByteString                      -- ^ PEM-encoded, un-encrypted PKCS #8 key in this string
      -> a                                 -- ^ An entity that is used to fork new handlers
-     -> ( a -> (b -> IO()) -> IO () )    -- ^ The fork-handling functionality
+     -> ( a -> (Either AcceptErrorCondition b -> IO()) -> IO () )    -- ^ The fork-handling functionality
      -> [(String, Attendant)]             -- ^ List of attendants and their handlers
      -> IO ()
 coreListen _ conn_callbacks certificate_pemfile_data key_pemfile_data listen_abstraction session_forker attendants =   do
@@ -343,8 +357,24 @@ coreListen _ conn_callbacks certificate_pemfile_data key_pemfile_data listen_abs
            , _connCallbacks_S = conn_callbacks
              }
      state_mvar <- newMVar state
-     ctx <- newTLSContextFromMemory certificate_pemfile_data key_pemfile_data (chooseProtocol attendants) :: IO ctx
-     session_forker listen_abstraction (tlsSessionHandler state_mvar attendants ctx)
+     ctx <-
+         newTLSContextFromMemory
+             certificate_pemfile_data
+             key_pemfile_data
+             (chooseProtocol attendants) :: IO ctx
+     let
+         tls_session_handler :: forall w .
+             (TLSServerIO w, HasSocketPeer w) =>
+             Either AcceptErrorCondition w -> IO ()
+         tls_session_handler either_aerr =
+             case either_aerr of
+                 Left connect_condition ->
+                     case (conn_callbacks ^. logEvents_CoCa) of
+                         Just lgfn -> lgfn $ AcceptError_CoEv connect_condition
+
+                         Nothing -> return ()
+                 Right good -> tlsSessionHandler state_mvar attendants ctx good
+     session_forker listen_abstraction tls_session_handler
 
 
 -- | A conduit that takes TLS-encrypted callbacks, creates a TLS server session on top of it, passes the resulting

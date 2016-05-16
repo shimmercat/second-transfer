@@ -168,6 +168,7 @@ data SessionsCallbacks = SessionsCallbacks {
     --   that the session manager registers them (in a weak map)
     --   if need comes
   , _newSessionCallback_SC  :: Maybe NewSessionCallback
+    -- | Used for soft finalization
   }
 
 makeLenses ''SessionsCallbacks

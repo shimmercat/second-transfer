@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
 module SecondTransfer.Socks5.Session (
                  tlsSOCKS5Serve
+               , tlsSOCKS5Serve'
                , ConnectOrForward                                  (..)
                , Socks5ServerState
                , initSocks5ServerState
@@ -32,7 +33,10 @@ import           SecondTransfer.Socks5.Serializers
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.SocketServer
 import           SecondTransfer.IOCallbacks.Coupling                (couple)
-import           SecondTransfer.IOCallbacks.WrapSocket              (HasSocketPeer(..))
+import           SecondTransfer.IOCallbacks.WrapSocket              (
+                                                                     HasSocketPeer(..),
+                                                                     AcceptErrorCondition
+                                                                     )
 
 -- For debugging purposes
 --import           SecondTransfer.IOCallbacks.Botcher
@@ -225,6 +229,8 @@ negotiateSocksForwardOrConnect approver socks_here =
                         -- TODO: Some address sanitization
                         externalConnectProcessing
 
+                    IPv6_IA _ ->
+                        error "IPv6NotHandledYet"
 
             -- Other commands not handled for now
             _             -> do
@@ -259,7 +265,7 @@ connectOnBehalfOfClient address port_number =
                     return Nothing
 
     case maybe_sock_addr of
-        Just sock_addr@(NS.SockAddrInet _ ha) -> do
+        Just _sock_addr@(NS.SockAddrInet _ ha) -> do
             E.catches
                 (do
                     client_socket <-  NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
@@ -302,6 +308,8 @@ toSocks5Addr _                      = error "toSocks5Addr not fully implemented"
 --   encrypted contents over a SOCKS5 Socket
 newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks SocketIOCallbacks
 
+type TLSServerSOCKS5AcceptResult = Either AcceptErrorCondition TLSServerSOCKS5Callbacks
+
 instance IOChannels TLSServerSOCKS5Callbacks where
     handshake (TLSServerSOCKS5Callbacks cb) = handshake cb
 
@@ -328,53 +336,152 @@ tlsSOCKS5Serve ::
 tlsSOCKS5Serve s5s_mvar socks5_callbacks approver forward_connections listen_socket onsocks5_action =
      tcpServe listen_socket socks_action
   where
-     socks_action active_socket = do
-         _ <- forkIOExc "tlsSOCKS5Serve/negotiation" $ do
-             conn_id <- modifyMVar s5s_mvar $ \ s5s -> do
-                 let
-                     conn_id = s5s ^. nextConnection_S5S
-                     new_s5s  = set nextConnection_S5S (conn_id + 1) s5s
-                 return $ new_s5s `seq` (new_s5s, conn_id)
+     socks_action either_condition_active_socket = do
+         _ <- forkIOExc "tlsSOCKS5Serve/negotiation" $
+             case either_condition_active_socket of
+                 Left condition ->
+                     process_condition condition
+
+                 Right cc ->
+                     process_connection cc
+         return ()
+
+     process_condition accept_condition =
+         case (socks5_callbacks ^. logEvents_S5CC) of
+             Nothing -> return ()
+             Just lgfn -> lgfn $ AcceptCondition_S5Ev accept_condition
+
+     process_connection active_socket = do
+         conn_id <- modifyMVar s5s_mvar $ \ s5s -> do
              let
-                 log_events_maybe = socks5_callbacks ^. logEvents_S5CC
-                 log_event :: Socks5ConnectEvent -> IO ()
-                 log_event ev = case log_events_maybe of
-                     Nothing -> return ()
-                     Just c -> c ev
-                 wconn_id = S5ConnectionId conn_id
-             either_peer_address <- E.try (NS.getPeerName active_socket)
-             case either_peer_address :: Either E.IOException NS.SockAddr of
-                 Left _e -> return ()
-                 Right peer_address -> do
-                     log_event $ Established_S5Ev peer_address wconn_id
+                 conn_id = s5s ^. nextConnection_S5S
+                 new_s5s  = set nextConnection_S5S (conn_id + 1) s5s
+             return $ new_s5s `seq` (new_s5s, conn_id)
+         let
+             log_events_maybe = socks5_callbacks ^. logEvents_S5CC
+             log_event :: Socks5ConnectEvent -> IO ()
+             log_event ev = case log_events_maybe of
+                 Nothing -> return ()
+                 Just c -> c ev
+             wconn_id = S5ConnectionId conn_id
+         either_peer_address <- E.try (NS.getPeerName active_socket)
+         case either_peer_address :: Either E.IOException NS.SockAddr of
+             Left _e -> return ()
+             Right peer_address -> do
+                 log_event $ Established_S5Ev peer_address wconn_id
 
-                     socket_io_callbacks <- socketIOCallbacks active_socket
+                 socket_io_callbacks <- socketIOCallbacks active_socket
 
-                     io_callbacks <- handshake socket_io_callbacks
-                     E.catch
-                       (do
-                         maybe_negotiated_io <-
-                           if forward_connections
-                               then negotiateSocksForwardOrConnect approver io_callbacks
-                               else negotiateSocksAndForward       approver io_callbacks
-                         case maybe_negotiated_io of
-                             Connect_COF fate _negotiated_io -> do
-                                 let
-                                     tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
-                                 log_event $ HandlingHere_S5Ev fate wconn_id
-                                 onsocks5_action tls_server_socks5_callbacks
-                             Drop_COF fate -> do
-                                 log_event $ Dropped_S5Ev fate wconn_id
-                                 (io_callbacks ^. closeAction_IOC)
-                                 return ()
-                             Forward_COF fate port -> do
-                                 -- TODO: More data needs to come here
-                                 -- Do not close
-                                 log_event $ ToExternal_S5Ev fate port wconn_id
-                                 return ()
-                       )
-                       (( \ _e -> do
-                           log_event $ Dropped_S5Ev "Peer errored" wconn_id
-                           (io_callbacks ^. closeAction_IOC)
-                       ):: NoMoreDataException -> IO () )
+                 io_callbacks <- handshake socket_io_callbacks
+                 E.catch
+                   (do
+                     maybe_negotiated_io <-
+                       if forward_connections
+                           then negotiateSocksForwardOrConnect approver io_callbacks
+                           else negotiateSocksAndForward       approver io_callbacks
+                     case maybe_negotiated_io of
+                         Connect_COF fate _negotiated_io -> do
+                             let
+                                 tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
+                             log_event $ HandlingHere_S5Ev fate wconn_id
+                             onsocks5_action tls_server_socks5_callbacks
+                         Drop_COF fate -> do
+                             log_event $ Dropped_S5Ev fate wconn_id
+                             (io_callbacks ^. closeAction_IOC)
+                             return ()
+                         Forward_COF fate port -> do
+                             -- TODO: More data needs to come here
+                             -- Do not close
+                             log_event $ ToExternal_S5Ev fate port wconn_id
+                             return ()
+                   )
+                   (( \ _e -> do
+                       log_event $ Dropped_S5Ev "Peer errored" wconn_id
+                       (io_callbacks ^. closeAction_IOC)
+                   ):: NoMoreDataException -> IO () )
+         return ()
+
+
+
+-- | tlsSOCKS5Serve approver listening_socket onsocks5_action
+-- The approver should return True for host names that are served by this software (otherwise the connection will be closed, just for now,
+-- in the close future we will implement a way to forward requests to external Internet hosts.)
+-- Pass a bound and listening TCP socket where you expect a SOCKS5 exchange to have to tke place.
+-- And pass an action that can do something with the callbacks. The passed-in action is expected to fork a thread and return
+-- inmediately.
+tlsSOCKS5Serve' ::
+    MVar Socks5ServerState
+ -> Socks5ConnectionCallbacks
+ -> (B.ByteString -> Bool)
+ -> Bool
+ -> NS.Socket
+ -> ( Either AcceptErrorCondition TLSServerSOCKS5Callbacks -> IO () )
+ -> IO ()
+tlsSOCKS5Serve' s5s_mvar socks5_callbacks approver forward_connections listen_socket onsocks5_action =
+     tcpServe listen_socket socks_action
+  where
+     socks_action either_condition_active_socket = do
+         _ <- forkIOExc "tlsSOCKS5Serve/negotiation" $
+             case either_condition_active_socket of
+                 Left condition ->
+                     process_condition condition
+
+                 Right cc ->
+                     process_connection cc
+         return ()
+
+     process_condition accept_condition = do
+         case (socks5_callbacks ^. logEvents_S5CC) of
+             Nothing -> return ()
+             Just lgfn -> lgfn $ AcceptCondition_S5Ev accept_condition
+         onsocks5_action $ Left accept_condition
+
+     process_connection active_socket = do
+         conn_id <- modifyMVar s5s_mvar $ \ s5s -> do
+             let
+                 conn_id = s5s ^. nextConnection_S5S
+                 new_s5s  = set nextConnection_S5S (conn_id + 1) s5s
+             return $ new_s5s `seq` (new_s5s, conn_id)
+         let
+             log_events_maybe = socks5_callbacks ^. logEvents_S5CC
+             log_event :: Socks5ConnectEvent -> IO ()
+             log_event ev = case log_events_maybe of
+                 Nothing -> return ()
+                 Just c -> c ev
+             wconn_id = S5ConnectionId conn_id
+         either_peer_address <- E.try (NS.getPeerName active_socket)
+         case either_peer_address :: Either E.IOException NS.SockAddr of
+             Left _e -> return ()
+             Right peer_address -> do
+                 log_event $ Established_S5Ev peer_address wconn_id
+
+                 socket_io_callbacks <- socketIOCallbacks active_socket
+
+                 io_callbacks <- handshake socket_io_callbacks
+                 E.catch
+                   (do
+                     maybe_negotiated_io <-
+                       if forward_connections
+                           then negotiateSocksForwardOrConnect approver io_callbacks
+                           else negotiateSocksAndForward       approver io_callbacks
+                     case maybe_negotiated_io of
+                         Connect_COF fate _negotiated_io -> do
+                             let
+                                 tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
+                             log_event $ HandlingHere_S5Ev fate wconn_id
+                             onsocks5_action . Right $ tls_server_socks5_callbacks
+                         Drop_COF fate -> do
+                             log_event $ Dropped_S5Ev fate wconn_id
+                             (io_callbacks ^. closeAction_IOC)
+                             return ()
+                         Forward_COF fate port -> do
+                             -- TODO: More data needs to come here
+                             -- Do not close
+                             log_event $ ToExternal_S5Ev fate port wconn_id
+                             return ()
+                   )
+                   (( \ _e -> do
+                       log_event $ Dropped_S5Ev "Peer errored" wconn_id
+                       (io_callbacks ^. closeAction_IOC)
+                   ):: NoMoreDataException -> IO () )
          return ()

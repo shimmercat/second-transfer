@@ -42,7 +42,8 @@ import           Data.Int                                           (Int64)
 
 import qualified Network.Socket                                     as NS(SockAddr)
 
-import           SecondTransfer.IOCallbacks.Types                          (IOCallbacks)
+import           SecondTransfer.IOCallbacks.Types                   (IOCallbacks)
+import           SecondTransfer.IOCallbacks.WrapSocket              (AcceptErrorCondition(..))
 
 -------------------------------------------------------------------------------------------------------
 --
@@ -63,6 +64,7 @@ data Socks5ConnectEvent =
   | HandlingHere_S5Ev B.ByteString S5ConnectionId
   | ToExternal_S5Ev B.ByteString Word16  S5ConnectionId
   | Dropped_S5Ev B.ByteString  S5ConnectionId
+  | AcceptCondition_S5Ev AcceptErrorCondition
 
 type Socks5LogCallback =  Socks5ConnectEvent -> IO ()
 
