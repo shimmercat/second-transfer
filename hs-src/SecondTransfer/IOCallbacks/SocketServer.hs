@@ -19,6 +19,7 @@ module SecondTransfer.IOCallbacks.SocketServer(
 
 
 import qualified Control.Exception                                  as E
+import           Control.Concurrent                                 hiding (yield)
 import           Control.Monad                                      (unless)
 import           Control.Monad.IO.Class                             (liftIO)
 
@@ -145,16 +146,34 @@ tcpItcli listen_socket closing =
               is_clossing <- liftIO closing
               unless is_clossing $ do
                   either_x <- liftIO . E.try $ NS.accept listen_socket
+                  is_clossing' <- liftIO closing
                   case either_x of
-                      Left e  | ioeGetErrorString e  == "resource exhausted" -> do
+                      Left e
+                              | is_clossing' ->
+                                  -- Just finish
+                                  return ()
+                              | ioeGetErrorString e  == "resource exhausted" -> do
                                   yield . Left $ ResourceExhausted_AEC
                                   iterate'
                               | s <- ioeGetErrorString e  -> do
                                   yield . Left $ Misc_AEC s
                                   iterate'
                       Right  (new_socket, sock_addr) -> do
-                          yieldOr  (Right  (new_socket, sock_addr)) report_abnormality
+                          yieldOr
+                              (Right  (new_socket, sock_addr))
+                              report_abnormality
                           iterate'
+
+          watch = do
+              is_closing <- closing
+              if is_closing then
+                  NS.close listen_socket
+              else do
+                  threadDelay $ 200*1000
+                  watch
+
+        _ <- liftIO $ forkIO watch
+
         iterate'
 
 

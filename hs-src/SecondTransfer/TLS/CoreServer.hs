@@ -133,6 +133,7 @@ tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
                  -> IO ()
 tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock_addr attendants = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
+    -- Close the socket if need comes
     coreListen
         proxy
         conn_callbacks
@@ -409,11 +410,12 @@ coreListen _ conn_callbacks certificate_pemfile_data key_pemfile_data listen_abs
                          Nothing -> return ()
                  Right good ->
                      case (conn_callbacks ^. serviceIsClosing_CoCa) of
-                         Nothing ->  tlsSessionHandler state_mvar attendants ctx good
+                         Nothing ->
+                             tlsSessionHandler state_mvar attendants ctx good
 
                          Just clbk -> do
                              service_is_closing <- clbk
-                             if service_is_closing
+                             if not service_is_closing
                                then
                                  tlsSessionHandler state_mvar attendants ctx good
                                else do
