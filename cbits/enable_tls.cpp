@@ -321,7 +321,20 @@ extern "C" DLL_PUBLIC int iocba_receive_data(
         size_t more_data_required = channel->received_data( (const unsigned char*) data, length);
         //printf("More data required %d \n", more_data_required);
         //printf("After taking data=%p \n", channel);
-    } catch (std::exception const& e)
+    }
+    catch (Botan::TLS::TLS_Exception const& e)
+    {
+        if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
+        {
+            printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
+            return -1;
+        } else
+        {
+            printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            return -1;
+        }
+    }
+    catch (std::exception const& e)
     {
         // TODO: control messages
         printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
