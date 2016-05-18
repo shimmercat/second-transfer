@@ -1084,7 +1084,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                 --
                 num_active_streams <- liftIO $ countActiveStreams stream_state_table
                 -- TODO: Make the number of concurrent streems configurable !!!
-                if (num_active_streams + 1) < max_concurrent_streams
+                if (num_active_streams + 1) <= max_concurrent_streams
                   then do
                     -- Report the stream as opened
                     liftIO $ openStream stream_state_table stream_id Nothing
@@ -1092,7 +1092,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                   else do
                     reportSituation .
                         StreamLimitSurpassed_SWC $
-                        num_active_streams + 1
+                        max_concurrent_streams
                     closeConnectionBecauseIsInvalid NH2.EnhanceYourCalm
                     return False
           else do
