@@ -27,7 +27,7 @@ import qualified Data.Attoparsec.ByteString              as Ap
 -- import           Data.Monoid                            (mconcat, mappend)
 
 import           SecondTransfer.MainLoop.CoherentWorker
-import           SecondTransfer.MainLoop.Protocol
+-- import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag, sessionsConfig)
 
 import           SecondTransfer.IOCallbacks.Types
@@ -326,6 +326,9 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
             response_headers    = principal_stream ^. headers_PS
             transfer_encoding = find (\ x -> (fst x) == "transfer-encoding" ) response_headers
             cnt_length_header = find (\ x -> (fst x) == "content-length" )    response_headers
+            status_code :: Maybe Int
+            status_code = (read . unpack . snd) <$>
+                find (\ x -> (fst x) == ":status") response_headers
             headers_text_as_lbs =
                 Bu.toLazyByteString $
                     headerListToHTTP1ResponseText response_headers `mappend` "\r\n"
@@ -333,6 +336,17 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
         close_release_key <- ReT.register close_action
 
         let
+            handle_as_headers_only  =
+              do
+                -- TODO: Take care of footers
+                -- let
+
+                liftIO $ do
+                    push_action headers_text_as_lbs
+                    push_action "\r\n"
+                _ <- ReT.unprotect close_release_key
+                return ()
+
             handle_as_chunked set_transfer_encoding =
               do
                 -- TODO: Take care of footers
@@ -392,13 +406,16 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 _ <- ReT.unprotect close_release_key
                 return ()
 
-            (Nothing, Nothing) -> do
-                -- We come here when there is no explicit transfer encoding and when there is
-                -- no content-length header. This condition should be avoided by most users of
-                -- of this library, but sometimes we are talking to an application...
-                -- There are two options here: to handle the transfer as chunked, or to close
-                -- the connection after ending...
-                handle_as_chunked True
+            (Nothing, Nothing)
+                | Just status_no <- status_code, not (responseStatusHasResponseBody status_no) ->
+                    handle_as_headers_only
+                | otherwise -> do
+                    -- We come here when there is no explicit transfer encoding and when there is
+                    -- no content-length header. This condition should be avoided by most users of
+                    -- of this library, but sometimes we are talking to an application...
+                    -- There are two options here: to handle the transfer as chunked, or to close
+                    -- the connection after ending...
+                    handle_as_chunked True
 
 
 addExtraHeaders :: SessionsContext -> Headers -> Headers

@@ -19,6 +19,7 @@ module SecondTransfer.Http1.Parse(
     ,wrapChunk
     ,unwrapChunks
     ,leftoversFromParserCompletion
+    ,responseStatusHasResponseBody
 
     ,IncrementalHttp1Parser
     ,Http1ParserCompletion(..)
@@ -720,6 +721,16 @@ methodHasResponseBody mth | mth == "GET"     = True
                          | mth == "DELETE"  =  False
                          | mth == "TRACE"   =  False
                          | otherwise        =  False
+
+
+responseStatusHasResponseBody :: Int -> Bool
+responseStatusHasResponseBody code
+  | code == 301                     = True
+  | code == 302                     = True
+  | code == 303                     = True
+  | code == 304                     = False
+  -- TODO: Add the other codes
+  | otherwise                       = True
 
 
 cleanupAbsoluteUri :: B.ByteString -> B.ByteString
