@@ -10,7 +10,7 @@ module SecondTransfer.TLS.Botan (
 
 import           Control.Concurrent
 import qualified Control.Exception                                         as E
-
+import           Control.Monad                                             (unless)
 import           Foreign
 import           Foreign.C.Types                                           (CChar, CInt(..), CUInt(..))
 import           Foreign.C.String                                          (CString)
@@ -36,6 +36,7 @@ import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception                                  (
                                                                              IOProblem
                                                                            , NoMoreDataException(..)
+                                                                           , TLSEncodingIssue (..)
                                                                            , keyedReportExceptions
                                                                            )
 import           SecondTransfer.TLS.Types                                  ( ProtocolSelector
@@ -103,9 +104,9 @@ dontMultiThreadBotan = unsafePerformIO $ do
     a <- mk_iocba_push iocba_push
     b <- mk_iocba_data_cb iocba_data_cb
     c <- mk_iocba_alert_cb iocba_alert_cb
-    d <- mk_iocba_handshake_cb iocba_handshake_cb
+    -- d <- mk_iocba_handshake_cb iocba_handshake_cb
     e <- mk_iocba_select_protocol_cb iocba_select_protocol_cb
-    iocba_init_callbacks a b c d e
+    iocba_init_callbacks a b c e
     newMVar ()
 
 -- withBotanPadReadLock :: BotanPadRef -> (BotanPad -> IO () ) -> IO ()
@@ -194,27 +195,27 @@ foreign import ccall "wrapper"
 
 
 -- Botan relies a wealth of information here, not using at the moment :-(
-type F_iocba_handshake_cb = BotanPadRef -> IO ()
-foreign export ccall iocba_handshake_cb :: F_iocba_handshake_cb
-iocba_handshake_cb :: F_iocba_handshake_cb
-iocba_handshake_cb siocb = do
-    withBotanPad siocb $ \botan_pad -> do
-        let
-            hcmvar = botan_pad ^. handshakeCompleted_BP
-        _ <-tryPutMVar hcmvar ()
-        maybe_protocol <- tryReadMVar (botan_pad ^. selectedProtocol_BP)
+-- type F_iocba_handshake_cb = BotanPadRef -> IO ()
+-- foreign export ccall iocba_handshake_cb :: F_iocba_handshake_cb
+-- iocba_handshake_cb :: F_iocba_handshake_cb
+-- iocba_handshake_cb siocb = do
+--     withBotanPad siocb $ \botan_pad -> do
+--         let
+--             hcmvar = botan_pad ^. handshakeCompleted_BP
+--         _ <-tryPutMVar hcmvar ()
+--         maybe_protocol <- tryReadMVar (botan_pad ^. selectedProtocol_BP)
 
-        -- If by this time no ALPN has completed, signal that
-        case maybe_protocol of
-            Nothing -> do
-                putMVar (botan_pad ^. selectedProtocol_BP ) Nothing
-            Just _something -> do
-                -- It's already in the var
-                return ()
-        return ()
+--         -- If by this time no ALPN has completed, signal that
+--         case maybe_protocol of
+--             Nothing -> do
+--                 putMVar (botan_pad ^. selectedProtocol_BP ) Nothing
+--             Just _something -> do
+--                 -- It's already in the var
+--                 return ()
+--         return ()
 
-foreign import ccall "wrapper"
-    mk_iocba_handshake_cb :: F_iocba_handshake_cb -> IO (FunPtr F_iocba_handshake_cb)
+-- foreign import ccall "wrapper"
+--     mk_iocba_handshake_cb :: F_iocba_handshake_cb -> IO (FunPtr F_iocba_handshake_cb)
 
 type F_iocba_select_protocol_cb = BotanPadRef -> Ptr CChar -> Int -> IO Int
 foreign export ccall iocba_select_protocol_cb :: F_iocba_select_protocol_cb
@@ -235,7 +236,13 @@ foreign import ccall "wrapper"
     mk_iocba_select_protocol_cb :: F_iocba_select_protocol_cb -> IO (FunPtr F_iocba_select_protocol_cb)
 
 
-foreign import ccall iocba_cleartext_push :: BotanTLSChannelPtr -> Ptr CChar -> Int -> IO ()
+foreign import ccall iocba_cleartext_push ::
+  BotanTLSChannelPtr
+  -> Ptr CChar
+  -> Word32
+  -> Ptr CChar
+  -> Ptr Word32
+  -> IO Int32
 
 foreign import ccall iocba_close :: BotanTLSChannelPtr -> IO ()
 
@@ -249,14 +256,22 @@ foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_
 
 --foreign import ccall "wrapper" mkTlsServerDeleter :: (BotanTLSChannelPtr -> IO ()) -> IO (FunPtr ( BotanTLSChannelPtr -> IO () ) )
 
-foreign import ccall iocba_receive_data :: BotanTLSChannelPtr -> Ptr CChar -> CInt -> IO CInt
+foreign import ccall iocba_receive_data ::
+    BotanTLSChannelPtr ->
+    Ptr CChar ->
+    Word32 ->
+    Ptr CChar ->
+    Ptr Word32 ->
+    Ptr CChar ->
+    Ptr Word32 ->
+    IO Int32
 
 
 foreign import ccall iocba_init_callbacks ::
     FunPtr F_iocba_push ->
     FunPtr F_iocba_data_cb ->
     FunPtr F_iocba_alert_cb ->
-    FunPtr F_iocba_handshake_cb ->
+    -- FunPtr F_iocba_handshake_cb ->
     FunPtr F_iocba_select_protocol_cb ->
     IO ()
 
@@ -266,24 +281,45 @@ botanPushData :: BotanPad -> LB.ByteString -> IO ()
 botanPushData botan_pad datum = do
     let
         strict_datum = LB.toStrict datum
+        reserve_length :: Int
+        reserve_length =
+            floor ((fromIntegral $ B.length strict_datum) * 1.2 + 1024.0 :: Double)
         write_lock = botan_pad ^. writeLock_BP
         channel_ioref = botan_pad ^. tlsChannel_BP
         problem_mvar = botan_pad ^. problem_BP
         handshake_completed_mvar = botan_pad ^. handshakeCompleted_BP
+
+    -- We are doing a lot of locking here... is it all needed?
     readMVar handshake_completed_mvar
     channel <- readIORef channel_ioref
-    withMVar write_lock $ \ _ -> do
+    data_to_send <- withMVar write_lock $ \ _ -> do
         mp <- tryReadMVar problem_mvar
         case mp of
             Nothing ->
-                Un.unsafeUseAsCStringLen strict_datum $ \ (pch, len) -> do
-                  withForeignPtr channel $ \ c -> withMVar dontMultiThreadBotan . const $  do
-                     iocba_cleartext_push c pch len
+                allocaBytes reserve_length $ \ out_enc_to_send -> do
+                  alloca $ \ p_enc_to_send_length -> do
+                    poke p_enc_to_send_length (fromIntegral reserve_length)
+                    Un.unsafeUseAsCStringLen strict_datum $ \ (cleartext_pch, cleartext_len) ->
+                      withForeignPtr channel $ \ c -> withMVar dontMultiThreadBotan . const $ do
+                         push_result <- iocba_cleartext_push
+                             c
+                             cleartext_pch
+                             (fromIntegral cleartext_len)
+                             out_enc_to_send
+                             p_enc_to_send_length
+                         if push_result < 0
+                            then E.throwIO TLSEncodingIssue
+                            else do
+                                enc_to_send_length <- peek p_enc_to_send_length
+                                B.packCStringLen (out_enc_to_send, fromIntegral enc_to_send_length)
+
 
             Just _ -> do
                 --(botan_pad ^. encryptedSide_BP . closeAction_IOC )
                 --putStrLn "bpRaise"
                 E.throwIO $ NoMoreDataException
+
+    (botan_pad ^. encryptedSide_BP . pushAction_IOC) . LB.fromStrict $ data_to_send
 
 
 -- Bad things will happen if serveral threads are calling this concurrently!!
@@ -321,8 +357,7 @@ pullAvailableData botan_pad can_wait = do
 
 
 foreign import ccall iocba_new_tls_server_channel ::
-     BotanPadRef
-     -> BotanTLSContextCSidePtr
+        BotanTLSContextCSidePtr
      -> IO BotanTLSChannelPtr
 
 -- TODO: Move this to "SecondTransfer.TLS.Utils" module
@@ -374,8 +409,7 @@ unencryptChannelData botan_ctx tls_data  = do
     selected_protocol_mvar <- newEmptyMVar
     active_mvar <- newMVar ()
     tls_channel_ioref <- newIORef (error "")
-    avail_data_ioref <- newIORef mempty
-
+    avail_data_ioref <- newIORef ""
     write_lock_mvar <- newMVar ()
 
     let
@@ -398,9 +432,9 @@ unencryptChannelData botan_ctx tls_data  = do
             -- withMVar dontMultiThreadBotan . const $
                iocba_delete_tls_server_channel
 
-    botan_pad_stable_ref <- newStablePtr new_botan_pad
+    -- botan_pad_stable_ref <- newStablePtr new_botan_pad
 
-    tls_channel_ptr <- withForeignPtr fctx $ \ x -> iocba_new_tls_server_channel botan_pad_stable_ref x
+    tls_channel_ptr <- withForeignPtr fctx $ \ x -> iocba_new_tls_server_channel  x
 
     tls_channel_fptr <- newForeignPtr destructor tls_channel_ptr
 
@@ -421,23 +455,63 @@ unencryptChannelData botan_ctx tls_data  = do
                 pump_exc_handler
             case maybe_new_data of
                 Just new_data
-                  | B.length new_data > 0 -> do
+                  | len_new_data <- B.length new_data, len_new_data > 0 -> do
                     can_continue <- withMVar write_lock_mvar $ \_ -> do
                         maybe_problem <- tryReadMVar problem_mvar
                         case maybe_problem of
                             Nothing -> do
-                                engine_result <-
-                                    Un.unsafeUseAsCStringLen new_data $ \ (pch, len) ->
-                                        withMVar dontMultiThreadBotan . const $
-                                            iocba_receive_data tls_channel_ptr pch (fromIntegral len)
-                                if engine_result < 0
-                                  then do
-                                    _ <- tryPutMVar problem_mvar ()
-                                    -- Just awake any variables
-                                    _ <- tryPutMVar data_came_mvar ()
-                                    return False
-                                  else
-                                    return True
+                                maybe_cont_data <- do
+                                  let
+                                    cleartext_reserve_length :: Int
+                                    cleartext_reserve_length = floor $
+                                      ((fromIntegral len_new_data * 1.2) :: Double) +
+                                      1024.0
+                                  allocaBytes cleartext_reserve_length $ \ p_clr_space ->
+                                    allocaBytes cleartext_reserve_length $ \ p_enc_to_send ->
+                                       alloca $ \ p_enc_to_send_length ->
+                                         alloca $ \ p_clr_length -> do
+                                                poke p_enc_to_send_length
+                                                    $ fromIntegral cleartext_reserve_length
+                                                poke p_clr_length $ fromIntegral cleartext_reserve_length
+                                                Un.unsafeUseAsCStringLen new_data $ \ (enc_pch, enc_len) ->
+                                                    withMVar dontMultiThreadBotan . const $ do
+                                                        engine_result <- iocba_receive_data
+                                                            tls_channel_ptr
+                                                            enc_pch
+                                                            (fromIntegral enc_len)
+                                                            p_enc_to_send
+                                                            p_enc_to_send_length
+                                                            p_clr_space
+                                                            p_clr_length
+
+                                                        if engine_result < 0
+                                                          then do
+                                                            _ <- tryPutMVar problem_mvar ()
+                                                            -- Just awake any variables
+                                                            _ <- tryPutMVar data_came_mvar ()
+                                                            return Nothing
+                                                          else do
+                                                            enc_to_send_length <- peek p_enc_to_send_length
+                                                            clr_length <- peek p_clr_length
+                                                            to_send <- B.packCStringLen (p_enc_to_send, fromIntegral enc_to_send_length)
+                                                            to_return <- B.packCStringLen (p_clr_space, fromIntegral clr_length)
+                                                            return $ Just  (to_send, to_return)
+
+                                case maybe_cont_data of
+                                    Just (send_to_peer, just_unencrypted) -> do
+                                        unless (B.length send_to_peer == 0) .
+                                            (tls_io_callbacks ^. pushAction_IOC) .
+                                            LB.fromStrict $
+                                            send_to_peer
+                                        unless (B.length just_unencrypted == 0 ) .
+                                            atomicModifyIORef' avail_data_ioref $ \ bu ->
+                                              (
+                                                bu `seq` (bu `mappend` Bu.byteString just_unencrypted),
+                                                ()
+                                              )
+                                        return True
+
+                                    Nothing -> return False
                             Just _ -> do
                                 return False
                     if can_continue
@@ -459,7 +533,7 @@ unencryptChannelData botan_ctx tls_data  = do
 
     _ <- mkWeakIORef result $ do
         closeBotan new_botan_pad
-        freeStablePtr botan_pad_stable_ref
+        -- freeStablePtr botan_pad_stable_ref
 
     -- Create the pump thread
     _ <- forkIO pump
@@ -526,8 +600,8 @@ instance IOChannels BotanSession where
 
             handshake_completed_mvar = botan_pad' ^. handshakeCompleted_BP
 
-        -- We will be waiting for the handshake...
-        readMVar handshake_completed_mvar
+        -- We needed to wait for a hand-shake
+        -- readMVar handshake_completed_mvar
 
         return $ IOCallbacks {
             _pushAction_IOC = push_action

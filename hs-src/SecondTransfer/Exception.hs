@@ -24,6 +24,7 @@ module SecondTransfer.Exception (
     , GenericIOProblem                            (..)
     , StreamCancelledException                    (..)
     , NoMoreDataException                         (..)
+    , TLSEncodingIssue                            (..)
 
       -- * Exceptions related to SOCKS5
     , SOCKS5ProtocolException                     (..)
@@ -249,6 +250,16 @@ instance Exception NoMoreDataException where
     fromException x = do
         IOProblem  a <- fromException x
         cast a
+
+data TLSEncodingIssue = TLSEncodingIssue
+    deriving (Show, Typeable)
+
+instance Exception TLSEncodingIssue where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem  a <- fromException x
+        cast a
+
 
 noMoreDataException :: Proxy NoMoreDataException
 noMoreDataException = Proxy
