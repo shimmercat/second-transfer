@@ -22,6 +22,7 @@ module SecondTransfer.Sessions.Config(
                , firstPushStream
                , trayMaxSize
                , collectLatencyData
+               , maxConcurrentStreams
 
                , SessionComponent                       (..)
                , SessionCoordinates                     (..)
@@ -110,6 +111,7 @@ data SituationWithClient =
    |ConnectionCloseReceived_SWC
    |StreamResetReceived_SWC (GlobalStreamId, Maybe B.ByteString)
    |Http2DynamicHeaderTableChanged_SWC Int   -- Argument is the new size
+   |StreamLimitSurpassed_SWC Int -- Client is trying to create too many streams, connection was closed
    |PauseDueToHTTP2FlowControl_SWC
    |UnknownFrame_SWC -- Not an error
     deriving (Show, Eq)
@@ -216,6 +218,9 @@ data SessionsConfig = SessionsConfig {
  , _trayMaxSize               :: Int
    -- | Should we collect latency data?
  , _collectLatencyData        :: Bool
+
+   -- | The highest stream count
+ , _maxConcurrentStreams       :: Int
    }
 
 makeLenses ''SessionsConfig
@@ -249,4 +254,5 @@ defaultSessionsConfig = SessionsConfig {
   -- , _trayMaxSize = 128
   , _trayMaxSize = 16
   , _collectLatencyData = False
+  , _maxConcurrentStreams = 100
     }

@@ -1048,6 +1048,10 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
     maybe_hashable_addr       <- view peerAddress
     session_settings          <- view sessionSettings
     stream_state_table        <- view streamStateTable
+    max_concurrent_streams    <- view $
+        sessionsContext .
+        sessionsConfig .
+        maxConcurrentStreams
 
     its_ok <- case (opens_stream, is_cont) of
       (True, False) -> {-# SCC gpAb #-} do
@@ -1063,15 +1067,16 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
         if all_ok
           then do
             -- And go to check if the stream id is valid
-            ok2 <- liftIO . modifyMVar last_good_stream_mvar $  \ last_good_stream ->
-                if (odd stream_id ) && (stream_id > last_good_stream)
-                  then
-                      -- We are golden, set the new good stream
-                      return (stream_id, True)
-                  else
-                      -- The new oppened stream has a new id
-                      return (stream_id, False)
-            if not  ok2
+            stream_id_is_valid <-
+                liftIO . modifyMVar last_good_stream_mvar $  \ last_good_stream ->
+                    if (odd stream_id ) && (stream_id > last_good_stream)
+                      then
+                          -- We are golden, set the new good stream
+                          return (stream_id, True)
+                      else
+                          -- The new oppened stream has a new id
+                          return (stream_id, False)
+            if not  stream_id_is_valid
               then do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return False
@@ -1079,12 +1084,15 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                 --
                 num_active_streams <- liftIO $ countActiveStreams stream_state_table
                 -- TODO: Make the number of concurrent streems configurable !!!
-                if (num_active_streams + 1) < 100
+                if (num_active_streams + 1) < max_concurrent_streams
                   then do
                     -- Report the stream as opened
                     liftIO $ openStream stream_state_table stream_id Nothing
                     return True
                   else do
+                    reportSituation .
+                        StreamLimitSurpassed_SWC $
+                        num_active_streams + 1
                     closeConnectionBecauseIsInvalid NH2.EnhanceYourCalm
                     return False
           else do
