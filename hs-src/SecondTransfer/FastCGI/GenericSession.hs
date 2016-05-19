@@ -15,12 +15,15 @@ module SecondTransfer.FastCGI.GenericSession (
     ) where
 
 import           Control.Lens
-import qualified Control.Exception                                         as E
-import           Control.Monad                                             (when)
-import           Control.Concurrent                                        hiding (yield)
-import           Control.Monad.Morph                                       (hoist, lift)
+--import qualified Control.Exception                                         as E
+--import           Control.Monad                                             (when)
+--import           Control.Concurrent                                        hiding (yield)
+import           Control.Monad.Morph                                       (
+                                                                            --hoist,
+                                                                            lift
+                                                                           )
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
-import qualified Control.Monad.Trans.Resource                              as ReT
+--import qualified Control.Monad.Trans.Resource                              as ReT
 import           Control.Monad.Catch                                       (MonadCatch)
 
 import qualified Data.ByteString                                           as B
@@ -167,14 +170,14 @@ framesParser =
 --   here.
 framesSource ::
     (MonadIO m, MonadCatch m) =>
-    IO B.ByteString ->
+    IO LB.ByteString ->
     Source  m B.ByteString
 framesSource bepa =
   let
         conn_source = do
             -- Will throw exceptions
             b <- liftIO bepa
-            yield b
+            CL.sourceList $ LB.toChunks b
             conn_source
 
         frames_interpreter =

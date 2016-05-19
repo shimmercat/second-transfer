@@ -15,7 +15,7 @@ import           Control.Monad.IO.Class                               (liftIO)
 import           Control.Concurrent                                   hiding (yield)
 
 --import qualified Data.ByteString                                      as B
---import qualified Data.ByteString.Lazy                                 as LB
+import qualified Data.ByteString.Lazy                                 as LB
 import qualified Data.ByteString.Builder                              as Bu
 --import qualified Data.Binary                                          as Bin
 import qualified Data.Binary.Put                                      as Bin
@@ -50,8 +50,7 @@ probe ioc =
 
         source = do
             b <- liftIO bepa
-            --liftIO $ putStrLn $ "Got data: " ++ show b
-            yield b
+            CL.sourceList $ LB.toChunks b
             source
 
     packet_sent <- E.try $
@@ -67,7 +66,7 @@ probe ioc =
             -- Yes, there is danger of time-out
             --putStrLn "Waiting for response"
 
-            forkIOExc "probeTimeOutExc" $ do
+            _ <- forkIOExc "probeTimeOutExc" $ do
                 threadDelay (1000*1000)
                 (ioc ^. closeAction_IOC)
 
