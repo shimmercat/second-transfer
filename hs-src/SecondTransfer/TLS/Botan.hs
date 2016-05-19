@@ -283,7 +283,7 @@ botanPushData botan_pad datum = do
         strict_datum = LB.toStrict datum
         reserve_length :: Int
         reserve_length =
-            floor ((fromIntegral $ B.length strict_datum) * 1.2 + 1024.0 :: Double)
+            floor ((fromIntegral $ B.length strict_datum) * 1.2 + 4096.0 :: Double)
         write_lock = botan_pad ^. writeLock_BP
         channel_ioref = botan_pad ^. tlsChannel_BP
         problem_mvar = botan_pad ^. problem_BP
@@ -465,7 +465,7 @@ unencryptChannelData botan_ctx tls_data  = do
                                     cleartext_reserve_length :: Int
                                     cleartext_reserve_length = floor $
                                       ((fromIntegral len_new_data * 1.2) :: Double) +
-                                      1024.0
+                                      2048.0
                                   allocaBytes cleartext_reserve_length $ \ p_clr_space ->
                                     allocaBytes cleartext_reserve_length $ \ p_enc_to_send ->
                                        alloca $ \ p_enc_to_send_length ->

@@ -4,6 +4,7 @@
 #else
 
 #include <string>
+#include <iostream>
 #include <sstream>
 
 #include <botan/botan.h>
@@ -159,7 +160,7 @@ public:
     };
     SituationEnum situation;
     buffer_override_exception_t( SituationEnum i ): situation(i) {}
-    virtual const char* what() const noexcept (true) 
+    virtual const char* what() const noexcept (true)
     {
         if ( situation == 0 )
         {
@@ -171,13 +172,14 @@ public:
     }
 };
 
-    
+
 // Invoked by botan to deposit encrypted data to send to the counter-party
 void output_dn_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
 {
     //iocba_push(botan_pad_ref, (char*)a, sz);
-    if ( buffers->enc_cursor + sz > buffers -> enc_end )
+    if ( ( buffers->enc_cursor + sz) > buffers -> enc_end )
     {
+        printf("output_dn_cb enc_cursor %p enc_end %p \n", buffers->enc_cursor, buffers->enc_end);
         throw buffer_override_exception_t(buffer_override_exception_t::GEN_CIPHER);
     }
     strncpy(buffers->enc_cursor, (const char*) a, sz);
@@ -203,6 +205,7 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     buffers->alert_produced = true;
     if (alert.is_valid() && alert.is_fatal() )
     {
+        std::cout << alert << std::endl;
         printf("Ignored a fatal alert!!\n");
     } else {
         printf("Ignored a non-fatal alert!!\n");
