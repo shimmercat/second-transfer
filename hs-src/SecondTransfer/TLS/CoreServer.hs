@@ -58,6 +58,8 @@ import           Data.Int                                                  (Int6
 
 import qualified Network.Socket                                            as NS
 
+
+import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.TLS.Types
 import           SecondTransfer.IOCallbacks.SocketServer
@@ -343,10 +345,10 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
       maybe_sel_prot <- getSelectedProtocol session
       let maybe_attendant =
             case maybe_sel_prot of
-                Just (_, prot_name) ->
-                    lookup (unpack prot_name) attendants
-                Nothing ->
-                    lookup "" attendants
+                Http11_HPV ->
+                    lookup "http/1.1" attendants
+                Http2_HPV ->
+                    lookup "h2" attendants
       case maybe_attendant of
           Just use_attendant ->
               use_attendant connection_data plaintext_io_callbacks
@@ -356,21 +358,10 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
     return ()
 
 
-chooseProtocol :: [(String, a)] ->  [B.ByteString] -> IO (Maybe Int)
-chooseProtocol attendants proposed_protocols =
-    let
-        i_want_protocols = map (pack . fst) attendants
-        chosen =
-            foldl
-                ( \ selected want_protocol ->
-                    case (selected, elemIndex want_protocol proposed_protocols) of
-                        ( Just a, _) -> Just a
-                        (_,   Just idx) -> Just idx
-                        (_,   _ ) -> Nothing
-                )
-                Nothing
-                i_want_protocols
-    in return chosen
+chooseProtocol :: [(String, a)] ->  HttpProtocolVersion
+chooseProtocol (("http/1.1" , _):_ ) = Http11_HPV
+chooseProtocol (("h2", _):_ ) = Http2_HPV
+chooseProtocol _ = Http11_HPV
 
 
 coreListen ::

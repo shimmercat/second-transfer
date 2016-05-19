@@ -52,57 +52,18 @@
    #endif
 #endif
 
-
-// TODO:
-//
-// Consider marking these functions "safe" in Haskell code.
-// For that to work, you need first to change them in such a way that no lock
-// takes place, that is, you shouldn't call back to Haskell code from here, but
-// instead have the callbacks to simply write that in a provided buffer.
-//
-// This is also a good point to write about the "TLS overhead."
-
 namespace second_transfer {
 
 
-typedef void (*iocba_push_fptr)(HsStablePtr a1, HsPtr a2, HsInt32 a3);
-typedef void (*iocba_data_cb_fptr)(HsStablePtr a1, HsPtr a2, HsInt32 a3);
-typedef void (*iocba_alert_cb_fptr)(HsStablePtr a1, HsInt32 a2);
-typedef void (*iocba_handshake_cb_fptr)(HsStablePtr a1);
-typedef HsInt (*iocba_select_protocol_cb_fptr)(HsStablePtr a1, HsPtr a2, HsInt a3);
-
-
-iocba_push_fptr iocba_push;
-iocba_data_cb_fptr iocba_data_cb;
-iocba_alert_cb_fptr iocba_alert_cb;
-iocba_handshake_cb_fptr iocba_handshake_cb;
-iocba_select_protocol_cb_fptr iocba_select_protocol_cb;
-
-
-extern "C" DLL_PUBLIC void iocba_init_callbacks(
-    iocba_push_fptr iocba_push_param,
-    iocba_data_cb_fptr iocba_data_param,
-    iocba_alert_cb_fptr iocba_alert_cb_param,
-    // iocba_handshake_cb_fptr iocba_handshake_cb_param,
-    iocba_select_protocol_cb_fptr iocba_select_protocol_cb_param
-)
-{
-    iocba_push = iocba_push_param ;
-    iocba_data_cb = iocba_data_param ;
-    iocba_alert_cb = iocba_alert_cb_param ;
-    // iocba_handshake_cb = iocba_handshake_cb_param ;
-    iocba_select_protocol_cb = iocba_select_protocol_cb_param ;
-}
-
-
 enum protocol_strategy_enum_t {
-    PREFER_HTTP2,
-    PREFER_HTTP11
+    PREFER_HTTP11 = 1,
+    PREFER_HTTP2 = 2
 };
 
 enum chosen_protocol_t{
-    HTTP11_CHP,
-    HTTP2_CHP
+    NOCHOSENYET_CHP = 0,
+    HTTP11_CHP = 1,
+    HTTP2_CHP = 2
 };
 
 
@@ -125,6 +86,7 @@ struct buffers_t{
     bool alert_produced;
 
     buffers_t(
+        protocol_strategy_enum_t strategy
     ):
         enc_cursor(0),
         enc_end(0),
@@ -132,8 +94,9 @@ struct buffers_t{
         clr_end(0),
         alert_produced(false),
         handshake_completed(false),
-        chosen_protocol(HTTP11_CHP),
-        channel(0)
+        chosen_protocol(NOCHOSENYET_CHP),
+        channel(0),
+        strategy(strategy)
     {
     }
 
@@ -179,10 +142,22 @@ void output_dn_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
     //iocba_push(botan_pad_ref, (char*)a, sz);
     if ( ( buffers->enc_cursor + sz) > buffers -> enc_end )
     {
-        printf("output_dn_cb enc_cursor %p enc_end %p \n", buffers->enc_cursor, buffers->enc_end);
-        throw buffer_override_exception_t(buffer_override_exception_t::GEN_CIPHER);
+        printf("output_dn_cb enc_cursor %p enc_end %p \n", 
+               buffers->enc_cursor, 
+               buffers->enc_end
+               );
+        throw buffer_override_exception_t(
+               buffer_override_exception_t::GEN_CIPHER
+               );
     }
-    strncpy(buffers->enc_cursor, (const char*) a, sz);
+
+    // DEBUG
+    //for(int j = 0; j < sz; j++)
+        //printf("%02X ", a[j]);
+    //printf("\n");
+    // END DEBUG
+
+    memcpy(buffers->enc_cursor, (const char*) a, sz);
     buffers->enc_cursor += sz;
 }
 
@@ -194,7 +169,7 @@ void data_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
     {
         throw buffer_override_exception_t(buffer_override_exception_t::GEN_CIPHER);
     }
-    strncpy(buffers->clr_cursor, (const char*) a, sz);
+    memcpy(buffers->clr_cursor, (const char*) a, sz);
     buffers->clr_cursor += sz;
 }
 
@@ -205,7 +180,7 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     buffers->alert_produced = true;
     if (alert.is_valid() && alert.is_fatal() )
     {
-        std::cout << alert << std::endl;
+        std::cout << alert.type_string() << std::endl;
         printf("Ignored a fatal alert!!\n");
     } else {
         printf("Ignored a non-fatal alert!!\n");
@@ -215,8 +190,17 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
 bool handshake_cb(buffers_t* buffers, const Botan::TLS::Session&)
 {
     //iocba_handshake_cb(botan_pad_ref);
+    //printf("botan: HandshakeCompleted\n");
     // TODO: Implement cache management
     buffers -> handshake_completed = true;
+
+    // Pick a protocol if none is available yet
+    if ( buffers -> chosen_protocol == NOCHOSENYET_CHP )
+    {
+        buffers -> chosen_protocol = HTTP11_CHP;
+    }
+    printf("Handshake completed\n");
+    return false;
 }
 
 // TODO: We can use stronger ciphers here. For now let's go simple
@@ -431,6 +415,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     uint32_t *cleartext_received_length
     )
 {
+    printf("Entering iocba_receive_data\n");
     Botan::TLS::Channel* channel = buffers -> channel;
     //
     buffers -> enc_cursor = out_enc_to_send;
@@ -438,6 +423,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     //
     buffers -> clr_cursor = out_cleartext_received;
     buffers -> clr_end    = out_cleartext_received + *cleartext_received_length;
+    //printf("Botan receives data\n");
     try {
         size_t more_data_required =
             channel->received_data( (const unsigned char*) in_data, in_length);
@@ -470,13 +456,26 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     *enc_to_send_length = (uint32_t) (
         buffers -> enc_cursor 
         - out_enc_to_send );
+    //printf("Returning %d bytes \n", *enc_to_send_length);
     *cleartext_received_length = (uint32_t) (
         buffers -> clr_cursor 
         - out_cleartext_received 
         );
+    //printf("Returning %d bytes of cleartext \n", *cleartext_received_length);
     // So that we get a clean segfault if we do something wrong
     buffers-> clear_cursors();
+    printf("Clearing cursors and returning\n");
     return 0;
+}
+
+extern "C" DLL_PUBLIC int32_t iocba_maybe_get_protocol(buffers_t* buffer)
+{
+    return (int32_t) buffer->chosen_protocol;
+}
+
+extern "C" DLL_PUBLIC int32_t iocba_handshake_completed(buffers_t* buffer)
+{
+    return (int32_t) buffer->handshake_completed;
 }
 
 // Called with cleartext data we want to encrypt and send back... 
@@ -499,9 +498,10 @@ extern "C" DLL_PUBLIC int32_t iocba_cleartext_push(
     {
         printf("Buffer override trying to encrypt cleartext\n");
     }
-    catch (...)
+    catch (std::exception const& e)
     {
-        printf("BotanTLS engine raised exception on send\n");
+        using namespace std;
+        cout << "BotanTLS engine raised exception on send: " << e.what() << endl;
         // Clear the buffers, they shall not be used again
         buffers -> clear_cursors();
         return -1;
@@ -535,12 +535,14 @@ struct botan_tls_context_t {
     Botan::AutoSeeded_RNG* rng;
     std::vector<std::string> protocols;
     second_transfer::HereTLSPolicy here_tls_policty;
+    protocol_strategy_enum_t protocol_strategy;
 };
 
 
 extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context(
     const char* cert_filename,
-    const char* privkey_filename
+    const char* privkey_filename,
+    int32_t prt_strt
     )
 {
     Botan::AutoSeeded_RNG* rng=new Botan::AutoSeeded_RNG();
@@ -555,7 +557,8 @@ extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context(
         new Botan::TLS::Session_Manager_In_Memory(*rng),
         rng,
         protocols,
-        second_transfer::HereTLSPolicy()
+        second_transfer::HereTLSPolicy(),
+        (protocol_strategy_enum_t) prt_strt
     };
 }
 
@@ -568,7 +571,8 @@ extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context_from_memory(
     const uint8_t* cert_data,
     uint32_t cert_data_length,
     const uint8_t* key_data,
-    uint32_t key_data_length
+    uint32_t key_data_length,
+    int32_t prt_strt
 )
 {
     // printf("New tls context from memory\n");
@@ -590,7 +594,8 @@ extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context_from_memory(
         new Botan::TLS::Session_Manager_In_Memory(*rng),
         rng,
         protocols,
-        second_transfer::HereTLSPolicy()
+        second_transfer::HereTLSPolicy(),
+        (protocol_strategy_enum_t) prt_strt
     };
     pthread_mutex_unlock(&new_ctx_mutex);
     return result;
@@ -610,7 +615,7 @@ extern "C" DLL_PUBLIC buffers_t* iocba_new_tls_server_channel (
 {
     //printf("New tls server channel\n");
     //pthread_mutex_lock(&new_channel_mutex);
-    buffers_t* buffers = new buffers_t();
+    buffers_t* buffers = new buffers_t(ctx->protocol_strategy);
     auto* server =
         new Botan::TLS::Server(
             std::bind(

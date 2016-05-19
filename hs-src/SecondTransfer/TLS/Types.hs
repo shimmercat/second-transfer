@@ -1,7 +1,7 @@
 {-# LANGUAGE Rank2Types, FunctionalDependencies, TemplateHaskell, GeneralizedNewtypeDeriving #-}
 module SecondTransfer.TLS.Types (
                  FinishRequest                                             (..)
-               , ProtocolSelector
+--               , ProtocolSelector
 
 
                , TLSContext                                                (..)
@@ -29,6 +29,7 @@ import           Data.Int                                                  (Int6
 
 import qualified Network.Socket                                            as NS(SockAddr)
 
+import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.IOCallbacks.Types                          (
                                                                            TLSServerIO,
                                                                            IOChannels,
@@ -44,9 +45,8 @@ import          SecondTransfer.IOCallbacks.WrapSocket
 --   at its earliest convenience and call the `CloseAction` for any open sessions.
 data FinishRequest = FinishRequest
 
--- | Callback function to select a protocol during the ALPN negotiation phase.
---   Given a list of ALPN identifiers, if something is suitable, return it.
-type ProtocolSelector = [B.ByteString] -> IO (Maybe Int)
+
+-- type ProtocolSelector = [B.ByteString] -> IO (Maybe Int)
 
 
 -- | Class to have different kinds of TLS backends. Included here and enabled through 'enable-botan'
@@ -55,16 +55,16 @@ type ProtocolSelector = [B.ByteString] -> IO (Maybe Int)
 --
 --
 class IOChannels session => TLSContext ctx session | ctx -> session, session -> ctx where
-    newTLSContextFromMemory :: B.ByteString -> B.ByteString -> ProtocolSelector -> IO ctx
+    newTLSContextFromMemory :: B.ByteString -> B.ByteString -> HttpProtocolVersion -> IO ctx
     -- ^  /newTLSContextFromMemory cert_data key_data protocol_selector/ creates a new context, provided
     -- certificate data. The certificate data must be in X509 format. The private key should be in PKCS8 format
     -- /without/ password.
-    newTLSContextFromCertFileNames :: B.ByteString -> B.ByteString -> ProtocolSelector -> IO ctx -- ^ newTLSContextFromMemory cert_filename key_filename protocol_selector
+    newTLSContextFromCertFileNames :: B.ByteString -> B.ByteString -> HttpProtocolVersion -> IO ctx -- ^ newTLSContextFromMemory cert_filename key_filename protocol_selector
     -- ^ Same as before, but using filename instead of certificates loaded into memory.
     unencryptTLSServerIO :: forall cipherio . TLSServerIO cipherio => ctx -> cipherio -> IO session
 
     -- ^ Returns the protocoll finally selected for a session.
-    getSelectedProtocol :: session -> IO (Maybe (Int, B.ByteString))
+    getSelectedProtocol :: session -> IO HttpProtocolVersion
 
 
 -- | Connection events
