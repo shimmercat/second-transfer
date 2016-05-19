@@ -12,6 +12,7 @@ import qualified Control.Exception                                  as E
 import           Control.Lens                                       ( makeLenses, (^.), set)
 
 import qualified Data.ByteString                                    as B
+import qualified Data.ByteString.Lazy                               as LB
 import           Data.ByteString.Char8                              ( unpack,  pack)
 import qualified Data.Attoparsec.ByteString                         as P
 import qualified Data.Binary                                        as U
@@ -79,7 +80,8 @@ tryRead iocallbacks what_doing leftovers p = do
 
         go  f = do
             fragment <- (iocallbacks ^. bestEffortPullAction_IOC) True
-            react (f fragment)
+            --
+            react (f $ LB.toStrict fragment)
 
     react $ P.parse p leftovers
 
