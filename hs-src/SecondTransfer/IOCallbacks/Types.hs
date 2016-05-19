@@ -41,13 +41,15 @@ module SecondTransfer.IOCallbacks.Types (
 
 
 import           Control.Lens
+import           Control.Concurrent.MVar
 
-import           Data.IORef
+
+
 import           Data.Int                                     (Int64)
 
-import qualified Data.ByteString                              as B
+--import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
-import qualified Data.ByteString.Builder                      as Bu
+--import qualified Data.ByteString.Builder                      as Bu
 
 import           SecondTransfer.Sessions.HashableSockAddr     (HashableSockAddr)
 
@@ -63,71 +65,80 @@ type PushAction  = LB.ByteString -> IO ()
 --   When the first argument is True, the data-providing backend can
 --   block if the input buffers are empty and await for new data.
 --   Otherwise, it will return immediately with an empty ByteString
-type BestEffortPullAction = Bool -> IO B.ByteString
+type BestEffortPullAction = Bool -> IO LB.ByteString
 
 -- | Callback type to pull data from a channel. The same
 --   as to PushAction applies to exceptions thrown from
 --   there. The first argument is the number of bytes to
 --   pull from the medium. Barring exceptions, we always
 --   know how many bytes we are expecting with HTTP/2.
-type PullAction  = Int -> IO B.ByteString
+type PullAction  = Int -> IO LB.ByteString
 
 -- | Generic implementation of PullAction from BestEffortPullAction, where we keep around
 --   any leftovers data ...
-newtype PullActionWrapping = PullActionWrapping (IORef (Bu.Builder,Int), BestEffortPullAction)
+newtype PullActionWrapping = PullActionWrapping (MVar LB.ByteString, BestEffortPullAction)
 
 -- The type above contains stuff already read, its length and the the action
 
 newPullActionWrapping :: BestEffortPullAction -> IO PullActionWrapping
 newPullActionWrapping best_effort_pull_action = do
-    bu_ref <- newIORef (mempty, 0)
+    bu_ref <- newMVar mempty
     return $ PullActionWrapping (bu_ref, best_effort_pull_action)
 
 
 -- | The type of this function is also PullActionWrapping -> PullAction
 --   There should be only one reader concurrently.
-pullFromWrapping' :: PullActionWrapping -> Int -> IO B.ByteString
-pullFromWrapping' (PullActionWrapping (x, bepa)) n = do
-    (hathz, len) <- readIORef x
-    let
-        nn = fromIntegral n
-        pullData hathz' len' =
-            if n <= len'
-              then do
-                  let
-                      hathz_lb = Bu.toLazyByteString hathz'
-                      to_return = LB.toStrict . LB.take nn $ hathz_lb
-                      new_hazth = Bu.lazyByteString . LB.drop nn $ hathz_lb
-                  return (to_return, new_hazth, len' - n)
-              else do
-                  -- Need to read more
-                  more <- bepa True
-                  -- Append
-                  let
-                      new_len = fromIntegral len' + B.length more
-                      new_hazth = hathz' `mappend` Bu.byteString more
-                  pullData new_hazth new_len
-    (to_return, new_hazth, new_len) <- pullData hathz len
-    writeIORef x (new_hazth, new_len)
-    return to_return
+pullFromWrapping' :: PullActionWrapping -> Int -> IO LB.ByteString
+pullFromWrapping' (PullActionWrapping (mvar_rest, bepa)) n = do
+    modifyMVar mvar_rest $ \ hathz ->
+        let
+            hathz_length = fromIntegral $ LB.length hathz
+
+            go_fetching :: Int -> IO (LB.ByteString, LB.ByteString)
+            go_fetching nn = do
+                got <- bepa True
+                let
+                    got_length =  fromIntegral $ LB.length got
+                if got_length >= nn
+                  then return . LB.splitAt (fromIntegral nn) $ got
+                  else do
+                    (fragment, rest) <- go_fetching (nn - got_length)
+                    return (got `mappend` fragment, rest)
+
+            (u, new_rest) = LB.splitAt (fromIntegral n) hathz
+
+            need_to_fetch_n = n - hathz_length
+
+            if_too_short = do
+                (needed_fragment, nr) <- go_fetching need_to_fetch_n
+                return (nr, hathz `mappend` needed_fragment)
+        in
+            if n <= hathz_length
+              then
+                return (new_rest, u)
+              else
+                if_too_short
 
 
-bestEffortPullFromWrapping :: PullActionWrapping -> Bool -> IO B.ByteString
-bestEffortPullFromWrapping (PullActionWrapping (x, bepa)) False = do
-    (hathz, len) <- atomicModifyIORef' x $ \ (h,l) -> ((mempty,0), (h,l))
-    if len > 0
+
+bestEffortPullFromWrapping :: PullActionWrapping -> Bool -> IO LB.ByteString
+bestEffortPullFromWrapping (PullActionWrapping (mvar_rest, bepa)) False = do
+    hathz <- modifyMVar mvar_rest $ \ rest -> return (mempty, rest)
+    let hathz_length = LB.length hathz
+    if hathz_length > 0
       then do
-        return . LB.toStrict . Bu.toLazyByteString $ hathz
+        return  hathz
       else do
         -- At least we ought to try
         bepa False
 
 
-bestEffortPullFromWrapping (PullActionWrapping (x, bepa)) True = do
-    (hathz, len) <- atomicModifyIORef' x $ \ (h,l) -> ((mempty,0), (h,l))
-    if len > 0
+bestEffortPullFromWrapping (PullActionWrapping (mvar_rest, bepa)) True = do
+    hathz <- modifyMVar mvar_rest $ \ rest -> return (mempty, rest)
+    let hathz_length =  LB.length hathz
+    if hathz_length > 0
       then do
-        return . LB.toStrict . Bu.toLazyByteString $ hathz
+        return  hathz
       else do
         bepa True
 
