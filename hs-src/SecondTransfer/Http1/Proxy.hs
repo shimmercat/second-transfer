@@ -24,6 +24,7 @@ import qualified Data.ByteString.Lazy                                      as LB
 import           Data.Maybe                                                (fromMaybe)
 
 import           Data.Conduit
+import           Data.Conduit.List                                         as CL
 
 --import           SecondTransfer.MainLoop.CoherentWorker                    (Headers)
 
@@ -113,7 +114,7 @@ ioProxyToConnection ioc request =
 --   upon exceptions.
 processHttp11Output ::
   (MonadIO m) =>
-  IO B.ByteString ->
+  IO LB.ByteString ->
   B.ByteString ->
   m (HttpResponse m)
 processHttp11Output bepa method =
@@ -157,17 +158,20 @@ processHttp11Output bepa method =
                   keyedReportExceptions "pll-" $
                       E.try bepa
 
-            case either_ioproblem_or_s :: Either IOProblem B.ByteString of
+            case either_ioproblem_or_s :: Either IOProblem LB.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
                 Right datum
-                  | nn <- B.length datum, nn < n ->
+                  | nn <- fromIntegral (LB.length datum), nn < n ->
                     do
-                      yield datum
+                      CL.sourceList . LB.toChunks $ datum
                       pull (n - nn)
                   | otherwise ->
                       -- This will discard the rest of the data, read
                       -- comment above.
-                      yield $ B.take n datum
+                      CL.sourceList .
+                         LB.toChunks .
+                         LB.take (fromIntegral n) $
+                         datum
 
         pull_forever :: MonadIO m => Source m B.ByteString
         pull_forever = do
@@ -176,10 +180,10 @@ processHttp11Output bepa method =
                   keyedReportExceptions "plc-" $
                       E.try bepa
 
-            s <- case either_ioproblem_or_s :: Either IOProblem B.ByteString of
+            s <- case either_ioproblem_or_s :: Either IOProblem LB.ByteString of
                 Left _exc -> liftIO $ E.throwIO GatewayAbortedException
                 Right datum -> return datum
-            yield s
+            CL.sourceList . LB.toChunks $ s
 
         unwrapping_chunked :: MonadIO m => B.ByteString -> Source m B.ByteString
         unwrapping_chunked leftovers =
@@ -199,12 +203,12 @@ processHttp11Output bepa method =
                     keyedReportExceptions "ue-" $
                         E.try bepa
 
-                case (s :: Either NoMoreDataException B.ByteString) of
+                case (s :: Either NoMoreDataException LB.ByteString) of
                     Left _ -> do
                         return ()
 
                     Right datum -> do
-                        yield datum
+                        CL.sourceList . LB.toChunks $  datum
                         pump_until_exception mempty
 
     parser_completion <- pump0 incremental_http_parser
@@ -304,7 +308,7 @@ processHttp11OutputFromPipe  method =
             case maybe_some_bytes of
                 Nothing -> return $ RequestIsMalformed_H1PC "InputIsTooShort"
                 Just some_bytes -> do
-                    let completion = addBytes p some_bytes
+                    let completion = addBytes p $ LB.fromStrict some_bytes
                     case completion of
                        MustContinue_H1PC new_parser -> pump0 new_parser
 
