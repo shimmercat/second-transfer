@@ -7,10 +7,8 @@ module SecondTransfer.IOCallbacks.SaveFragment (
 import           Control.Lens
 import           Control.Concurrent
 
---import           Data.IORef
---import           Data.Typeable
 
-import qualified Data.ByteString                              as B
+--import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
 --import qualified Data.ByteString.Builder                      as Bu
 
@@ -19,7 +17,7 @@ import           SecondTransfer.IOCallbacks.Types
 
 data SaveReadFragment = SaveReadFragment {
     _inner_SRF          :: IOCallbacks
-  , _fragment_SRF       :: MVar B.ByteString
+  , _fragment_SRF       :: MVar LB.ByteString
     }
 
 makeLenses ''SaveReadFragment
@@ -29,7 +27,7 @@ pushAction :: SaveReadFragment -> LB.ByteString -> IO ()
 pushAction srf what = (srf ^.  inner_SRF . pushAction_IOC ) what
 
 
-bestEffortPullAction :: SaveReadFragment -> Bool -> IO B.ByteString
+bestEffortPullAction :: SaveReadFragment -> Bool -> IO LB.ByteString
 bestEffortPullAction srf can_block  = do
     maybe_fragment <- tryTakeMVar (srf ^. fragment_SRF )
     case maybe_fragment of
@@ -43,7 +41,7 @@ closeAction srf = do
     srf ^. inner_SRF . closeAction_IOC
 
 
-newSaveReadFragment :: IOCallbacks ->  B.ByteString -> IO SaveReadFragment
+newSaveReadFragment :: IOCallbacks ->  LB.ByteString -> IO SaveReadFragment
 newSaveReadFragment io_callbacks fragment = do
     fragment_mvar <- newMVar fragment
     return SaveReadFragment {

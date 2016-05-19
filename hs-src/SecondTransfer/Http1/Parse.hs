@@ -42,6 +42,7 @@ import qualified Data.ByteString.Builder                as Bu
 import           Data.ByteString.Char8                  (pack, unpack)
 import qualified Data.ByteString.Char8                  as Ch8
 import qualified Data.ByteString.Lazy                   as Lb
+import qualified Data.ByteString.Lazy                   as LB
 import           Data.Char                              (toLower, isSpace)
 import           Data.Maybe                             (isJust, fromMaybe)
 
@@ -73,7 +74,7 @@ data IncrementalHttp1Parser = IncrementalHttp1Parser {
     }
 
 
-type HeaderParseClosure = (B.ByteString ->  ([Int], Int, Word8))
+type HeaderParseClosure = (LB.ByteString ->  ([Int], Int, Word8))
 
 -- L.makeLenses ''IncrementalHttp1Parser
 
@@ -139,13 +140,13 @@ data FirstLineDatum =
     deriving (Show, Eq)
 
 
-addBytes :: IncrementalHttp1Parser -> B.ByteString -> Http1ParserCompletion
+addBytes :: IncrementalHttp1Parser -> LB.ByteString -> Http1ParserCompletion
 addBytes (IncrementalHttp1Parser full_text header_parse_closure) new_bytes =
   let -- Just feed the bytes
     (positions, length_so_far, last_char ) = header_parse_closure new_bytes
-    new_full_text = full_text `mappend` (Bu.byteString new_bytes)
+    new_full_text = full_text `mappend` (Bu.lazyByteString new_bytes)
     could_finish = twoCRLFsAreConsecutive positions
-    total_length_now = B.length new_bytes + length_so_far
+    total_length_now = fromIntegral (LB.length new_bytes) + length_so_far
     full_text_lbs = (Bu.toLazyByteString new_full_text)
     -- This will only trigger for ill-formed heads, if the head is parsed successfully, this
     -- flag will be ignored.
@@ -394,11 +395,11 @@ stripBsHName s =
    Ch8.dropWhile isWsCh8 s
 
 
-locateCRLFs :: Int -> [Int] -> Word8 ->  B.ByteString ->  ([Int], Int, Word8)
+locateCRLFs :: Int -> [Int] -> Word8 ->  LB.ByteString ->  ([Int], Int, Word8)
 locateCRLFs initial_offset other_positions prev_last_char next_chunk =
   let
     (last_char, positions_list, strlen) =
-        B.foldl
+        LB.foldl
             (\ (prev_char, lst, i) w8 ->
                 let
                     j = i + 1

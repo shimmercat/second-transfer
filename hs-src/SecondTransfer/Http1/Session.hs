@@ -98,7 +98,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
         maybe_callback =
             (sessions_context ^. (sessionsConfig . sessionsCallbacks . newSessionCallback_SC) )
 
-    go :: TimeSpec -> Int -> Maybe B.ByteString -> Int -> IO ()
+    go :: TimeSpec -> Int -> Maybe LB.ByteString -> Int -> IO ()
     go started_time session_tag (Just leftovers) reuse_no = do
         maybe_leftovers <- add_data newIncrementalHttp1Parser leftovers session_tag reuse_no
         go started_time session_tag maybe_leftovers (reuse_no + 1)
@@ -108,7 +108,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
     -- This function will invoke itself as long as data is coming for the currently-being-parsed
     -- request/response.
-    add_data :: IncrementalHttp1Parser  -> B.ByteString -> Int -> Int -> IO (Maybe B.ByteString)
+    add_data :: IncrementalHttp1Parser  -> LB.ByteString -> Int -> Int -> IO (Maybe LB.ByteString)
     add_data parser bytes session_tag reuse_no = do
         let
             completion = addBytes parser bytes
@@ -134,10 +134,9 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                     ( (\ _e -> do
                         -- This is a pretty harmless condition that happens
                         -- often when the remote peer closes the connection
-                        -- debugM "Session.HTTP1" "Could not receive data"
                         close_action
                         return Nothing
-                    ) :: IOProblem -> IO (Maybe B.ByteString) )
+                    ) :: IOProblem -> IO (Maybe LB.ByteString) )
 
             OnlyHeaders_H1PC headers _leftovers -> do
                 -- putStrLn $ "OnlyHeaders_H1PC " ++ (show leftovers)
@@ -181,9 +180,9 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 let
                     source :: Source AwareWorkerStack B.ByteString
                     source = hoist  lift $ case stopcondition of
-                        UseBodyLength_BSC n -> counting_read recv_leftovers n set_leftovers
-                        ConnectionClosedByPeer_BSC -> readforever recv_leftovers
-                        Chunked_BSC -> readchunks recv_leftovers
+                        UseBodyLength_BSC n -> counting_read (LB.fromStrict recv_leftovers) n set_leftovers
+                        ConnectionClosedByPeer_BSC -> readforever (LB.fromStrict recv_leftovers)
+                        Chunked_BSC -> readchunks (LB.fromStrict recv_leftovers)
                         _ -> error "ImplementMe"
 
                 principal_stream <- coherent_worker Request {
@@ -204,69 +203,75 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 return $ Just ""
 
 
-    counting_read :: B.ByteString -> Int -> IORef B.ByteString -> Source IO B.ByteString
+    counting_read :: LB.ByteString -> Int -> IORef LB.ByteString -> Source IO B.ByteString
     counting_read leftovers n set_leftovers = do
         -- Can I continue?
         if n == 0
           then do
-            liftIO $ writeIORef set_leftovers leftovers
+            liftIO $ writeIORef set_leftovers  leftovers
             return ()
           else
             do
               let
-                  lngh_leftovers = B.length leftovers
+                  lngh_leftovers = LB.length leftovers
+                  n64 = fromIntegral n
               if lngh_leftovers > 0
                 then
-                  if lngh_leftovers <= n
+                  if lngh_leftovers <= n64
                     then do
-                      yield leftovers
-                      counting_read "" (n - lngh_leftovers ) set_leftovers
+                      -- yield leftovers
+                      CL.sourceList (LB.toChunks leftovers)
+                      counting_read "" (fromIntegral $ n64 - lngh_leftovers ) set_leftovers
                     else
                       do
                         let
-                          (pass, new_leftovers) = B.splitAt n leftovers
-                        yield pass
+                          (pass, new_leftovers) = LB.splitAt n64 leftovers
+                        CL.sourceList (LB.toChunks pass)
                         counting_read new_leftovers  0 set_leftovers
                 else
                   do
                     more_text <- liftIO $ best_effort_pull_action True
                     counting_read more_text n set_leftovers
 
-    readforever :: B.ByteString  -> Source IO B.ByteString
+    readforever :: LB.ByteString  -> Source IO B.ByteString
     readforever leftovers  =
-        if B.length leftovers > 0
+        if LB.length leftovers > 0
           then do
-            yield leftovers
+            CL.sourceList (LB.toChunks  leftovers)
             readforever mempty
           else do
             more_text_or_error <- liftIO . try $ best_effort_pull_action True
-            case more_text_or_error :: Either NoMoreDataException B.ByteString of
+            case more_text_or_error :: Either NoMoreDataException LB.ByteString of
                 Left _ -> return ()
                 Right bs -> do
-                    when (B.length bs > 0) $ yield bs
+                    when (LB.length bs > 0) $
+                       CL.sourceList (LB.toChunks bs)
                     readforever mempty
 
-    readchunks :: B.ByteString -> Source IO B.ByteString
+    readchunks :: LB.ByteString -> Source IO B.ByteString
     readchunks leftovers = do
         let
-            gorc :: B.ByteString -> (B.ByteString -> Ap.IResult B.ByteString B.ByteString ) -> Source IO B.ByteString
-            gorc lo f = case f lo of
+            gorc :: LB.ByteString ->
+                    (B.ByteString -> Ap.IResult B.ByteString B.ByteString ) ->
+                    Source IO B.ByteString
+            gorc lo f = case f (LB.toStrict lo) of
                 Ap.Fail _ _ _ ->
                   return ()
                 Ap.Partial continuation ->
                   do
                     more_text_or_error <- liftIO . try $ best_effort_pull_action True
-                    case more_text_or_error :: Either NoMoreDataException B.ByteString of
+                    case more_text_or_error :: Either NoMoreDataException LB.ByteString of
+                        -- Shouldn't I raise an exception here?
                         Left _ -> return ()
                         Right bs
-                          | B.length bs > 0 -> gorc bs continuation
+                          | LB.length bs > 0 -> gorc bs continuation
                           | otherwise -> return ()
                 Ap.Done i piece ->
                   do
                     if B.length piece > 0
                        then do
                            yield piece
-                           gorc i (Ap.parse chunkParser)
+                           gorc (LB.fromStrict i) (Ap.parse chunkParser)
                        else
                            return ()
         gorc leftovers (Ap.parse chunkParser)

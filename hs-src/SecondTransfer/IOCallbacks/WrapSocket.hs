@@ -99,7 +99,7 @@ socketIOCallbacks socket = do
                    close_action
                    E.throwIO NoMoreDataException
                 else do
-                   return datum
+                   return . LB.fromStrict $ datum
 
         -- Exceptions on close are possible
         close_action = E.finally

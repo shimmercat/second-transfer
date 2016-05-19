@@ -20,7 +20,7 @@ import           Data.IORef
 import           Data.Conduit
 import qualified Data.Conduit.List                            as DCL
 
-import qualified Data.ByteString                              as B
+--import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
 import qualified Data.ByteString.Builder                      as Bu
 
@@ -40,18 +40,18 @@ makeLenses ''Coupling
 --       but since this runs in its own thread, nobody will notice. A better coping strategy would
 --       be to perhaps store the exception somewhere.
 pump :: String -> MVar () -> BestEffortPullAction -> PushAction -> IO ()
-pump tag break_now pull push = do
+pump _tag break_now pull push = do
     let
         go = do
             must_finish <- tryTakeMVar break_now
             case must_finish of
                 Nothing -> do
-                    either_datum <-  E.try (pull True) :: IO (Either IOProblem B.ByteString)
+                    either_datum <-  E.try (pull True) :: IO (Either IOProblem LB.ByteString)
                     must_finish' <- tryTakeMVar break_now
                     case (must_finish', either_datum) of
 
                         (Nothing, Right datum) -> do
-                            either_ok <- E.try (push . LB.fromStrict $ datum) :: IO (Either IOProblem () )
+                            either_ok <- E.try (push datum) :: IO (Either IOProblem () )
                             case either_ok of
                                 Right _ ->  go
 
@@ -182,7 +182,7 @@ popActions t pullside pushside =
                 hath_data_bs  = Bu.toLazyByteString hath_data
             if LB.length hath_data_bs > 0
               then
-                return $ LB.toStrict hath_data_bs
+                return hath_data_bs
               else do
                 _ <- takeMVar (t ^. pullside . dt_M)
                 best_effort_pull_action True
@@ -190,10 +190,10 @@ popActions t pullside pushside =
             throwIfNeeded
             hath_data <- atomicModifyIORef' ( t ^. pullside . dt_SD ) $ \ cnt -> (mempty, cnt)
             let
-                hath_data_bs  = LB.toStrict . Bu.toLazyByteString $ hath_data
+                hath_data_bs  =  Bu.toLazyByteString $ hath_data
             return hath_data_bs
 
-    pull_action n = (LB.toStrict . Bu.toLazyByteString ) <$>  (pull_action' n mempty 0)
+    pull_action n =  Bu.toLazyByteString  <$>  (pull_action' n mempty 0)
 
     pull_action' :: Int -> Bu.Builder -> Int -> IO Bu.Builder
     pull_action' asked bu nhath = do
