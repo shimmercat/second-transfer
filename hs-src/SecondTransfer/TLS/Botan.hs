@@ -323,7 +323,7 @@ botanPushData botan_pad datum = do
 
 
 -- Bad things will happen if serveral threads are calling this concurrently!!
-pullAvailableData :: BotanPad -> Bool -> IO B.ByteString
+pullAvailableData :: BotanPad -> Bool -> IO LB.ByteString
 pullAvailableData botan_pad can_wait = do
     let
         data_came_mvar = botan_pad ^. dataCame_BP
@@ -351,7 +351,7 @@ pullAvailableData botan_pad can_wait = do
 
         (_, _) -> do
             let
-                result = LB.toStrict  avail_data_lb
+                result =  avail_data_lb
             -- putStrLn $ "BotanPassingUp #bytes = " ++ (show $ B.length result )
             return result
 
@@ -440,7 +440,7 @@ unencryptChannelData botan_ctx tls_data  = do
 
     let
 
-        pump_exc_handler :: IOProblem -> IO (Maybe B.ByteString)
+        pump_exc_handler :: IOProblem -> IO (Maybe LB.ByteString)
         pump_exc_handler _ = do
             _ <- tryPutMVar problem_mvar ()
             -- Wake-up any readers...
@@ -455,7 +455,7 @@ unencryptChannelData botan_ctx tls_data  = do
                 pump_exc_handler
             case maybe_new_data of
                 Just new_data
-                  | len_new_data <- B.length new_data, len_new_data > 0 -> do
+                  | len_new_data <- LB.length new_data, len_new_data > 0 -> do
                     can_continue <- withMVar write_lock_mvar $ \_ -> do
                         maybe_problem <- tryReadMVar problem_mvar
                         case maybe_problem of
@@ -473,7 +473,7 @@ unencryptChannelData botan_ctx tls_data  = do
                                                 poke p_enc_to_send_length
                                                     $ fromIntegral cleartext_reserve_length
                                                 poke p_clr_length $ fromIntegral cleartext_reserve_length
-                                                Un.unsafeUseAsCStringLen new_data $ \ (enc_pch, enc_len) ->
+                                                Un.unsafeUseAsCStringLen (LB.toStrict new_data) $ \ (enc_pch, enc_len) ->
                                                     withMVar dontMultiThreadBotan . const $ do
                                                         engine_result <- iocba_receive_data
                                                             tls_channel_ptr
@@ -598,7 +598,7 @@ instance IOChannels BotanSession where
             close_action :: CloseAction
             close_action = closeBotan botan_pad'
 
-            handshake_completed_mvar = botan_pad' ^. handshakeCompleted_BP
+            -- handshake_completed_mvar = botan_pad' ^. handshakeCompleted_BP
 
         -- We needed to wait for a hand-shake
         -- readMVar handshake_completed_mvar
