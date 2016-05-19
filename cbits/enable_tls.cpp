@@ -84,6 +84,8 @@ struct buffers_t{
     bool handshake_completed;
     // Has an alert been produced?
     bool alert_produced;
+    // Did the peer closed the transport?
+    bool peer_closed_transport;
 
     buffers_t(
         protocol_strategy_enum_t strategy
@@ -96,7 +98,8 @@ struct buffers_t{
         handshake_completed(false),
         chosen_protocol(NOCHOSENYET_CHP),
         channel(0),
-        strategy(strategy)
+        strategy(strategy),
+        peer_closed_transport(false)
     {
     }
 
@@ -178,11 +181,16 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     // printf("BOTAN WAS TO DELIVER ALERT: %d \n", alert.type_string().c_str());
     // TODO: find something better to do here
     buffers->alert_produced = true;
-    if (alert.is_valid() && alert.is_fatal() )
+    if ( alert.type() == Botan::TLS::Alert::CLOSE_NOTIFY)
+    {
+        buffers -> peer_closed_transport = true;
+    }
+    else if (alert.is_valid() && alert.is_fatal() )
     {
         std::cout << alert.type_string() << std::endl;
         printf("Ignored a fatal alert!!\n");
     } else {
+        std::cout << alert.type_string() << std::endl;
         printf("Ignored a non-fatal alert!!\n");
     }
 }
@@ -199,7 +207,7 @@ bool handshake_cb(buffers_t* buffers, const Botan::TLS::Session&)
     {
         buffers -> chosen_protocol = HTTP11_CHP;
     }
-    printf("Handshake completed\n");
+    //printf("Handshake completed\n");
     return false;
 }
 
@@ -415,7 +423,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     uint32_t *cleartext_received_length
     )
 {
-    printf("Entering iocba_receive_data\n");
+    //printf("Entering iocba_receive_data\n");
     Botan::TLS::Channel* channel = buffers -> channel;
     //
     buffers -> enc_cursor = out_enc_to_send;
@@ -464,7 +472,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     //printf("Returning %d bytes of cleartext \n", *cleartext_received_length);
     // So that we get a clean segfault if we do something wrong
     buffers-> clear_cursors();
-    printf("Clearing cursors and returning\n");
+    //printf("Clearing cursors and returning\n");
     return 0;
 }
 
@@ -476,6 +484,11 @@ extern "C" DLL_PUBLIC int32_t iocba_maybe_get_protocol(buffers_t* buffer)
 extern "C" DLL_PUBLIC int32_t iocba_handshake_completed(buffers_t* buffer)
 {
     return (int32_t) buffer->handshake_completed;
+}
+
+extern "C" DLL_PUBLIC int32_t iocba_peer_closed_transport(buffers_t* buffer)
+{
+    return (int32_t) (buffer->peer_closed_transport);
 }
 
 // Called with cleartext data we want to encrypt and send back... 
@@ -516,16 +529,50 @@ extern "C" DLL_PUBLIC int32_t iocba_cleartext_push(
 
 
 extern "C" DLL_PUBLIC void iocba_close(
-    buffers_t* buffers
+    buffers_t* buffers,
+    char* out_enc_to_send,
+    uint32_t *enc_to_send_length
     )
 {
     Botan::TLS::Channel* channel = buffers->channel;
+    buffers -> enc_cursor = out_enc_to_send;
+    buffers -> enc_end    = out_enc_to_send + *enc_to_send_length;
+    // No waiting cleartext data in this context
+    buffers -> clr_cursor = 0;
+    buffers -> clr_end    = 0;
     try{
         channel->close();
-    } catch (...)
+    } 
+    catch (buffer_override_exception_t const& e)
+    {
+        printf("Buffer override!!\n");
+        return ;
+    }
+    catch (Botan::TLS::TLS_Exception const& e)
+    {
+        if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
+        {
+            printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
+            return ;
+        } else
+        {
+            printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            return ;
+        }
+    }
+    catch (std::exception const& e)
+    {
+        // TODO: control messages
+        printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
+        return ;
+    }catch (...)
     {
         printf("BotanTLS engine raised exception on close\n");
     }
+    *enc_to_send_length = (uint32_t) (
+        buffers -> enc_cursor
+        - out_enc_to_send );
+    buffers -> clear_cursors();
 }
 
 

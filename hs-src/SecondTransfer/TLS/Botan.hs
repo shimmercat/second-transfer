@@ -97,7 +97,11 @@ foreign import ccall iocba_cleartext_push ::
   -> Ptr Word32
   -> IO Int32
 
-foreign import ccall iocba_close :: BotanTLSChannelPtr -> IO ()
+foreign import ccall iocba_close ::
+    BotanTLSChannelPtr ->
+    Ptr CChar ->
+    Ptr Word32 ->
+    IO ()
 
 foreign import ccall "&iocba_delete_tls_context" iocba_delete_tls_context :: FunPtr( BotanTLSContextCSidePtr -> IO () )
 
@@ -107,11 +111,15 @@ foreign import ccall iocba_make_tls_context_from_memory :: CString -> CUInt -> C
 
 foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_channel :: FunPtr( BotanTLSChannelPtr -> IO () )
 
-foreign import ccall "iocba_maybe_get_protocol" iocba_maybe_get_protocol ::
+foreign import ccall unsafe "iocba_maybe_get_protocol" iocba_maybe_get_protocol ::
     BotanTLSChannelPtr ->
     IO Int32
 
-foreign import ccall "iocba_handshake_completed" iocba_handshake_completed ::
+foreign import ccall unsafe "iocba_handshake_completed" iocba_handshake_completed ::
+    BotanTLSChannelPtr ->
+    IO Int32
+
+foreign import ccall unsafe "iocba_peer_closed_transport" iocba_peer_closed_transport::
     BotanTLSChannelPtr ->
     IO Int32
 
@@ -181,34 +189,24 @@ pullAvailableData botan_pad can_wait = do
         -- And here inside cleanup. The block below doesn't compose with other instances of
         -- reads happening simultaneously
     avail_data <- atomicModifyIORef' avail_data_iorref $ \ bu -> (mempty, bu)
-    putStrLn "pullAvailableDataCalled"
     let
         avail_data_lb = Bu.toLazyByteString avail_data
         avail_data_length_w64 =  LB.length avail_data_lb
-    putStrLn $ "avail data length: " ++ (show avail_data_length_w64)
     case ( avail_data_length_w64 == 0 , can_wait ) of
         (True, True) -> do
             -- Just wait for more data coming here
             takeMVar data_came_mvar
-            putStrLn "after data_came_mvar"
             maybe_problem <- tryReadMVar io_problem_mvar
-            putStrLn "After problem maybe"
             case maybe_problem of
                 Nothing -> do
-                    putStrLn "ready to go0"
                     pullAvailableData botan_pad True
 
                 Just () -> do
-                    -- avail_data' <- atomicModifyIORef' avail_data_iorref $ \ bu -> (mempty, bu)
-                    -- putStrLn "ProblemTranslated -- Botan"
-                    -- putStrLn $ "(stuck: " ++ (show .  LB.length . Bu.toLazyByteString $ avail_data' ) ++ ")"
-                    putStrLn "Ex 3390"
                     E.throwIO NoMoreDataException
 
         (_, _) -> do
             let
                 result =  avail_data_lb
-            putStrLn $ "BotanPassingUp #bytes = " ++ (show $ LB.length result )
             return result
 
 
@@ -339,7 +337,7 @@ unencryptChannelData botan_ctx tls_data  = do
 
                                                         if engine_result < 0
                                                           then do
-                                                            putStrLn "BadEngineResult"
+                                                            -- putStrLn "BadEngineResult"
                                                             _ <- tryPutMVar problem_mvar ()
                                                             -- Just awake any variables
                                                             _ <- tryPutMVar data_came_mvar ()
@@ -359,6 +357,10 @@ unencryptChannelData botan_ctx tls_data  = do
                                                             handshake_completed <- iocba_handshake_completed tls_channel_ptr
                                                             when (handshake_completed /= 0) $
                                                                 (tryPutMVar handshake_completed_mvar  ()) >> return ()
+                                                            peer_closed_transport <- iocba_peer_closed_transport tls_channel_ptr
+                                                            -- Do provisions for tranport closed after this call
+                                                            when (peer_closed_transport /= 0) $
+                                                                tryPutMVar problem_mvar () >> return ()
                                                             return $ Just  (to_send, to_return)
 
                                 case maybe_cont_data of
@@ -373,7 +375,7 @@ unencryptChannelData botan_ctx tls_data  = do
                                                 bu `seq` (bu `mappend` Bu.byteString just_unencrypted),
                                                 ()
                                               )
-                                            putStrLn "cleartext data!!"
+                                            -- putStrLn "cleartext data!!"
                                             _ <- tryPutMVar data_came_mvar ()
                                             return ()
                                         return True
@@ -419,18 +421,39 @@ closeBotan botan_pad =
                 -- Let's forbid libbotan for sending more output
                 _ <- tryPutMVar (botan_pad ^. problem_BP) ()
                 -- Cleanly close tls, if nobody else is writing there
-                withMVar (botan_pad ^. writeLock_BP) $ \ _ -> do
-                    withMVar dontMultiThreadBotan . const $
-                        iocba_close tls_channel_ptr
-                    _ <- tryPutMVar (botan_pad ^. problem_BP) ()
-                    _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
-                    return ()
-                -- Close the cypher-text transport
-                (botan_pad ^. encryptedSide_BP . closeAction_IOC)
-                -- Ensure that no calls are made to any of the IO callbacks after the
-                -- stable pointer is fred
+                last_msg <- allocaBytes 1024  $ \ p_enc_to_send -> do
+                  alloca $ \ p_enc_to_send_length ->
+                            withMVar (botan_pad ^. writeLock_BP) $ \ _ -> do
+                                poke p_enc_to_send_length 1023
+                                withMVar dontMultiThreadBotan . const $
+                                    iocba_close
+                                        tls_channel_ptr
+                                        p_enc_to_send
+                                        p_enc_to_send_length
+                                bytes_avail <- peek p_enc_to_send_length
+                                last_message <- B.packCStringLen (p_enc_to_send, fromIntegral bytes_avail)
+                                _ <- tryPutMVar (botan_pad ^. problem_BP) ()
+                                _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
+                                return last_message
 
-                return ()
+                -- Send the last message, if possible at all... otherwise just ignore the
+                -- exception
+                either_sent <- E.try $ do
+                    (botan_pad ^. encryptedSide_BP . pushAction_IOC) (LB.fromStrict last_msg)
+
+                -- Close the cypher-text transport
+                either_sent2 <- E.try $ (botan_pad ^. encryptedSide_BP . closeAction_IOC)
+
+                -- Ignore any exceptions that happen when closing the transport, they are all
+                -- too usual when the peer closes first and such...
+                case either_sent :: Either IOProblem () of
+                    Left  _ -> return ()
+                    Right _ -> return ()
+
+                case either_sent2 :: Either IOProblem () of
+                    Left  _ -> return ()
+                    Right _ -> return ()
+
 
             Nothing ->
                 -- Thing already closed, don't do it again
@@ -484,9 +507,9 @@ instance TLSContext BotanTLSContext BotanSession where
     unencryptTLSServerIO = unencryptChannelData
     getSelectedProtocol (BotanSession pad_ioref) = do
         botan_pad <- readIORef pad_ioref
-        putStrLn "Asked for protocol"
+        -- putStrLn "Asked for protocol"
         a <- readMVar (botan_pad ^. selectedProtocol_BP)
-        putStrLn $ "got protocol: " ++ show a
+        -- putStrLn $ "got protocol: " ++ show a
         return a
 
 
