@@ -375,12 +375,12 @@ finishFlowControlForStream stream_id =
 
 readNextFrame ::
     Int
-    -> (Int -> IO B.ByteString)                      -- ^ Generator action
+    -> (Int -> IO LB.ByteString)                      -- ^ Generator action
     -> Source IO (Either String NH2.Frame)                -- ^ Packet and leftovers, if we could get them
 readNextFrame max_acceptable_size pull_action  = do
     -- First get 9 bytes with the frame header
     either_frame_header_bs <- lift $ E.try $ pull_action 9
-    case either_frame_header_bs :: Either IOProblem B.ByteString of
+    case either_frame_header_bs :: Either IOProblem LB.ByteString of
 
         Left _e -> do
             -- If coming here, we are done with this connection. Just let it go
@@ -390,7 +390,8 @@ readNextFrame max_acceptable_size pull_action  = do
         Right frame_header_bs -> do
             -- decode it
             let
-                (frame_type_id, frame_header) = NH2.decodeFrameHeader frame_header_bs
+                -- Copies 9 bytes of a frame header
+                (frame_type_id, frame_header) = NH2.decodeFrameHeader . LB.toStrict $ frame_header_bs
                 NH2.FrameHeader payload_length _ _ =  frame_header
             -- liftIO . putStrLn $ "payload length: " ++ (show payload_length) ++ " max sz " ++ show max_acceptable_size
             if payload_length + 9 > max_acceptable_size
@@ -401,17 +402,23 @@ readNextFrame max_acceptable_size pull_action  = do
                 -- Get as many bytes as the payload length identifies
                 -- liftIO . putStrLn $ "Payload length requested " ++ show payload_length
                 either_payload_bs <- lift $ E.try (pull_action payload_length)
-                case either_payload_bs :: Either IOProblem B.ByteString of
+                case either_payload_bs :: Either IOProblem LB.ByteString of
                     Left _ -> do
                         return ()
                     Right payload_bs
-                      | B.length payload_bs == 0 && payload_length > 0 -> do
+                      | LB.length payload_bs == 0 && payload_length > 0 -> do
                         return ()
 
                       | otherwise -> do
                         -- Return the entire frame, or raise an exception...
                         let
-                            either_frame = NH2.decodeFramePayload frame_type_id frame_header payload_bs
+                            -- Does a bit of copying, which in turn may be a good thing to
+                            -- reduce string fragmentation
+                            either_frame =
+                                NH2.decodeFramePayload
+                                   frame_type_id
+                                   frame_header
+                                   (LB.toStrict payload_bs)
                         case either_frame of
                             Right frame_payload -> do
                                 yield . Right $ NH2.Frame frame_header frame_payload
@@ -438,7 +445,7 @@ inputGatherer pull_action session_input = do
     when (session_role == Server_SR) $ do
         -- We can start by reading off the prefix....
         prefix <- liftIO $ pull_action http2PrefixLength
-        when (prefix /= NH2.connectionPreface) $ do
+        when (prefix /= LB.fromStrict NH2.connectionPreface) $ do
             sendGoAwayFrame NH2.ProtocolError
             liftIO $
                 -- We just use the GoAway frame, although this is awfully early
