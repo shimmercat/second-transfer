@@ -39,6 +39,7 @@ import           SecondTransfer.Exception                                  (
                                                                            , NoMoreDataException(..)
                                                                            , TLSEncodingIssue (..)
                                                                            , keyedReportExceptions
+                                                                           , forkIOExc
                                                                            )
 import           SecondTransfer.TLS.Types                                  (  TLSContext (..) )
 
@@ -202,6 +203,8 @@ pullAvailableData botan_pad can_wait = do
                     pullAvailableData botan_pad True
 
                 Just () -> do
+                    -- Allow others to wake-up
+                    putMVar data_came_mvar ()
                     E.throwIO NoMoreDataException
 
         (_, _) -> do
@@ -366,9 +369,16 @@ unencryptChannelData botan_ctx tls_data  = do
                                 case maybe_cont_data of
                                     Just (send_to_peer, just_unencrypted) -> do
                                         unless (B.length send_to_peer == 0) $ do
-                                            (tls_io_callbacks ^. pushAction_IOC) .
-                                                LB.fromStrict $
-                                                send_to_peer
+                                            either_problem <- E.try $
+                                                (tls_io_callbacks ^. pushAction_IOC) .
+                                                    LB.fromStrict $
+                                                    send_to_peer
+                                            case either_problem :: Either IOProblem () of
+                                                Left _ -> do
+                                                    _ <- tryPutMVar problem_mvar ()
+                                                    _ <- tryPutMVar data_came_mvar ()
+                                                    return ()
+                                                Right _ -> return ()
                                         unless (B.length just_unencrypted == 0 )  $ do
                                             atomicModifyIORef' avail_data_ioref $ \ bu ->
                                               (
@@ -405,7 +415,7 @@ unencryptChannelData botan_ctx tls_data  = do
         -- freeStablePtr botan_pad_stable_ref
 
     -- Create the pump thread
-    _ <- forkIO pump
+    _ <- forkIOExc "BotanPump" pump
 
     return $ BotanSession result
 

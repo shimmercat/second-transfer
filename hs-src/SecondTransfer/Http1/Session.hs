@@ -336,7 +336,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 find (\ x -> (fst x) == ":status") response_headers
             headers_text_as_lbs =
                 Bu.toLazyByteString $
-                    headerListToHTTP1ResponseText response_headers `mappend` "\r\n"
+                    headerListToHTTP1ResponseText response_headers  `mappend` "\r\n"
 
         close_release_key <- ReT.register close_action
 
@@ -348,6 +348,9 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
                 liftIO $ do
                     push_action headers_text_as_lbs
+                    -- The line below causes an error which is nice to track in its way
+                    -- up.
+                    putStrLn "PurpodselyCausingMyhem"
                     push_action "\r\n"
                 _ <- ReT.unprotect close_release_key
                 return ()

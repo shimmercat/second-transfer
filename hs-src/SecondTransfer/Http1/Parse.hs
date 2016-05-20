@@ -577,8 +577,9 @@ unwrapChunks =
         in onresult parse_result
 
 
--- This is a serialization function: it goes from content to string
+-- | This is a serialization function: it goes from content to string
 -- It is not using during parse, but during the inverse process.
+-- This function adds a single \r\n at the end of the output
 headerListToHTTP1ResponseText :: Headers -> Bu.Builder
 headerListToHTTP1ResponseText headers =
     case  headers of
