@@ -1082,7 +1082,8 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                 return False
               else do
                 --
-                num_active_streams <- liftIO $ countActiveStreams stream_state_table
+                num_active_streams <- liftIO $
+                    countActiveStreams stream_state_table
                 -- TODO: Make the number of concurrent streems configurable !!!
                 if (num_active_streams + 1) <= max_concurrent_streams
                   then do
