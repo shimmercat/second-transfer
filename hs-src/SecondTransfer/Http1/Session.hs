@@ -350,8 +350,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                     push_action headers_text_as_lbs
                     -- The line below causes an error which is nice to track in its way
                     -- up.
-                    putStrLn "PurpodselyCausingMyhem"
-                    push_action "\r\n"
+                    --putStrLn "PurpodselyCausingMyhem"
+                    --push_action "\r\n"
                 _ <- ReT.unprotect close_release_key
                 return ()
 
