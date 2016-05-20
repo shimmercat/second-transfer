@@ -183,7 +183,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         UseBodyLength_BSC n -> counting_read (LB.fromStrict recv_leftovers) n set_leftovers
                         ConnectionClosedByPeer_BSC -> readforever (LB.fromStrict recv_leftovers)
                         Chunked_BSC -> readchunks (LB.fromStrict recv_leftovers)
-                        _ -> error "ImplementMe"
+                        _ -> error "HeadersAndBodyImplementMe"
 
                 principal_stream <- coherent_worker Request {
                         _headers_RQ = modified_headers,
