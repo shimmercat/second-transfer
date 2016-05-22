@@ -148,7 +148,7 @@ void output_dn_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
     //iocba_push(botan_pad_ref, (char*)a, sz);
     if ( ( buffers->enc_cursor + sz) > buffers -> enc_end )
     {
-        printf("output_dn_cb enc_cursor %p enc_end %p requested extr size %d \n", 
+        printf("output_dn_cb enc_cursor %p enc_end %p requested extr size %l \n", 
                buffers->enc_cursor, 
                buffers->enc_end,
                sz
@@ -192,8 +192,16 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     }
     else if (alert.is_valid() && alert.is_fatal() )
     {
-        std::cout << alert.type_string() << std::endl;
-        printf("Fatal alert!!\n");
+        if ( alert.type() == Botan::TLS::Alert::DECRYPT_ERROR )
+        {
+            std::cout << "TLS Layer issue: Decrypt error. Probable cause: " ;
+            std::cout << "the private key and the certificate don't match." ;
+        } else
+        {
+            std::cout << "TLS Layer issue: " ;
+            std::cout << alert.type_string() << std::endl;
+        }
+        printf("TLS alert is fatal!!\n");
     } else {
         std::cout << alert.type_string() << std::endl;
         printf("Non-fatal alert!!\n");
@@ -466,6 +474,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
         printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
         return -1;
     }
+    
     *enc_to_send_length = (uint32_t) (
         buffers -> enc_cursor 
         - out_enc_to_send );
@@ -477,6 +486,11 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     //printf("Returning %d bytes of cleartext \n", *cleartext_received_length);
     // So that we get a clean segfault if we do something wrong
     buffers-> clear_cursors();
+    if ( buffers -> alert_produced )
+    {
+        return - buffers -> which_alert;
+    }
+                
     //printf("Clearing cursors and returning\n");
     return 0;
 }
