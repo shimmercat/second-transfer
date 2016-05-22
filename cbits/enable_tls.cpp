@@ -145,9 +145,10 @@ void output_dn_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
     //iocba_push(botan_pad_ref, (char*)a, sz);
     if ( ( buffers->enc_cursor + sz) > buffers -> enc_end )
     {
-        printf("output_dn_cb enc_cursor %p enc_end %p \n", 
+        printf("output_dn_cb enc_cursor %p enc_end %p requested extr size %d \n", 
                buffers->enc_cursor, 
-               buffers->enc_end
+               buffers->enc_end,
+               sz
                );
         throw buffer_override_exception_t(
                buffer_override_exception_t::GEN_CIPHER

@@ -301,9 +301,13 @@ unencryptChannelData botan_ctx tls_data  = do
             _ <- tryPutMVar data_came_mvar ()
             return Nothing
 
+        -- Reserve extra
+        reserve_extra x | x < 4  = 32000
+                        | otherwise = 2048
+
         -- Feeds encrypted data to Botan
-        pump :: IO ()
-        pump = do
+        pump :: Int -> IO ()
+        pump serie = do
             maybe_new_data <- E.catch
                 (Just <$> tls_pull_data_action True)
                 pump_exc_handler
@@ -316,17 +320,25 @@ unencryptChannelData botan_ctx tls_data  = do
                             Nothing -> do
                                 maybe_cont_data <- do
                                   let
+
                                     cleartext_reserve_length :: Int
                                     cleartext_reserve_length = floor $
                                       ((fromIntegral len_new_data * 1.2) :: Double) +
                                       2048.0
+
+                                    enc_reserve_length :: Int
+                                    enc_reserve_length = floor $
+                                      ((fromIntegral len_new_data * 1.2) :: Double) +
+                                      fromIntegral (reserve_extra serie)
+
                                   allocaBytes cleartext_reserve_length $ \ p_clr_space ->
-                                    allocaBytes cleartext_reserve_length $ \ p_enc_to_send ->
+                                    allocaBytes enc_reserve_length $ \ p_enc_to_send ->
                                        alloca $ \ p_enc_to_send_length ->
                                          alloca $ \ p_clr_length -> do
-                                                poke p_enc_to_send_length
-                                                    $ fromIntegral cleartext_reserve_length
-                                                poke p_clr_length $ fromIntegral cleartext_reserve_length
+                                                poke p_enc_to_send_length $
+                                                    fromIntegral enc_reserve_length
+                                                poke p_clr_length $
+                                                    fromIntegral cleartext_reserve_length
                                                 Un.unsafeUseAsCStringLen (LB.toStrict new_data) $ \ (enc_pch, enc_len) ->
                                                     withMVar dontMultiThreadBotan . const $ do
                                                         engine_result <- iocba_receive_data
@@ -395,12 +407,12 @@ unencryptChannelData botan_ctx tls_data  = do
                                 return False
                     if can_continue
                       then do
-                        pump
+                        pump (serie + 1)
                       else
                         return ()
                   | otherwise -> do
                     -- This is actually an error
-                    pump
+                    pump (serie + 1)
 
                 Nothing -> do
                     -- On exceptions, finish this thread
@@ -415,7 +427,7 @@ unencryptChannelData botan_ctx tls_data  = do
         -- freeStablePtr botan_pad_stable_ref
 
     -- Create the pump thread
-    _ <- forkIOExc "BotanPump" pump
+    _ <- forkIOExc "BotanPump" (pump 0)
 
     return $ BotanSession result
 
