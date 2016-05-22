@@ -84,6 +84,8 @@ struct buffers_t{
     bool handshake_completed;
     // Has an alert been produced?
     bool alert_produced;
+    // Which alert?
+    int which_alert;
     // Did the peer closed the transport?
     bool peer_closed_transport;
 
@@ -99,7 +101,8 @@ struct buffers_t{
         chosen_protocol(NOCHOSENYET_CHP),
         channel(0),
         strategy(strategy),
-        peer_closed_transport(false)
+        peer_closed_transport(false),
+        which_alert(0)
     {
     }
 
@@ -182,6 +185,7 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     // printf("BOTAN WAS TO DELIVER ALERT: %d \n", alert.type_string().c_str());
     // TODO: find something better to do here
     buffers->alert_produced = true;
+    buffers->which_alert = (int)alert.type();
     if ( alert.type() == Botan::TLS::Alert::CLOSE_NOTIFY)
     {
         buffers -> peer_closed_transport = true;
@@ -189,10 +193,10 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     else if (alert.is_valid() && alert.is_fatal() )
     {
         std::cout << alert.type_string() << std::endl;
-        printf("Ignored a fatal alert!!\n");
+        printf("Fatal alert!!\n");
     } else {
         std::cout << alert.type_string() << std::endl;
-        printf("Ignored a non-fatal alert!!\n");
+        printf("Non-fatal alert!!\n");
     }
 }
 
@@ -490,6 +494,15 @@ extern "C" DLL_PUBLIC int32_t iocba_handshake_completed(buffers_t* buffer)
 extern "C" DLL_PUBLIC int32_t iocba_peer_closed_transport(buffers_t* buffer)
 {
     return (int32_t) (buffer->peer_closed_transport);
+}
+
+extern "C" DLL_PUBLIC int32_t iocba_alert_produced(buffers_t* buffer)
+{
+    if (buffer->alert_produced)
+    {
+        return (buffer -> which_alert);
+    } else
+        return 0;
 }
 
 // Called with cleartext data we want to encrypt and send back... 

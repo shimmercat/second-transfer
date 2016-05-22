@@ -134,6 +134,10 @@ foreign import ccall iocba_receive_data ::
     Ptr Word32 ->
     IO Int32
 
+foreign import ccall unsafe "iocba_alert_produced" iocba_alert_produced ::
+    BotanTLSChannelPtr ->
+    IO Int32
+
 
 botanPushData :: BotanPad -> LB.ByteString -> IO ()
 botanPushData botan_pad datum = do
