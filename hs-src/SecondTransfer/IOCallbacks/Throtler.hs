@@ -14,20 +14,22 @@ module SecondTransfer.IOCallbacks.Throtler (
 import           Control.Lens                           hiding ( (:<), (|>) )
 --import           Control.Monad.Trans.Resource
 import           Control.Monad.IO.Class                 (liftIO)
+import qualified Control.Exception                      as E
 import           Control.Monad                          (when)
 import           Control.Monad.Trans.Reader
 import           Control.Concurrent
 import           Control.Concurrent.BoundedChan
 import qualified Control.Concurrent.BoundedChan         as BC
+--import qualified Control.Monad.Catch                    as CMC
 
 import           Data.IORef
-import qualified Data.ByteString.Lazy                         as LB
+import qualified Data.ByteString.Lazy                   as LB
 
 
 import           System.Clock                            ( getTime
                                                          , Clock(..)
                                                          , TimeSpec
-                                                         , timeSpecAsNanoSecs
+                                                         , toNanoSecs
                                                          )
 
 import           Data.Sequence
@@ -51,6 +53,7 @@ data ThrottlerState = ThrottlerState {
 
   , _sentLog_TS        :: IORef (Seq (TimeSpec, Int))
   , _logLength_TS      :: Int
+  , _problemSending_TS :: MVar ()
     }
 
 makeLenses ''ThrottlerState
@@ -93,6 +96,7 @@ newThrotler bandwidth latency sourceio =
   do
     waiting_chan <- newBoundedChan $ lengthOfPacketBacklog bandwidth latency
     sent_log_ioref <- newIORef mempty
+    problem_sending <- newEmptyMVar
     let
         throttler_state = ThrottlerState {
             _down_TS    = sourceio
@@ -101,6 +105,7 @@ newThrotler bandwidth latency sourceio =
           , _waitingPackets_TS = waiting_chan
           , _sentLog_TS = sent_log_ioref
           , _logLength_TS = lengthOfSentPacketsRecord bandwidth latency
+          , _problemSending_TS = problem_sending
         }
 
     -- Start the throtler thread
@@ -118,13 +123,20 @@ throtlerPush contents =
     -- When the packet arrived
     when_arrived <- liftIO $ getTime Monotonic
     waiting_chan <- view waitingPackets_TS
-    liftIO $ BC.writeChan waiting_chan (when_arrived, contents)
+    maybe_problem_mvar <- view problemSending_TS
+    maybe_problem <- liftIO . tryReadMVar $ maybe_problem_mvar
+    case maybe_problem of
+        Nothing ->
+            liftIO $ BC.writeChan waiting_chan (when_arrived, contents)
+
+        Just _ ->
+            liftIO . E.throw $ NoMoreDataException
 
 
 -- | works like t2 - t1
 secondsDiff :: TimeSpec -> TimeSpec -> Double
 secondsDiff t2 t1 =
-   ( fromIntegral (timeSpecAsNanoSecs $ t2 - t1)  ) * 1.0e-9
+   ( fromIntegral (toNanoSecs $ t2 - t1)  ) * 1.0e-9
 
 
 -- | The thread in charge of delivering packets
@@ -203,17 +215,33 @@ deliveryThread =
 
     length_of_packet_record <- view logLength_TS
 
+    problem_mvar <- view problemSending_TS
+
     let
         new_sent_log = if Sq.length sent_log < length_of_packet_record
            then sent_log |> (new_now, size_to_deliver)
            else Sq.drop 1 sent_log |> (new_now, size_to_deliver)
+
+        set_problem = do
+           tryPutMVar problem_mvar ()
 
     -- Update the sent log
     liftIO $ writeIORef sent_log_ioref new_sent_log
 
     -- Finally send the packet
     push_action <- view (down_TS . pushAction_IOC )
-    liftIO $ push_action packet_contents
+
+    should_continue <- liftIO $ E.catches
+       (do
+             push_action packet_contents
+             return True
+       )
+       [
+         E.Handler ((\ _ex -> set_problem >> return False  ) :: IOProblem -> IO Bool),
+         E.Handler ((\ _ex -> set_problem >> return False  ) :: E.BlockedIndefinitelyOnMVar -> IO Bool )
+       ]
+
 
     -- And iteratively re-enter the place
-    deliveryThread
+    when should_continue $
+        deliveryThread
