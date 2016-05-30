@@ -266,6 +266,9 @@ connectOnBehalfOfClient address port_number =
                 _ ->
                     return Nothing
 
+        -- TODO: Implement other address formats
+        _ -> return Nothing
+
     case maybe_sock_addr of
         Just _sock_addr@(NS.SockAddrInet _ ha) -> do
             E.catches
@@ -297,7 +300,7 @@ connectOnBehalfOfClient address port_number =
 
         _ -> do
             -- Temporary message
-            putStrLn "SOCKS5 could not be forwarded/address not resolved, or resolved to strange format"
+            -- putStrLn "SOCKS5 could not be forwarded/address not resolved, or resolved to strange format"
             return Nothing
 
 
