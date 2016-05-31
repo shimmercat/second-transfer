@@ -7,6 +7,7 @@ module SecondTransfer.Http2.StreamState (
                , getStreamLabel
                , relabelStream
                , reserveStream
+               , closeStreamLocalAndRemote
 
                , StreamState            (..)
                , StreamStateTable
@@ -143,7 +144,12 @@ closeStreamLocal statetable stream_id = do
         Just x -> H.insert statetable stream_id x
         Nothing -> H.delete statetable stream_id
 
-    -- report statetable "after-close-local"
+
+
+closeStreamLocalAndRemote :: StreamStateTable -> GlobalStreamId -> IO ()
+closeStreamLocalAndRemote statetable stream_id = do
+    H.delete statetable stream_id
+
 
 
 countActiveStreams :: StreamStateTable -> IO Int

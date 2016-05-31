@@ -1872,7 +1872,8 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
                 sendDataOfStream check_if_cancelled pusher_data_output
             ReT.unprotect k
 
-        liftIO $ closeStreamLocal stream_state_table child_stream_id
+        -- Pushed streams are opened and closed by the server
+        liftIO $ closeStreamLocalAndRemote stream_state_table child_stream_id
 
         return ()
 
