@@ -126,8 +126,6 @@ closeStreamRemote statetable stream_id = do
         Just x -> H.insert statetable stream_id x
         Nothing -> H.delete statetable stream_id
 
-    -- report statetable "after-close-remote"
-
 
 closeStreamLocal :: StreamStateTable -> GlobalStreamId -> IO ()
 closeStreamLocal statetable stream_id = do
@@ -145,11 +143,9 @@ closeStreamLocal statetable stream_id = do
         Nothing -> H.delete statetable stream_id
 
 
-
 closeStreamLocalAndRemote :: StreamStateTable -> GlobalStreamId -> IO ()
 closeStreamLocalAndRemote statetable stream_id = do
     H.delete statetable stream_id
-
 
 
 countActiveStreams :: StreamStateTable -> IO Int

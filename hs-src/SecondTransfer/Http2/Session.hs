@@ -1790,9 +1790,9 @@ normallyHandleStream principal_stream = do
                                      $ (\ x -> return (x+2,x) )
 
             liftIO $ do
+                reserveStream stream_state_table child_stream_id maybe_label_of_pushed
                 writeChan headers_output . PushPromise_HM $
                     (stream_id, child_stream_id, request_headers, effects)
-                reserveStream stream_state_table child_stream_id maybe_label_of_pushed
 
             return (child_stream_id, response_headers, pushed_data_and_conclusion, effects)
       else
