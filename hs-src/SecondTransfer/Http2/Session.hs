@@ -1216,6 +1216,10 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
     let
         headers_extra_good = good_headers
         header_list_after = He.toList headers_extra_good
+        maybe_path = lookup ":path" header_list_after
+
+    -- Label the stream as soon as possible
+    liftIO $ relabelStream stream_state_table stream_id maybe_path
 
     -- If the headers end the request....
     post_data_source <- if not (frameEndsStream frame)
