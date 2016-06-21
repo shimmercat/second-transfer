@@ -93,7 +93,8 @@ import           SecondTransfer.IOCallbacks.Types       (ConnectionData, addr_Cn
 import           SecondTransfer.Sessions.Internal       (--sessionExceptionHandler,
                                                          SessionsContext,
                                                          sessionsConfig)
-import           SecondTransfer.Utils                   (unfoldChannelAndSource, bs8BEtoWord64)
+import           SecondTransfer.Utils                   (bufferedUnfoldChannelAndSource,
+                                                         bs8BEtoWord64)
 import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import qualified SecondTransfer.Http2.TransferTypes     as TT
@@ -219,7 +220,7 @@ type SessionMaker = SessionsContext -> IO Session
 -- Here is how we make a session wrapping a CoherentWorker
 type CoherentSession = AwareWorker -> SessionMaker
 
-data PostInputMechanism = PostInputMechanism (MVar (Maybe B.ByteString), InputDataStream)
+data PostInputMechanism = PostInputMechanism (Chan (Maybe B.ByteString), InputDataStream)
 
 ------------- Regarding client state
 type Message = (Headers,InputDataStream)
@@ -1592,7 +1593,7 @@ unlessReceivingHeaders comp = do
 
 createMechanismForStream :: GlobalStreamId -> ReaderT SessionData IO PostInputMechanism
 createMechanismForStream stream_id = do
-    (chan, source) <- liftIO $ unfoldChannelAndSource
+    (chan, source) <- liftIO $ bufferedUnfoldChannelAndSource
     stream2postinputmechanism <- view stream2PostInputMechanism
     let pim = PostInputMechanism (chan, hoist lift  source)
     liftIO $ H.insert stream2postinputmechanism stream_id pim
@@ -1612,7 +1613,7 @@ closePostDataSource stream_id = do
 
         Just (PostInputMechanism (chan, _))  ->
             liftIO $ do
-                putMVar chan Nothing
+                writeChan chan Nothing
                 -- Not sure if this will work
                 H.delete  stream2postinputmechanism stream_id
 
@@ -1639,7 +1640,7 @@ streamWorkerSendData stream_id bytes = do
 
 sendBytesToPim :: PostInputMechanism -> B.ByteString -> ReaderT SessionData IO ()
 sendBytesToPim (PostInputMechanism (chan, _)) bytes =
-    liftIO $ putMVar chan (Just bytes)
+    liftIO $ writeChan chan (Just bytes)
 
 
 postDataSourceFromMechanism :: PostInputMechanism -> InputDataStream

@@ -92,7 +92,7 @@ type HeaderValue = B.ByteString
 -- | The complete header
 type Header = (HeaderName, HeaderValue)
 
--- |List of headers. The first part of each tuple is the header name
+-- |List of headers. The first art of each tuple is the header name
 -- (be sure to conform to the HTTP/2 convention of using lowercase)
 -- and the second part is the headers contents. This list needs to include
 -- the special :method, :scheme, :authority and :path pseudo-headers for

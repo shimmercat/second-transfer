@@ -8,6 +8,7 @@ module SecondTransfer.Utils (
     ,getWord24be
     ,lowercaseText
     ,unfoldChannelAndSource
+    ,bufferedUnfoldChannelAndSource
     ,stripString
     ,domainFromUrl
     ,subByteString
@@ -16,6 +17,7 @@ module SecondTransfer.Utils (
 
 
 import           Control.Concurrent.MVar
+import           Control.Concurrent.Chan
 import           Control.Monad.Trans.Class (lift)
 import           Data.Binary               (Binary, get, put, putWord8)
 import           Data.Binary.Get           (Get, getWord16be, getWord8)
@@ -84,6 +86,23 @@ unfoldChannelAndSource = do
   let
     source = do
       e <- lift $ takeMVar chan
+      case e of
+          Just ee -> do
+              yield ee
+              source
+
+          Nothing ->
+              return ()
+
+  return (chan, source)
+
+
+bufferedUnfoldChannelAndSource :: IO (Chan (Maybe a), Source IO a)
+bufferedUnfoldChannelAndSource = do
+  chan <- newChan
+  let
+    source = do
+      e <- lift $ readChan chan
       case e of
           Just ee -> do
               yield ee
