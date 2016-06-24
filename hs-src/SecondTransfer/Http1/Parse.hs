@@ -46,6 +46,8 @@ import qualified Data.ByteString.Lazy                   as LB
 import           Data.Char                              (toLower, isSpace)
 import           Data.Maybe                             (isJust, fromMaybe)
 
+import           GHC.Stack
+
 import qualified Data.Attoparsec.ByteString             as Ap
 import qualified Data.Attoparsec.ByteString.Char8       as Ap8
 
@@ -284,7 +286,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
                 ||
                 ( status_str == "204" || status_str == "304" )
 
-          in ((":status", status_str): hh, not excludes_body)
+          in ((":status", takeFirstPartOfStatus status_str): hh, not excludes_body)
 
 
     -- Still we need to lower-case header names, and trim them
@@ -475,7 +477,14 @@ digit :: Ap.Parser Word8
 digit = Ap.satisfy (Ap.inClass "0-9")
 
 
-responseLine :: Ap.Parser FirstLineDatum
+safeStringToInt :: HasCallStack => String -> Int
+safeStringToInt s =
+    case readEither s of
+        Left _ -> throw (HTTP11SyntaxException $ "BadDigits found via stack: " ++ prettyCallStack callStack)
+        Right n -> n
+
+
+responseLine :: HasCallStack => Ap.Parser FirstLineDatum
 responseLine =
     (pure Response_RoRL)
     <*
@@ -483,7 +492,7 @@ responseLine =
     <*
     space
     <*>
-    ( read . map (toEnum . fromIntegral )  <$> Ap.count 3 digit )
+    ( safeStringToInt . map (toEnum . fromIntegral )  <$> Ap.count 3 digit )
     <*
     space
     <*
@@ -509,6 +518,15 @@ normalMimeLine =
     (Ap.many' space)
     <*>
     (fst . Ch8.spanEnd isSpace <$> Ap8.takeByteString )
+
+
+takeFirstPartOfStatus :: B.ByteString -> B.ByteString
+takeFirstPartOfStatus s = B.takeWhile
+   (\ w -> w >= (fromIntegral $ fromEnum '0')
+           &&
+          w <=  (fromIntegral $ fromEnum '9')
+   )
+   s
 
 
 httpFirstLine :: Ap.Parser FirstLineDatum
@@ -580,14 +598,14 @@ unwrapChunks =
 -- | This is a serialization function: it goes from content to string
 -- It is not using during parse, but during the inverse process.
 -- This function adds a single \r\n at the end of the output
-headerListToHTTP1ResponseText :: Headers -> Bu.Builder
+headerListToHTTP1ResponseText :: HasCallStack => Headers -> Bu.Builder
 headerListToHTTP1ResponseText headers =
     case  headers of
         -- According to the specs, :status can be only
         -- the first header
         (hn,hv): rest | hn == ":status" ->
             (
-                (first_line . read . unpack $ hv)
+                (first_line . safeStringToInt . unpack $ hv)
                 `mappend`
                 (go rest)
             )
