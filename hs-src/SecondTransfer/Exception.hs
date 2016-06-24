@@ -56,6 +56,8 @@ import qualified Control.Monad.Trans.Resource     as ReT
 import qualified Control.Monad.Catch              as CMC
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 
+import           GHC.Stack                        (currentCallStack)
+
 -- | Abstract exception. All HTTP/2 exceptions derive from here
 data HTTP2SessionException = forall e . Exception e => HTTP2SessionException e
     deriving Typeable
