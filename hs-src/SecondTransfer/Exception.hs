@@ -315,7 +315,16 @@ keyedReportExceptions key comp =
     ei <- try comp
     case (ei :: Either SomeException a) of
         Left e@(SomeException ee) -> do
-            putStrLn $ "Bubbling exc " ++ displayException e ++ " (with type " ++ (show $ typeOf ee) ++ ") at " ++ key
+            current_call_stack <- currentCallStack
+            putStrLn $ "Bubbling exc "
+                ++ displayException e
+                ++ " (with type "
+                ++ (show $ typeOf ee)
+                ++ ") at "
+                ++ key
+                ++ " (call stack?) "
+                ++ show current_call_stack
+
             throwIO e
 
         Right a -> do
