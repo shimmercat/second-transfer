@@ -14,7 +14,8 @@ module SecondTransfer.IOCallbacks.WrapSocket (
      ) where
 
 
----import           Control.Concurrent
+import           Control.Monad                                      (unless)
+import           Control.Concurrent
 import qualified Control.Exception                                  as E
 import           Control.Lens                                       (makeLenses, (^.))
 
