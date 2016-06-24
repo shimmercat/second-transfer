@@ -71,6 +71,7 @@ instance HasSocketPeer SocketIOCallbacks where
 --   in something with a set of active callbacks
 socketIOCallbacks :: NS.Socket -> IO SocketIOCallbacks
 socketIOCallbacks socket = do
+    socket_already_closed <- newMVar False
     let
         uhandler :: E.IOException -> IO a
         uhandler = ((\ _e -> do
@@ -102,9 +103,12 @@ socketIOCallbacks socket = do
                    return . LB.fromStrict $ datum
 
         -- Exceptions on close are possible
-        close_action = E.finally
-            (ignoreException ioException () $ NS.shutdown socket NS.ShutdownBoth)
-            (ignoreException ioException () $ NS.close socket)
+        close_action = modifyMVar_ socket_already_closed $ \ already_closed -> do
+            unless (already_closed) $ do
+                E.finally
+                    (ignoreException ioException () $ NS.shutdown socket NS.ShutdownBoth)
+                    (ignoreException ioException () $ NS.close socket)
+            return True
 
     pull_action_wrapping <- newPullActionWrapping  best_effort_pull_action
     let
