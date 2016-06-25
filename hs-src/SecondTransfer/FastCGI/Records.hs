@@ -230,18 +230,23 @@ toWrappedStream record_type request_id =
                   wrapRecordFrame record_type request_id leftovers
           yield wrapped_frame
           go ""
-      | otherwise = do
+      | otherwise = do -- No leftovers
           maybe_new_data <- await
           case maybe_new_data of
               Nothing -> do
+                  let
+                      wrapped_frame = runPut $
+                          wrapRecordFrame record_type request_id ""
+                  yield wrapped_frame
                   return ()
               Just fragment
-                 | LB.length fragment > 0 -> go fragment
-                 | otherwise -> do
+                 | LB.length fragment > 0 ->
+                       go fragment
+                 | otherwise -> do  -- End of stream
                        let
                            wrapped_frame = runPut $
                                wrapRecordFrame record_type request_id ""
                        yield wrapped_frame
-                       go ""
+                       return ()
   in
     go ""
