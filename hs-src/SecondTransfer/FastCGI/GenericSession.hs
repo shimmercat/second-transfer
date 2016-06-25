@@ -241,7 +241,7 @@ processOutputAndStdErr request_id method client_input ioc =
                 =$=
                 CL.map LB.fromStrict
                 $$
-                (toWrappedStream Stdin_RT request_id)
+                (toWrappedStream Stdin_RT request_id) -- Takes care of end-of-stream
                 =$=
                 (CL.mapM_  (liftIO `fmap` push ) )
                 )
@@ -311,7 +311,7 @@ shortCircuit :: HeaderName -> HeaderName   -> (Header -> Header) -> (Header -> H
 shortCircuit from_name to_name f =
   let
     transform' h@(hn, hv) | hn == from_name  =  (to_name, hv)
-                         | otherwise = f h
+                          | otherwise = f h
   in transform'
 
 
@@ -351,6 +351,8 @@ requestHeadersToCGI maybe_document_root headers_http =
         shortCircuit ":method" "REQUEST_METHOD" .
         shortCircuit ":scheme" "SCHEME" .
         shortCircuit ":path" "HTTP_URI_PATH" .
+        shortCircuit "content-length"     "CONTENT_LENGTH" .
+        shortCircuit "content-type"       "CONTENT_TYPE" .
         -- From here on, we need some help to get these expressed.
         -- TODO:  Create a function that translates the perception to enhanced
         -- headers ....
