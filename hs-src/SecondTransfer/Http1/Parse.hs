@@ -681,7 +681,7 @@ serializeHTTPResponse response_headers fragments =
     -- road.
     data_size = foldl' (\ n bs -> n + B.length bs) 0 fragments
     h2 = L.set
-        contentLenght_Hi
+        contentLength_Hi
         (Just . fromIntegral $ data_size )
         response_headers
 

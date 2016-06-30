@@ -6,7 +6,7 @@ module SecondTransfer.Http1.Session(
 
 
 import           Control.Lens
-import           Control.Exception                       (catch, try, throwIO)
+import           Control.Exception                       (catch, try)
 --import           Control.Concurrent                      (forkIO)
 import           Control.Monad.IO.Class                  (liftIO, MonadIO)
 import           Control.Monad                           (when)
@@ -15,16 +15,14 @@ import           Control.Monad.Morph                     (hoist, lift)
 
 import qualified Data.ByteString                         as B
 import qualified Data.ByteString.Lazy                    as LB
-import           Data.ByteString.Char8                   (unpack,
-                                                          -- pack
-                                                         )
 import qualified Data.ByteString.Builder                 as Bu
-import           Data.Foldable                           (find)
 import           Data.Conduit
 import qualified Data.Conduit.List                       as CL
 import           Data.IORef
 import qualified Data.Attoparsec.ByteString              as Ap
 -- import           Data.Monoid                            (mconcat, mappend)
+
+import           SimpleHttpHeadersHq
 
 import           SecondTransfer.MainLoop.CoherentWorker
 -- import           SecondTransfer.MainLoop.Protocol
@@ -39,11 +37,10 @@ import           SecondTransfer.Http1.Parse
 import           SecondTransfer.Exception                (
                                                          IOProblem,
                                                          NoMoreDataException,
-                                                         HTTP11SyntaxException  (..),
+                                                         -- HTTP11SyntaxException  (..),
                                                          forkIOExc
                                                          )
 import           SecondTransfer.Sessions.Config
-import qualified SecondTransfer.Utils.HTTPHeaders        as He
 
 
 -- import           Debug.Trace                             (traceShow)
@@ -329,11 +326,10 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
         let
             data_and_conclusion = principal_stream ^. dataAndConclusion_PS
             response_headers    = principal_stream ^. headers_PS
-            transfer_encoding = find (\ x -> (fst x) == "transfer-encoding" ) response_headers
-            cnt_length_header = find (\ x -> (fst x) == "content-length" )    response_headers
+            transfer_encoding =  response_headers ^.  chunked_Hi
+            cnt_length_header =  response_headers ^.  contentLength_Hi
             status_code :: Maybe Int
-            status_code = (read . unpack . snd) <$>
-                find (\ x -> (fst x) == ":status") response_headers
+            status_code =  fromIntegral <$> response_headers ^. status_Hi
             headers_text_as_lbs =
                 Bu.toLazyByteString $
                     headerListToHTTP1ResponseText response_headers  `mappend` "\r\n"
@@ -364,11 +360,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                            then
                               Bu.toLazyByteString $
                                   (headerListToHTTP1ResponseText
-                                        (
-                                          head response_headers : -- Separate the :status header
-                                          ("transfer-encoding", "chunked") :
-                                          tail response_headers
-                                        )
+                                          (set chunked_Hi True response_headers)
                                   ) `mappend` "\r\n"
                            else
                               headers_text_as_lbs
@@ -387,20 +379,11 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
         case (transfer_encoding, cnt_length_header) of
 
-            (Just (_, enc), _ )
-              | transferEncodingIsChunked enc ->
+            (True, _ )  ->
                 handle_as_chunked False
 
-              | otherwise -> do
-                -- This is a pretty bad condition, I don't know how to use
-                -- any other encoding...
-                  liftIO . throwIO .  HTTP11SyntaxException $ "UnhandledTransferEncoding"
-
-            (Nothing, (Just (_,content_length_str))) -> do
+            (False, Just content_length) -> do
                 -- Use the provided chunks, as naturally as possible
-                let
-                    content_length :: Int
-                    content_length = read . unpack $ content_length_str
                 liftIO $ push_action headers_text_as_lbs
                 (_maybe_footers, _did_ok) <-
                       runConduit $
@@ -414,7 +397,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 _ <- ReT.unprotect close_release_key
                 return ()
 
-            (Nothing, Nothing)
+            (False, Nothing)
                 | Just status_no <- status_code, not (responseStatusHasResponseBody status_no) ->
                     handle_as_headers_only
                 | otherwise -> do
@@ -426,23 +409,24 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                     handle_as_chunked True
 
 
-addExtraHeaders :: SessionsContext -> Headers -> Headers
-addExtraHeaders sessions_context headers =
-  let
-    enriched_lens :: Lens' SessionsContext SessionsEnrichedHeaders
-    enriched_lens = (sessionsConfig . sessionsEnrichedHeaders)
-    -- Haskell laziness here!
-    headers_editor = He.fromList headers
-    -- TODO: Figure out which is the best way to put this contact in the
-    --       source code
-    protocol_lens = He.headerLens "second-transfer-eh--used-protocol"
-    add_used_protocol = sessions_context ^. (enriched_lens . addUsedProtocol )
-    he1 = if add_used_protocol
-        then set protocol_lens (Just "HTTP/1.1") headers_editor
-        else headers_editor
-    result = He.toList he1
+addExtraHeaders :: SessionsContext -> HqHeaders -> HqHeaders
+addExtraHeaders _sessions_context headers = headers
 
-  in if add_used_protocol
-        -- Nothing will be computed here if the headers are not modified.
-        then result
-        else headers
+  -- let
+  --   enriched_lens :: Lens' SessionsContext SessionsEnrichedHeaders
+  --   enriched_lens = (sessionsConfig . sessionsEnrichedHeaders)
+  --   -- Haskell laziness here!
+  --   headers_editor = He.fromList headers
+  --   -- TODO: Figure out which is the best way to put this contact in the
+  --   --       source code
+  --   protocol_lens = He.headerLens "second-transfer-eh--used-protocol"
+  --   add_used_protocol = sessions_context ^. (enriched_lens . addUsedProtocol )
+  --   he1 = if add_used_protocol
+  --       then set protocol_lens (Just "HTTP/1.1") headers_editor
+  --       else headers_editor
+  --   result = He.toList he1
+
+  -- in if add_used_protocol
+  --       -- Nothing will be computed here if the headers are not modified.
+  --       then result
+  --       else headers
