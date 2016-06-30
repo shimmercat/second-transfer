@@ -7,7 +7,7 @@ name        :              second-transfer
 -- PVP       summary:      +-+------- breaking API changes
 --                         | | +----- non-breaking API additions
 --                         | | | +--- code changes with no API change
-version     :              0.11.0.0
+version     :              0.12.0.0
 
 synopsis    :              Second Transfer HTTP/2 web server
 
@@ -61,7 +61,7 @@ source-repository head
 source-repository this
   type:     git
   location: git@github.com:alcidesv/second-transfer.git
-  tag:      v0.10.0.5
+  tag:      v0.12.0.0
 
 library
 
@@ -137,7 +137,6 @@ library
                   , SecondTransfer.Http2.MakeAttendant
                   , SecondTransfer.Http2.SimpleClient
                   , SecondTransfer.Http2.TransferTypes
-                  --, SecondTransfer.Http2.OutputTray
                   , SecondTransfer.Http2.PriorityChannels
                   , SecondTransfer.Http2.CalmState
                   , SecondTransfer.Http2.StreamState
