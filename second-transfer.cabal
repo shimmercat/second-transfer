@@ -135,7 +135,6 @@ library
                   , SecondTransfer.FastCGI.Records
 
                   , SecondTransfer.Http2.MakeAttendant
-                  , SecondTransfer.Http2.SimpleClient
                   , SecondTransfer.Http2.TransferTypes
                   , SecondTransfer.Http2.PriorityChannels
                   , SecondTransfer.Http2.CalmState
