@@ -26,7 +26,7 @@ import           Data.Maybe                                                (from
 import           Data.Conduit
 import           Data.Conduit.List                                         as CL
 
---import           SecondTransfer.MainLoop.CoherentWorker                    (Headers)
+import           SimpleHttpHeadersHq
 
 import qualified SecondTransfer.Utils.HTTPHeaders                          as He
 import           SecondTransfer.Http1.Types
@@ -72,10 +72,8 @@ ioProxyToConnection ioc request =
   do
     let
        h1 = request ^. headers_Rq
-       he1 = He.fromList h1
-       he2 = He.combineAuthorityAndHost he1
-       h3 = He.toList he2
-       headers_bu = headerListToHTTP1RequestText h3
+       h2 = He.combineAuthorityAndHost h1
+       headers_bu = headerListToHTTP1RequestText h2
        separator = "\r\n"
 
        -- Contents of the head, including the separator, which should always
@@ -83,14 +81,17 @@ ioProxyToConnection ioc request =
        cnt1 = headers_bu `mappend` separator
        cnt1_lbz = Bu.toLazyByteString cnt1
 
-       method = fromMaybe "GET" $ He.fetchHeader h3 ":method"
+       -- The string representation of it
+       method =
+           LB.toStrict .
+           Bu.toLazyByteString .
+           toHeaderValue .
+           fromMaybe Get_HtM $  h2 ^. method_Hi
 
     -- Send the headers and the separator
 
     -- This code can throw an exception, in that case, just let it
     -- bubble. But the upper layer should deal with it.
-    --LB.putStr cnt1_lbz
-    --LB.putStr "\n"
     liftIO $ (ioc ^. pushAction_IOC) cnt1_lbz
 
     -- Send the rest only if the method has something ....
@@ -291,7 +292,7 @@ processHttp11Output bepa method =
 processHttp11OutputFromPipe ::
   (MonadIO m) =>
   B.ByteString ->
-  Sink B.ByteString m (He.Headers, ResponseBodyHandling)
+  Sink B.ByteString m (HqHeaders, ResponseBodyHandling)
 processHttp11OutputFromPipe  method =
   do
     -- So, say that we are here, that means we haven't exploded
