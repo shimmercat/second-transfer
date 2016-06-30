@@ -7,4 +7,4 @@ packages:
 - '.'
 ghc-options:
     second-transfer: "-pgmc g++"
-resolver: nightly-2016-05-05
+resolver: nightly-2016-05-31
