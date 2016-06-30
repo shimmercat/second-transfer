@@ -5,6 +5,7 @@ docker:
     enable: false
 packages:
 - '.'
+- 'http-headers-hq'
 ghc-options:
     second-transfer: "-pgmc g++"
 resolver: nightly-2016-05-31

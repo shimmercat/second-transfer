@@ -1,0 +1,4 @@
+[submodule "http-headers-hq"]
+	path = http-headers-hq
+	url = ssh://git@gitlab.zunzun.se:10022/shimmer/http-headers-hq.git
+	branch = master

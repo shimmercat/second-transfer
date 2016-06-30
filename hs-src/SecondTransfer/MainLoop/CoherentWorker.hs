@@ -7,13 +7,8 @@
 
 
 module SecondTransfer.MainLoop.CoherentWorker(
-    getHeaderFromFlatList
-    , nullFooter
-
-    , HeaderName
-    , HeaderValue
-    , Header
-    , Headers
+      nullFooter
+    , HqHeaders
     , FinalizationHeaders
     , Request(..)
     , Footers
@@ -76,29 +71,15 @@ import           Control.Monad.Trans.Resource
 
 import qualified Data.ByteString                       as B
 import           Data.Conduit
-import           Data.Foldable                         (find)
+--import           Data.Foldable                         (find)
 import           System.Clock                          (TimeSpec)
+
+import           SimpleHttpHeadersHq
 
 import           SecondTransfer.MainLoop.Protocol      (HttpProtocolVersion (..))
 import           SecondTransfer.Sessions.Config        (HashableSockAddr (..))
 
 
--- | The name part of a header
-type HeaderName = B.ByteString
-
--- | The value part of a header
-type HeaderValue = B.ByteString
-
--- | The complete header
-type Header = (HeaderName, HeaderValue)
-
--- |List of headers. The first art of each tuple is the header name
--- (be sure to conform to the HTTP/2 convention of using lowercase)
--- and the second part is the headers contents. This list needs to include
--- the special :method, :scheme, :authority and :path pseudo-headers for
--- requests; and :status (with a plain numeric value represented in ascii digits)
--- for responses.
-type Headers = [Header]
 
 -- | Has kind * -> *
 --   Used to allow for registered cleanup functions to be safely
@@ -162,7 +143,7 @@ defaultPerception = Perception {
 -- which will normally be empty, except for POST and PUT requests. But
 -- this library enforces none of that.
 data Request = Request {
-     _headers_RQ    :: ! Headers,
+     _headers_RQ    ::  HqHeaders,
      _inputData_RQ  :: Maybe InputDataStream,
      _perception_RQ :: ! Perception
   }
@@ -172,7 +153,7 @@ makeLenses ''Request
 -- | Finalization headers. If you don't know what they are, chances are
 --   that you don't need to worry about them for now. The support in this
 --   library for those are at best sketchy.
-type FinalizationHeaders = Headers
+type FinalizationHeaders = HqHeaders
 
 -- | Finalization headers
 type Footers = FinalizationHeaders
@@ -195,8 +176,8 @@ type DataAndConclusion = ConduitM () B.ByteString AwareWorkerStack Footers
 --   a list of response headers, and the usual response body  (which
 --   may include final footers (not implemented yet)).
 data PushedStream = PushedStream {
-  _requestHeaders_Psh    :: Headers,
-  _responseHeaders_Psh   :: Headers,
+  _requestHeaders_Psh    :: HqHeaders,
+  _responseHeaders_Psh   :: HqHeaders,
   _dataAndConclusion_Psh :: DataAndConclusion,
   _label_Psh             :: Maybe B.ByteString
   }
@@ -279,7 +260,7 @@ defaultEffects = Effect {
 --   headers and they should contain the :status pseudo-header. The `PushedStreams`
 --   is a list of pushed streams... they will be pushed to the client.
 data PrincipalStream = PrincipalStream {
-  _headers_PS              :: Headers,
+  _headers_PS              :: HqHeaders,
   _pushedStreams_PS        :: PushedStreams,
   _dataAndConclusion_PS    :: DataAndConclusion,
   _effect_PS               :: Effect,
@@ -310,12 +291,12 @@ type CoherentWorker =  TupledRequest -> IO TupledPrincipalStream
 -- | A tuple representing the data alone that you usually need to give as a response, that
 --   is, the headers in the response (including the HTTP/2 :status), any pushed streams,
 --   a stream with the response data and the footers.
-type TupledPrincipalStream = (Headers, PushedStreams, DataAndConclusion)
+type TupledPrincipalStream = (HqHeaders, PushedStreams, DataAndConclusion)
 
 -- | A tuple representing the data alone usually needed to create a response. That is,
 --   the headers (including HTTP/2 :path, :authority, etc) and maybe an input data stream
 --   for requests that include it, that is, POST and PUT.
-type TupledRequest = (Headers, Maybe InputDataStream)
+type TupledRequest = (HqHeaders, Maybe InputDataStream)
 
 
 -- | Convert between the two types of callback.
@@ -338,15 +319,6 @@ coherentToAwareWorker :: CoherentWorker -> AwareWorker
 coherentToAwareWorker w r =
     fmap tupledPrincipalStreamToPrincipalStream $ w . requestToTupledRequest $ r
 
--- | Gets a single header from the list
-getHeaderFromFlatList :: Headers -> B.ByteString -> Maybe B.ByteString
-getHeaderFromFlatList unvl bs =
-    case find (\ (x,_) -> x==bs ) unvl of
-        Just (_, found_value)  -> Just found_value
-
-        Nothing                -> Nothing
-
-
 -- | If you want to skip the footers, i.e., they are empty, use this
 --   function to convert an ordinary Source to a DataAndConclusion.
 nullFooter :: Source AwareWorkerStack B.ByteString -> DataAndConclusion
@@ -356,7 +328,7 @@ nullFooter s = s =$= go
         i <- await
         case i of
             Nothing ->
-                return []
+                return emptyHqHeaders
 
             Just ii -> do
                 yield ii
