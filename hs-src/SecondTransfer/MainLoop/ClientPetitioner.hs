@@ -8,8 +8,8 @@ module SecondTransfer.MainLoop.ClientPetitioner(
 -- import qualified Data.ByteString                                    as B
 
 
-import SecondTransfer.MainLoop.CoherentWorker                       (Headers,InputDataStream)
+import SecondTransfer.MainLoop.CoherentWorker                       (HqHeaders,InputDataStream)
 
 
 class ClientPetitioner a where
-    request :: a -> Headers -> InputDataStream -> IO (Headers,InputDataStream)
+    request :: a -> HqHeaders -> InputDataStream -> IO (HqHeaders,InputDataStream)

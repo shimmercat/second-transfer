@@ -29,12 +29,12 @@ module SecondTransfer.Utils.HTTPHeaders (
     , prettyPrintHeaders
     , defaultPrettyPrintHeadersConfig
 
+    , headerIsPseudo
+
     ) where
 
 import qualified Control.Lens                           as L
 import           Control.Lens                           ( (^.) )
---import           Control.DeepSeq                        (deepseq)
---import           GHC.Generics                           (Generic)
 
 import qualified Data.ByteString                        as B
 import qualified Data.ByteString.Char8                  as B8
@@ -42,16 +42,9 @@ import qualified Data.ByteString.Lazy                   as LB
 import qualified Data.ByteString.Builder                as Bu
 import           Data.ByteString.Char8                  (pack)
 import           Data.Char                              (isUpper, toLower)
---import           Data.List                              (find)
+
 import qualified Data.Map.Strict                        as Ms
---import           Data.Word                              (Word8)
 
--- Provide support for cookies
---import qualified Data.Attoparsec.ByteString             as ATO
---import qualified Data.Attoparsec.ByteString.Char8       as ATOCh8
-
-
---import           Data.Time.Format                       (formatTime, defaultTimeLocale)
 import           Data.Time.Clock                        (getCurrentTime)
 
 
@@ -185,3 +178,6 @@ prettyPrintHeaders config hqheaders =
   where
      space = Bu.byteString . pack . take (config ^. indentSpace_PPHC) . repeat $ ' '
      headers = hqheaders ^.  serialized_HqH
+
+headerIsPseudo :: B.ByteString -> Bool
+headerIsPseudo x = B8.head x == ':'

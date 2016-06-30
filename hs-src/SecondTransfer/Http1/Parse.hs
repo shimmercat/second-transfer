@@ -29,7 +29,7 @@ module SecondTransfer.Http1.Parse(
 
 
 import           Control.Exception                      (throw)
--- import           Control.Lens
+import           Control.Lens
 import qualified Control.Lens                           as L
 import           Control.Applicative
 --import           Control.DeepSeq                        (deepseq)
@@ -60,10 +60,10 @@ import           Text.Read                              (readEither)
 
 import qualified Network.URI                            as U
 
-import qualified SecondTransfer.Utils.HTTPHeaders       as E
+import           SimpleHttpHeadersHq
+
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import           SecondTransfer.Exception
-import           SecondTransfer.MainLoop.CoherentWorker (Headers)
 import           SecondTransfer.Utils                   (subByteString)
 import qualified SecondTransfer.ConstantsAndLimits      as Constant
 
@@ -100,11 +100,11 @@ data Http1ParserCompletion =
     --   there is, and that's what this case represents. The second
     --   argument is a left-overs string, that should be completed
     --   with any other data required
-    |OnlyHeaders_H1PC  !Headers !B.ByteString
+    |OnlyHeaders_H1PC  !HqHeaders !B.ByteString
     -- | For requests with a body. The second argument is a condition
     --   to stop receiving the body, the third is leftovers from
     --   parsing the headers.
-    |HeadersAndBody_H1PC  !Headers !BodyStopCondition !B.ByteString
+    |HeadersAndBody_H1PC  !HqHeaders !BodyStopCondition !B.ByteString
     -- | Some requests are ill-formed. We can check those cases
     --   here.
     |RequestIsMalformed_H1PC String
@@ -294,6 +294,9 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         ( (stripBsHName . bsToLower $ hn), stripBs hv ) | (hn, hv) <- headers_2
         ]
 
+    -- TODO: Find out what to do with header parse errors
+    (headers_hq, _parse_error_list) = parseFromTupleList headers_3
+
     content_stop :: BodyStopCondition
     content_stop =
       let
@@ -322,9 +325,9 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         (if all_headers_ok then
             if has_body
               then
-                HeadersAndBody_H1PC headers_3 content_stop leftovers
+                HeadersAndBody_H1PC headers_hq content_stop leftovers
               else
-                OnlyHeaders_H1PC headers_3 leftovers
+                OnlyHeaders_H1PC headers_hq leftovers
         else
             RequestIsMalformed_H1PC "InvalidSyntaxOnHeaders")
     else
@@ -598,9 +601,9 @@ unwrapChunks =
 -- | This is a serialization function: it goes from content to string
 -- It is not using during parse, but during the inverse process.
 -- This function adds a single \r\n at the end of the output
-headerListToHTTP1ResponseText :: HasCallStack => Headers -> Bu.Builder
+headerListToHTTP1ResponseText :: HasCallStack => HqHeaders -> Bu.Builder
 headerListToHTTP1ResponseText headers =
-    case  headers of
+    case  headers ^. serialized_HqH  of
         -- According to the specs, :status can be only
         -- the first header
         (hn,hv): rest | hn == ":status" ->
@@ -635,9 +638,9 @@ headerListToHTTP1ResponseText headers =
 -- Invoke with the request data. Don't forget to clean the headers first.
 -- NOTICE that this function doesn't add the \r\n extra-token for the empty
 -- line at the end of headers.
-headerListToHTTP1RequestText :: Headers -> Bu.Builder
+headerListToHTTP1RequestText :: HqHeaders -> Bu.Builder
 headerListToHTTP1RequestText headers =
-    go1 Nothing Nothing mempty headers
+    go1 Nothing Nothing mempty (headers ^. serialized_HqH)
   where
     go1 mb_method mb_local_uri assembled_body [] =
         (fromMaybe "GET" mb_method) `mappend` " " `mappend` (fromMaybe "*" mb_local_uri) `mappend` " " `mappend` "HTTP/1.1" `mappend` "\r\n"
@@ -661,8 +664,8 @@ headerListToHTTP1RequestText headers =
       | otherwise = go1 mb_method mb_local_uri (assembled_body `mappend` (Bu.byteString hn) `mappend` ":" `mappend` (Bu.byteString hv) `mappend` "\r\n") rest
 
 
-
-serializeHTTPResponse :: Headers -> [B.ByteString] -> Lb.ByteString
+-- | Function used for testing....
+serializeHTTPResponse :: HqHeaders -> [B.ByteString] -> Lb.ByteString
 serializeHTTPResponse response_headers fragments =
   let
     -- So got some data in an answer. Now there are three ways to go about
@@ -676,17 +679,14 @@ serializeHTTPResponse response_headers fragments =
     -- I promised to minimize the number of interventions of the library,
     -- so it could be a good idea to remove this one further down the
     -- road.
-    h2 = E.lowercaseHeaders response_headers
     data_size = foldl' (\ n bs -> n + B.length bs) 0 fragments
-    headers_editor = E.fromList h2
-    content_length_header_lens = E.headerLens "content-length"
-    he2 = L.set
-        content_length_header_lens
-        (Just (pack . show $ data_size))
-        headers_editor
-    h3 = E.toList he2
+    h2 = L.set
+        contentLenght_Hi
+        (Just . fromIntegral $ data_size )
+        response_headers
+
     -- Next, I must serialize the headers....
-    headers_text_as_builder = headerListToHTTP1ResponseText h3
+    headers_text_as_builder = headerListToHTTP1ResponseText h2
 
     -- We dump the headers first... unfortunately when talking
     -- HTTP/1.1 the most efficient way to write those bytes is
