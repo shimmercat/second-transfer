@@ -81,6 +81,7 @@ import           System.Clock                            ( getTime
                                                          , TimeSpec
                                                          )
 
+import           SimpleHttpHeadersHq
 
 -- Imports from other parts of the program
 import           SecondTransfer.MainLoop.CoherentWorker
@@ -112,9 +113,9 @@ import           SecondTransfer.MainLoop.Logging        (logit)
 -- What to do regarding headers
 data HeaderOutputMessage =
     -- Send the headers of the principal stream
-    NormalResponse_HM (GlobalStreamId,  Headers, Effect, MVar TT.OutputDataFeed)
+    NormalResponse_HM (GlobalStreamId,  HqHeaders, Effect, MVar TT.OutputDataFeed)
     -- Send a push-promise
-    |PushPromise_HM   (GlobalStreamId, GlobalStreamId, Headers, Effect)
+    |PushPromise_HM   (GlobalStreamId, GlobalStreamId, HqHeaders, Effect)
     -- Send a reset stream notification for the stream given below
     -- --|ResetStream_HM   (GlobalStreamId, Effect)
     -- Send a GoAway, where last-stream is the stream given below.
@@ -223,7 +224,7 @@ type CoherentSession = AwareWorker -> SessionMaker
 data PostInputMechanism = PostInputMechanism (Chan (Maybe B.ByteString), InputDataStream)
 
 ------------- Regarding client state
-type Message = (Headers,InputDataStream)
+type Message = (HqHeaders, InputDataStream)
 
 type RequestResult = Either ConnectionCloseReason Message
 
@@ -261,12 +262,12 @@ makeClientState = do
         }
 
 
-handleRequest' :: ClientState -> Headers -> InputDataStream -> IO (Headers,InputDataStream)
+handleRequest' :: ClientState -> HqHeaders -> InputDataStream -> IO (HqHeaders,InputDataStream)
 handleRequest' client_state headers input_data = runReaderT (handleRequest headers input_data) client_state
 
 type ClientMonad = ReaderT ClientState IO
 
-handleRequest :: Headers -> InputDataStream -> ClientMonad Message
+handleRequest :: HqHeaders -> InputDataStream -> ClientMonad Message
 handleRequest headers input_data = do
     pending_requests <- view pendingRequests_ClS
     response_mvar <- liftIO $ newEmptyMVar
@@ -1174,7 +1175,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                     -- Otherwise other invariants will break!!
                     -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
                     let
-                        headers_editor = He.fromList header_list
+                        (headers_editor, _parse_error_list)  =  parseFromTupleList header_list
 
                     maybe_good_headers_editor <- validateIncomingHeadersServer headers_editor
 
@@ -1202,7 +1203,7 @@ doOpenStream :: WorkerThreadEnvironment
                 -> TimeSpec
                 -> GlobalStreamId
                 -> TT.InputFrame
-                -> He.HeaderEditor
+                -> HqHeaders
                 -> ReaderT SessionData IO ()
 doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers = do
     stream_state_table        <- view streamStateTable
@@ -1216,8 +1217,8 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
     --headers_extra_good      <- addExtraHeaders good_headers
     let
         headers_extra_good = good_headers
-        header_list_after = He.toList headers_extra_good
-        maybe_path = lookup ":path" header_list_after
+        header_list_after = headers_extra_good
+        maybe_path =  header_list_after ^. path_Hi
 
     -- Label the stream as soon as possible
     liftIO $ relabelStream stream_state_table stream_id maybe_path
@@ -1381,7 +1382,7 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAbou
         -- Otherwise other invariants will break!!
         -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
         let
-            headers_editor = He.fromList header_list
+            (headers_editor, _headers_parse_errors) =  parseFromTupleList  header_list
 
         maybe_good_headers_editor <- validateIncomingHeadersClient headers_editor
 
@@ -1402,7 +1403,7 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAbou
             return $ return ()
 
         (Just response_mvar) <- liftIO $ H.lookup response2waiter stream_id
-        liftIO $ putMVar response_mvar $ Right (He.toList good_headers, post_data_source)
+        liftIO $ putMVar response_mvar $ Right (good_headers, post_data_source)
 
         return ()
     else
@@ -1444,7 +1445,7 @@ sendOutPriorityTrainMany many = do
 
 
 -- TODO: Close connection on unexepcted pseudo-headers
-validateIncomingHeadersServer :: He.HeaderEditor -> ReaderT SessionData IO (Maybe He.HeaderEditor)
+validateIncomingHeadersServer :: HqHeaders  -> ReaderT SessionData IO (Maybe HqHeaders)
 validateIncomingHeadersServer headers_editor = do
     -- Check that the headers block comes with all mandatory headers.
     -- Right now I'm not checking that they come in the mandatory order though...
@@ -1454,12 +1455,12 @@ validateIncomingHeadersServer headers_editor = do
     let
         h1 = He.replaceHostByAuthority headers_editor
         -- Check that headers are lowercase
-        headers_are_lowercase = He.headersAreLowercaseAtHeaderEditor headers_editor
+        headers_are_lowercase = He.headersAreLowercase $ headers_editor ^. serialized_HqH
         -- Check that we have mandatory headers
-        maybe_authority = h1 ^. (He.headerLens ":authority")
-        maybe_method    = h1 ^. (He.headerLens ":method")
-        maybe_scheme    = h1 ^. (He.headerLens ":scheme")
-        maybe_path      = h1 ^. (He.headerLens ":path")
+        maybe_authority = h1 ^. authority_Hi
+        maybe_method    = h1 ^. method_Hi
+        maybe_scheme    = h1 ^. scheme_Hi
+        maybe_path      = h1 ^. path_Hi
 
     if
         (isJust maybe_authority) &&
@@ -1473,7 +1474,7 @@ validateIncomingHeadersServer headers_editor = do
             return Nothing
 
 
-validateIncomingHeadersClient :: He.HeaderEditor -> ReaderT SessionData IO (Maybe He.HeaderEditor)
+validateIncomingHeadersClient :: HqHeaders -> ReaderT SessionData IO (Maybe HqHeaders)
 validateIncomingHeadersClient headers_editor = do
     -- Check that the headers block comes with all mandatory headers.
     -- Right now I'm not checking that they come in the mandatory order though...
@@ -1483,9 +1484,9 @@ validateIncomingHeadersClient headers_editor = do
     let
         h1 = He.replaceHostByAuthority headers_editor
         -- Check that headers are lowercase
-        headers_are_lowercase = He.headersAreLowercaseAtHeaderEditor headers_editor
+        headers_are_lowercase = He.headersAreLowercase $ headers_editor ^. serialized_HqH
         -- Check that we have mandatory headers
-        maybe_status = h1 ^. (He.headerLens ":status")
+        maybe_status = h1 ^. status_Hi
 
     if (isJust maybe_status) && headers_are_lowercase
         then
@@ -1680,14 +1681,13 @@ isStreamCancelled stream_id = do
 sendPrimitive500Error :: IO TupledPrincipalStream
 sendPrimitive500Error =
   return (
-        [
-            (":status", "500")
-        ],
+        set status_Hi (Just 500) emptyHqHeaders
+        ,
         [],
         do
             yield "Internal server error\n"
             -- No footers
-            return []
+            return emptyHqHeaders
     )
 
 
@@ -1857,7 +1857,7 @@ normallyHandleStream principal_stream = do
 
 -- Takes care of pushed data, which  is sent through pipes to
 -- the output thread here in this session.
-pusherThread :: GlobalStreamId -> Headers -> DataAndConclusion -> Effect  -> WorkerMonad ()
+pusherThread :: GlobalStreamId -> HqHeaders -> DataAndConclusion -> Effect  -> WorkerMonad ()
 pusherThread child_stream_id response_headers pushed_data_and_conclusion effects =
   do
     headers_output <- view headersOutput_WTE
@@ -1991,7 +1991,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
 
             -- encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
             data_to_send  <- liftIO . withMVar encode_dyn_table_mvar $ \ encode_dyn_table ->
-                HP.encodeHeader HP.defaultEncodeStrategy 8192 encode_dyn_table headers
+                HP.encodeHeader HP.defaultEncodeStrategy 8192 encode_dyn_table (headers ^. serialized_HqH)
 
             -- Now split the bytestring in chunks of the needed size....
             -- Note that the only way we can
@@ -2016,7 +2016,11 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             -- encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
 
             data_to_send  <- liftIO . withMVar encode_dyn_table_mvar $ \ encode_dyn_table ->
-                HP.encodeHeader HP.defaultEncodeStrategy 8192 encode_dyn_table promise_headers
+                HP.encodeHeader
+                    HP.defaultEncodeStrategy
+                    8192
+                    encode_dyn_table
+                    (promise_headers ^. serialized_HqH)
 
             -- Now split the bytestring in chunks of the needed size....
             bs_chunks <- return $! bytestringChunk use_chunk_length data_to_send
