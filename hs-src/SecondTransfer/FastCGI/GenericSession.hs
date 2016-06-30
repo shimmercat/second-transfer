@@ -42,6 +42,8 @@ import qualified Data.Conduit.List                                         as CL
 import qualified Data.Conduit.Attoparsec                                   as DCA
 import           System.FilePath                                           ( (</>) )
 
+import           SimpleHttpHeadersHq
+
 import           SecondTransfer.IOCallbacks.Types
 
 -- The Http1 variation is as useful for this case, as we are not using the
@@ -55,13 +57,11 @@ import           SecondTransfer.Http1.Parse                               (
                                                                           ,unwrapChunks
                                                                           )
 
-import qualified SecondTransfer.Utils.HTTPHeaders                          as He
+--import qualified SecondTransfer.Utils.HTTPHeaders                          as He
 import           SecondTransfer.Exception                                  (resourceForkIOExc)
-import           SecondTransfer.MainLoop.CoherentWorker                    (Headers,
-                                                                           HeaderName,
-                                                                           --HeaderValue,
-                                                                           AwareWorkerStack,
-                                                                           Header)
+import           SecondTransfer.MainLoop.CoherentWorker                    (
+                                                                           AwareWorkerStack
+                                                                           )
 import           SecondTransfer.FastCGI.Records
 
 
@@ -95,7 +95,7 @@ ioProxyToConnection session_seed  request =
         request_id = session_seed ^. requestId_GeS
         ioc = session_seed ^. ioc_GeS
         h3 = request ^. headers_Rq
-        method = fromMaybe "GET" $ He.fetchHeader h3 ":method"
+        method = fromMaybe Get_HtM $  h3 ^. method_Hi
 
     -- For the time being, we are not going to set a PATH_INFO.
     sendHeadersToApplication session_seed h3
@@ -103,7 +103,7 @@ ioProxyToConnection session_seed  request =
     --
     http_response <- processOutputAndStdErr
         request_id
-        method
+        (LB.toStrict . Bu.toLazyByteString $ toHeaderValue method)
         (request ^. body_Rq )
         ioc
 
@@ -111,7 +111,7 @@ ioProxyToConnection session_seed  request =
 
 
 sendHeadersToApplication ::
-  SessionSeed -> Headers -> AwareWorkerStack ()
+  SessionSeed -> HqHeaders -> AwareWorkerStack ()
 sendHeadersToApplication session_seed http_headers =
   do
     let
@@ -305,9 +305,9 @@ processOutputAndStdErr request_id method client_input ioc =
             }
 
 
+type Header' = (B.ByteString, B.ByteString)
 
-
-shortCircuit :: HeaderName -> HeaderName   -> (Header -> Header) -> (Header -> Header )
+shortCircuit :: B.ByteString -> B.ByteString   -> (Header' -> Header') -> (Header' -> Header' )
 shortCircuit from_name to_name f =
   let
     transform' h@(hn, hv) | hn == from_name  =  (to_name, hv)
@@ -315,7 +315,7 @@ shortCircuit from_name to_name f =
   in transform'
 
 
-notThis :: HeaderName -> (Header -> Bool) -> (Header -> Bool)
+notThis :: B.ByteString -> (Header' -> Bool) -> (Header' -> Bool)
 notThis forbid_name f =
   let
     test h@(hn, _hv) | hn == forbid_name = False
@@ -323,7 +323,7 @@ notThis forbid_name f =
   in test
 
 
-capitalize :: Header -> Header
+capitalize :: Header' -> Header'
 capitalize o@(hn, hv) =
   let
     maybe_low =  Ch8.unpack $ hn
@@ -338,14 +338,15 @@ capitalize o@(hn, hv) =
 
 -- | We really need some value for the document root so that we can reason with
 --   things like PHP.
-requestHeadersToCGI :: Maybe B.ByteString -> He.Headers -> He.Headers
-requestHeadersToCGI maybe_document_root headers_http =
+requestHeadersToCGI :: Maybe B.ByteString -> HqHeaders -> [Header']
+requestHeadersToCGI maybe_document_root headers =
   let
-    t1 :: Header -> Header
+    headers_http = headers ^. serialized_HqH
+    t1 :: Header' -> Header'
     t1 =  over _1 (Ch8.pack . map toLower . Ch8.unpack)
     h0 = map t1 headers_http
     --
-    basic_transformer_0 :: Header -> Header
+    basic_transformer_0 :: Header' -> Header'
     basic_transformer_0 =
         shortCircuit ":authority" "HTTP_HOST" .
         shortCircuit ":method" "REQUEST_METHOD" .
