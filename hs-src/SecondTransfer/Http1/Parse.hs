@@ -13,6 +13,7 @@ module SecondTransfer.Http1.Parse(
     ,headerListToHTTP1ResponseText
     ,serializeHTTPResponse
     ,methodHasRequestBody
+    ,methodHasRequestBody'
     ,methodHasResponseBody
     ,chunkParser
     ,transferEncodingIsChunked
@@ -729,6 +730,15 @@ methodHasRequestBody mth | mth == "GET"     =  False
                          | mth == "DELETE"  =  False
                          | mth == "TRACE"   =  False
                          | otherwise        =  False
+
+
+methodHasRequestBody' :: HttpMethod -> Bool
+methodHasRequestBody' mth = case  mth of
+    Get_HtM     ->  False
+    Post_HtM    ->  True
+    Head_HtM    ->  False
+    Options_HtM ->  False
+    Put_HtM     ->  True
 
 
 -- These are most likely wrong TODO: fix

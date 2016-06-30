@@ -53,7 +53,7 @@ import           SecondTransfer.Http1.Proxy                               (
                                                                            processHttp11OutputFromPipe
                                                                           )
 import           SecondTransfer.Http1.Parse                               (
-                                                                           methodHasRequestBody
+                                                                           methodHasRequestBody'
                                                                           ,unwrapChunks
                                                                           )
 
@@ -103,7 +103,7 @@ ioProxyToConnection session_seed  request =
     --
     http_response <- processOutputAndStdErr
         request_id
-        (LB.toStrict . Bu.toLazyByteString $ toHeaderValue method)
+        method
         (request ^. body_Rq )
         ioc
 
@@ -222,7 +222,7 @@ framesSource bepa =
 
 processOutputAndStdErr ::
     Int ->
-    B.ByteString ->
+    HttpMethod ->
     Source AwareWorkerStack B.ByteString ->
     IOCallbacks ->
         AwareWorkerStack (HttpResponse AwareWorkerStack)
@@ -231,9 +231,10 @@ processOutputAndStdErr request_id method client_input ioc =
     let
         push = ioc ^. pushAction_IOC
         bepa = (ioc ^. bestEffortPullAction_IOC) True
+        method_str = LB.toStrict . Bu.toLazyByteString . toHeaderValue $ method
 
     -- Send the input
-    if methodHasRequestBody method
+    if methodHasRequestBody' method
       then do
         _ <- resourceForkIOExc "fastCGIOutputThread" $
             (
@@ -261,7 +262,7 @@ processOutputAndStdErr request_id method client_input ioc =
     (resumable_source, (headers, do_with_body)) <-
         framesSource  bepa
         $$+
-        processHttp11OutputFromPipe method
+        processHttp11OutputFromPipe method_str
 
     (source, finalizer) <-  unwrapResumable resumable_source
 
