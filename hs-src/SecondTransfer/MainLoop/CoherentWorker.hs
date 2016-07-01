@@ -8,6 +8,8 @@
 
 module SecondTransfer.MainLoop.CoherentWorker(
       nullFooter
+    , peelFooter
+
     , HqHeaders
     , FinalizationHeaders
     , Request(..)
@@ -319,17 +321,13 @@ coherentToAwareWorker :: CoherentWorker -> AwareWorker
 coherentToAwareWorker w r =
     fmap tupledPrincipalStreamToPrincipalStream $ w . requestToTupledRequest $ r
 
+
 -- | If you want to skip the footers, i.e., they are empty, use this
 --   function to convert an ordinary Source to a DataAndConclusion.
-nullFooter :: Source AwareWorkerStack B.ByteString -> DataAndConclusion
-nullFooter s = s =$= go
-  where
-    go = do
-        i <- await
-        case i of
-            Nothing ->
-                return emptyHqHeaders
+nullFooter :: InputDataStream -> DataAndConclusion
+nullFooter s =
+    const emptyHqHeaders <$> s
 
-            Just ii -> do
-                yield ii
-                go
+
+peelFooter :: DataAndConclusion -> InputDataStream
+peelFooter s = const () <$> s
