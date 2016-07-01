@@ -76,7 +76,7 @@ headersAreLowercase headers =
 
 
 aTitleIsLowercase :: B.ByteString -> Bool
-aTitleIsLowercase a_title = B8.any isUpper  $ a_title
+aTitleIsLowercase a_title = not $ B8.any isUpper $ a_title
 
 
 -- | Transforms a header value so that characters outside the valid ascii range
