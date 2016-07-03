@@ -17,6 +17,9 @@ module SecondTransfer.FastCGI.Records (
               , type_RH
               , payload_RH
               , requestId_RH
+
+              , EndRequest_Rec
+              , readEndRequest
     ) where
 
 
@@ -74,6 +77,35 @@ data BeginRequest_Rec = BeginRequest_Rec {
     _applicationClosesConnection_BR :: Bool
     }
     deriving Show
+
+data EndRequest_Rec = EndRequest_Rec {
+    _appStatus_ER                    :: Int
+  , _protocolStatus_ER               :: Word8
+    }
+    deriving Show
+
+
+readEndRequest :: ATO.Parser EndRequest_Rec
+readEndRequest =
+  do
+    app_status <- do
+        aw8 <- ATO.anyWord8
+        b2 <- fromIntegral <$> ATO.anyWord8
+        b1 <- fromIntegral <$> ATO.anyWord8
+        b0 <- fromIntegral <$> ATO.anyWord8
+        return
+            $ (fromIntegral aw8) `shiftL` 24 +
+              b2 `shiftL` 16 +
+              b1 `shiftL` 8 +
+              b0
+    protocol_status <- ATO.anyWord8
+    _r0 <- ATO.anyWord8
+    _r1 <- ATO.anyWord8
+    _r2 <- ATO.anyWord8
+    return EndRequest_Rec {
+       _appStatus_ER = app_status,
+       _protocolStatus_ER = protocol_status
+       }
 
 
 putBeginRequest :: BeginRequest_Rec -> Put

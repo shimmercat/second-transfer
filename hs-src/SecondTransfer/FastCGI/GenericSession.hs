@@ -40,6 +40,7 @@ import           Data.Char                                                 (toLo
 import           Data.Conduit
 import qualified Data.Conduit.List                                         as CL
 import qualified Data.Conduit.Attoparsec                                   as DCA
+import qualified Data.Attoparsec.ByteString                                as ATO
 import           System.FilePath                                           ( (</>) )
 
 import           SimpleHttpHeadersHq
@@ -188,23 +189,40 @@ framesSource bepa =
                     Stderr_RT -> do
                         -- TODO: Properly propagate to the server logs.
                         -- See #26
-                        -- liftIO $
-                        --     putStrLn $
-                        --         "ErrorData FastCGI: " ++ show (frame ^. payload_RH)
+                        liftIO $
+                             putStrLn $
+                                 "ErrorData FastCGI: " ++ show (frame ^. payload_RH)
                         frames_interpreter
                     Stdout_RT -> do
                         let
                             payload = frame ^. payload_RH
                         if B.length payload > 0
                           then do
+                            --liftIO $ putStrLn $ "Frame received " ++ show payload
                             yield payload
                             frames_interpreter
                           else do
+                            --liftIO $ putStrLn $ "Empty payload signals end"
                             return ()
                     EndRequest_RT -> do
+                        -- ATTENTION: THE CODE BELOW IS GOOD!, it is just
+                        -- that we need to create an EXCEPTION TYPE HERE
+                        -- to raise when there are errors in the backend.
+                        --liftIO $ putStrLn $ "EndREquest_RT received"
+                        -- let
+                        --     payload = frame ^. payload_RH
+                        --     either_parsed_end = ATO.parseOnly
+                        --        readEndRequest
+                        --        payload
+                        -- liftIO $ case either_parsed_end of
+                        --     Left msg ->
+                        --          putStrLn $ "EndRequestNotParsedCorrectly " ++ msg
+                        --     Right packet ->
+                        --          putStrLn $  "Parsed end request: " ++ show packet
                         return ()
                     _fr -> do
                         -- Discard frames I can't undestand.
+                        liftIO $ putStrLn $ "Frame doesn't make sense"
                         frames_interpreter
 
                 Nothing -> do
@@ -357,10 +375,10 @@ requestHeadersToCGI maybe_document_root headers =
         shortCircuit "content-type"       "CONTENT_TYPE" .
         -- From here on, we need some help to get these expressed.
         -- TODO:  Create a function that translates the perception to enhanced
-        -- headers ....
+        -- headers ....(Meaning that these headers are still not there)
         shortCircuit "sc-remote-addr"     "REMOTE_ADDR" .
         shortCircuit "sc-remote-host"     "REMOTE_HOST" .
-        shortCircuit "sc-remote-protocol" "REMOTE_PROTOCOL" .
+        shortCircuit "sc-remote-protocol" "SERVER_PROTOCOL" .
         shortCircuit "sc-push-enabled"    "REMOTE_PUSH_ENABLED" .
         shortCircuit "sc-server-name"     "SERVER_NAME" $
         id
@@ -412,6 +430,7 @@ requestHeadersToCGI maybe_document_root headers =
                       ) $
                       ("REQUEST_URI",  path)           :
                       ("SCRIPT_NAME", fcgi_uri)        :
+                      ("SERVER_PROTOCOL", "HTTP/1.1")  :   -- A big fat lie, but god knows why Wordpress is querying this variable
                       ("SCRIPT_FILENAME", script_filename) :
                       ("HTTPS", "on")                  :   -- TODO: Fix this
                       ("DOCUMENT_ROOT", document_root) : h2
