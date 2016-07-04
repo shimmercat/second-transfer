@@ -392,6 +392,7 @@ requestHeadersToCGI maybe_document_root headers =
         notThis "host"          .
         notThis "path_info"     .   -- for security
         notThis "path"          .
+        notThis "request-uri"   .
         notThis "document_root" .
         notThis "script_name"   $
         const True
@@ -440,6 +441,7 @@ requestHeadersToCGI maybe_document_root headers =
                       ("SERVER_PROTOCOL", "HTTP/1.1")  :   -- A big fat lie, but god knows why Wordpress is querying this variable
                       ("SCRIPT_FILENAME", script_filename) :
                       ("HTTPS", "on")                  :   -- TODO: Fix this
+                      ("PATH_INFO", "")                :
                       ("DOCUMENT_ROOT", document_root) : h2
 
         Nothing -> ( if B.length fcgi_query > 0
@@ -448,6 +450,7 @@ requestHeadersToCGI maybe_document_root headers =
                       ) $
                       ("REQUEST_URI",  request_uri)    :
                       ("SCRIPT_NAME", fcgi_uri)        :
+                      ("PATH_INFO", "")                :
                       ("HTTPS", "on")                  : h2
 
   in h3
