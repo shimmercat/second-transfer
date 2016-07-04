@@ -400,10 +400,17 @@ requestHeadersToCGI maybe_document_root headers =
     h2 = h100 `seq` map capitalize h10
 
     -- We need a path
-    path = case lookup ":path" headers_http of
-        Nothing -> "/"  -- Actually invalid, but this is too late to be raising
-                        -- exceptions
-        Just p -> p
+    path =
+        case lookup ":path" headers_http of
+            Nothing -> "/"  -- Actually invalid, but this is too late to be raising
+                            -- exceptions
+            Just p -> p
+
+    -- And a request uri
+    request_uri =
+        case lookup "request-uri" headers_http of
+            Nothing -> path
+            Just p -> p
 
     (fcgi_uri, fcgi_query) = Ch8.span (/= '?') path
     no_start =
@@ -428,7 +435,7 @@ requestHeadersToCGI maybe_document_root headers =
                            then ( ("QUERY_STRING", B.drop 1 fcgi_query) : )
                            else id
                       ) $
-                      ("REQUEST_URI",  path)           :
+                      ("REQUEST_URI",  request_uri)    :
                       ("SCRIPT_NAME", fcgi_uri)        :
                       ("SERVER_PROTOCOL", "HTTP/1.1")  :   -- A big fat lie, but god knows why Wordpress is querying this variable
                       ("SCRIPT_FILENAME", script_filename) :
@@ -439,7 +446,7 @@ requestHeadersToCGI maybe_document_root headers =
                            then ( ("QUERY_STRING", B.drop 1 fcgi_query) : )
                            else id
                       ) $
-                      ("REQUEST_URI",  path)           :
+                      ("REQUEST_URI",  request_uri)    :
                       ("SCRIPT_NAME", fcgi_uri)        :
                       ("HTTPS", "on")                  : h2
 
