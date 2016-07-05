@@ -425,8 +425,8 @@ requestHeadersToCGI maybe_document_root headers =
              else
                fcgi_uri
 
+    -- Below: only used conditionally
     Just document_root = maybe_document_root
-
     script_filename = Ch8.pack $  Ch8.unpack document_root </> Ch8.unpack  no_start
      -- Now let's drop some interesting bits, like the :path
 
@@ -449,6 +449,7 @@ requestHeadersToCGI maybe_document_root headers =
                            else id
                       ) $
                       ("REQUEST_URI",  request_uri)    :
+                      ("SERVER_PROTOCOL", "HTTP/1.1")  :
                       ("SCRIPT_NAME", fcgi_uri)        :
                       ("PATH_INFO", "")                :
                       ("HTTPS", "on")                  : h2
