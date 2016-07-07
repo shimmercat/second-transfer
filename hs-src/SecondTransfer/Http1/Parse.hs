@@ -642,8 +642,16 @@ headerListToHTTP1ResponseText headers =
 -- NOTICE that this function doesn't add the \r\n extra-token for the empty
 -- line at the end of headers.
 headerListToHTTP1RequestText :: HqHeaders -> Bu.Builder
-headerListToHTTP1RequestText  = expressAsHTTP1RequestHeaderBlock
-
+headerListToHTTP1RequestText  headers =
+    expressAsHTTP1RequestHeaderBlock headers'
+  where
+    host_header = case headers ^. authority_Hi of
+        Nothing ->  headers ^. host_Hi
+        a@(Just some_auth) -> a
+    headers' =
+        (set host_Hi  host_header) .
+        (set authority_Hi Nothing) $
+        headers
 
 
 -- -- | Converts a list of headers to a request head.
