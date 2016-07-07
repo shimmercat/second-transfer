@@ -35,6 +35,8 @@ import qualified Control.Lens                           as L
 import           Control.Applicative
 --import           Control.DeepSeq                        (deepseq)
 
+import           GHC.Stack
+
 import           Numeric                                as Nm
 
 import qualified Data.ByteString                        as B
@@ -191,7 +193,7 @@ looksSuspicious bs  =
 
 
 -- This function takes care of retrieving headers....
-elaborateHeaders :: Bu.Builder -> [Int] -> Int -> Http1ParserCompletion
+elaborateHeaders :: HasCallStack => Bu.Builder -> [Int] -> Int -> Http1ParserCompletion
 elaborateHeaders full_text crlf_positions last_headers_position =
   let
     -- Start by getting a full byte-string representation of the headers,
@@ -335,7 +337,7 @@ elaborateHeaders full_text crlf_positions last_headers_position =
         RequestIsMalformed_H1PC "InvalidFirstLineOnRequest"
 
 
-splitByColon :: B.ByteString -> (B.ByteString, B.ByteString)
+splitByColon :: HasCallStack => B.ByteString -> (B.ByteString, B.ByteString)
 splitByColon  = L.over L._2 (B.tail) . Ch8.break (== ':')
 
 
@@ -640,29 +642,38 @@ headerListToHTTP1ResponseText headers =
 -- NOTICE that this function doesn't add the \r\n extra-token for the empty
 -- line at the end of headers.
 headerListToHTTP1RequestText :: HqHeaders -> Bu.Builder
-headerListToHTTP1RequestText headers =
-    go1 Nothing Nothing mempty (headers ^. serialized_HqH)
-  where
-    go1 mb_method mb_local_uri assembled_body [] =
-        (fromMaybe "GET" mb_method) `mappend` " " `mappend` (fromMaybe "*" mb_local_uri) `mappend` " " `mappend` "HTTP/1.1" `mappend` "\r\n"
-          `mappend` assembled_body
+headerListToHTTP1RequestText  = expressAsHTTP1RequestHeaderBlock
 
-    go1 _           mb_local_uri assembled_body ((hn,hv): rest)
-      | hn == ":method" =
-          go1 (Just . Bu.byteString . validMethod $ hv) mb_local_uri assembled_body rest
 
-    go1 mb_method   _mb_local_uri    assembled_body ((hn,hv): rest)
-      | hn == ":path"   =
-          go1 mb_method  (Just . Bu.byteString . cleanupAbsoluteUri $ hv) assembled_body rest
 
-    -- Authority pseudo-header becomes a host header.
-    go1 mb_method   _mb_local_uri    assembled_body ((hn,hv): rest)
-      | hn == ":authority"   =
-          go1 mb_method  (Just . Bu.byteString . cleanupAbsoluteUri $ hv) (assembled_body `mappend` "host" `mappend` ":" `mappend` (Bu.byteString hv) `mappend` "\r\n") rest
+-- -- | Converts a list of headers to a request head.
+-- -- Invoke with the request data. Don't forget to clean the headers first.
+-- -- NOTICE that this function doesn't add the \r\n extra-token for the empty
+-- -- line at the end of headers.
+-- headerListToHTTP1RequestText :: HqHeaders -> Bu.Builder
+-- headerListToHTTP1RequestText headers =
+--     go1 Nothing Nothing mempty (headers ^. serialized_HqH)
+--   where
+--     go1 mb_method mb_local_uri assembled_body [] =
+--         (fromMaybe "GET" mb_method) `mappend` " " `mappend` (fromMaybe "*" mb_local_uri) `mappend` " " `mappend` "HTTP/1.1" `mappend` "\r\n"
+--           `mappend` assembled_body
 
-    go1 mb_method mb_local_uri assembled_body ((hn,hv):rest)   -- Ignore any strange pseudo-headers
-      | He.headerIsPseudo hn = go1 mb_method mb_local_uri assembled_body rest
-      | otherwise = go1 mb_method mb_local_uri (assembled_body `mappend` (Bu.byteString hn) `mappend` ":" `mappend` (Bu.byteString hv) `mappend` "\r\n") rest
+--     go1 _           mb_local_uri assembled_body ((hn,hv): rest)
+--       | hn == ":method" =
+--           go1 (Just . Bu.byteString . validMethod $ hv) mb_local_uri assembled_body rest
+
+--     go1 mb_method   _mb_local_uri    assembled_body ((hn,hv): rest)
+--       | hn == ":path"   =
+--           go1 mb_method  (Just . Bu.byteString . cleanupAbsoluteUri $ hv) assembled_body rest
+
+--     -- Authority pseudo-header becomes a host header.
+--     go1 mb_method   _mb_local_uri    assembled_body ((hn,hv): rest)
+--       | hn == ":authority"   =
+--           go1 mb_method  (Just . Bu.byteString . cleanupAbsoluteUri $ hv) (assembled_body `mappend` "host" `mappend` ":" `mappend` (Bu.byteString hv) `mappend` "\r\n") rest
+
+--     go1 mb_method mb_local_uri assembled_body ((hn,hv):rest)   -- Ignore any strange pseudo-headers
+--       | He.headerIsPseudo hn = go1 mb_method mb_local_uri assembled_body rest
+--       | otherwise = go1 mb_method mb_local_uri (assembled_body `mappend` (Bu.byteString hn) `mappend` ":" `mappend` (Bu.byteString hv) `mappend` "\r\n") rest
 
 
 -- | Function used for testing....
@@ -763,7 +774,7 @@ responseStatusHasResponseBody code
   | otherwise                       = True
 
 
-cleanupAbsoluteUri :: B.ByteString -> B.ByteString
+cleanupAbsoluteUri :: HasCallStack => B.ByteString -> B.ByteString
 -- Just trigger a 404 with an informative message (perhaps)
 cleanupAbsoluteUri u
   | B.length u == 0
