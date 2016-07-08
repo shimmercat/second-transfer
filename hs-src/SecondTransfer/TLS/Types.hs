@@ -21,7 +21,7 @@ module SecondTransfer.TLS.Types (
 
                , defaultConnectionCallbacks
 
-               , TLSSessionStorage                                        (..)
+               , TLSSessionStorage                                          (..)
        ) where
 
 
