@@ -111,7 +111,7 @@ public:
 
     // These I can not implement in the server
     virtual bool load_from_server_info(const B::Server_Information &, B::Session &) {
-            return false;
+        return false;
     }
 
     virtual bool load_from_session_id(const std::vector<byte> &session_id, B::Session &session)
@@ -215,6 +215,7 @@ struct buffers_t{
 
     ~buffers_t(){
         delete channel;
+        channel = 0;
     }
 };
 
@@ -319,7 +320,7 @@ bool handshake_cb(buffers_t* buffers, const Botan::TLS::Session&)
         buffers -> chosen_protocol = HTTP11_CHP;
     }
     //printf("Handshake completed\n");
-    return false;
+    return true;
 }
 
 // TODO: We can use stronger ciphers here. For now let's go simple
@@ -479,6 +480,7 @@ public:
     ~HereCredentialsManager()
     {
         delete privkey;
+        privkey = 0;
     }
 };
 
@@ -807,6 +809,7 @@ extern "C" DLL_PUBLIC  void iocba_delete_tls_context(botan_tls_context_t* ctx)
     if ( ctx -> session_manager )
     {
         delete ctx -> session_manager;
+        ctx -> session_manager = (Session_Manager*) 1; // For clarity when debugging double-frees
     }
     delete ctx;
 }
@@ -816,7 +819,7 @@ extern "C" DLL_PUBLIC buffers_t* iocba_new_tls_server_channel (
        botan_tls_context_t* ctx)
 {
     //printf("New tls server channel\n");
-    //pthread_mutex_lock(&new_channel_mutex);
+    pthread_mutex_lock(&new_channel_mutex);
     buffers_t* buffers = new buffers_t(ctx->protocol_strategy);
     auto* server =
         new Botan::TLS::Server(
@@ -850,8 +853,7 @@ extern "C" DLL_PUBLIC buffers_t* iocba_new_tls_server_channel (
                 std::placeholders::_1)
         );
     buffers->channel = server;
-    
-    //pthread_mutex_unlock(&new_channel_mutex);
+    pthread_mutex_unlock(&new_channel_mutex);
     return buffers;
 }
 

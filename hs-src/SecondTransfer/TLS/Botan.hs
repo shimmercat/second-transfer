@@ -306,7 +306,7 @@ unencryptChannelData botan_ctx tls_data  = do
         tls_pull_data_action = tls_io_callbacks ^. bestEffortPullAction_IOC
 
         destructor =
-            -- withMVar dontMultiThreadBotan . const $
+            --withMVar dontMultiThreadBotan . const $
                iocba_delete_tls_server_channel
 
     -- botan_pad_stable_ref <- newStablePtr new_botan_pad

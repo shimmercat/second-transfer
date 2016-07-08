@@ -49,7 +49,7 @@ import           Data.List                                                 (elem
 import           Data.Maybe                                                (-- fromMaybe,
                                                                             isJust)
 import qualified Data.ByteString                                           as B
-import           Data.ByteString.Char8                                     (pack, unpack)
+--import           Data.ByteString.Char8                                     (pack, unpack)
 import           Data.Int                                                  (Int64)
 -- import           Data.IORef
 
@@ -92,6 +92,9 @@ makeLenses ''SessionHandlerState
 -- | A simple Alias
 type NamedAttendants = [(String, Attendant)]
 
+data NoStore
+
+instance TLSSessionStorage NoStore
 
 -- | Convenience function to open a port and listen there for connections and
 --   select protocols and so on.
@@ -116,6 +119,7 @@ tlsServeWithALPN proxy  conn_callbacks cert_filename key_filename interface_name
         key_filename
         listen_socket
         (tlsServe closing)
+        (Nothing :: Maybe NoStore)
         attendants
   where
     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
@@ -143,6 +147,7 @@ tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock
         key_filename
         listen_socket
         (tlsServe closing)
+        (Nothing :: Maybe NoStore)
         attendants
   where
     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
@@ -155,16 +160,25 @@ data NormalTCPHold   = NormalTCPHold ( IO () )
 -- | The prefork way requires a first step where we create the sockets and then we listen on them...
 --   This function is identical otherwise to the one without _Prepare. The real thing is done by the
 --   one with _Do below...
-tlsServeWithALPNNSSockAddr_Prepare ::   forall ctx session . (TLSContext ctx session)
+tlsServeWithALPNNSSockAddr_Prepare ::   forall ctx session resumption_store . (TLSContext ctx session, TLSSessionStorage resumption_store)
                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
                                           --   of TLS backend to use during the invocation
                  -> ConnectionCallbacks   -- ^ Control and regulate SOCKS5 connections
                  -> B.ByteString              -- ^ String with contents of certificate chain
                  -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
+                 -> Maybe resumption_store
                  -> IO NamedAttendants    -- ^ Will-be list of attendants and their handlers
                  -> IO NormalTCPHold
-tlsServeWithALPNNSSockAddr_Prepare proxy conn_callbacks  cert_filename key_filename sock_addr make_attendants = do
+tlsServeWithALPNNSSockAddr_Prepare
+                proxy
+                conn_callbacks
+                cert_filename
+                key_filename
+                sock_addr
+                maybe_resumption_store
+                make_attendants
+  = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
     return . NormalTCPHold $ do
         attendants <- make_attendants
@@ -175,6 +189,7 @@ tlsServeWithALPNNSSockAddr_Prepare proxy conn_callbacks  cert_filename key_filen
             key_filename
             listen_socket
             (tlsServe closing)
+            maybe_resumption_store
             attendants
   where
     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
@@ -225,6 +240,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr
        key_filename
        listen_socket
        (tlsSOCKS5Serve' socks5_state_mvar socks5_callbacks approver forward_no_internal)
+       (Nothing :: Maybe NoStore)
        attendants
 
 
@@ -268,6 +284,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
             key_pemfile_data
             listen_socket
             (tlsSOCKS5Serve' socks5_state_mvar socks5_callbacks approver forward_no_internal)
+            (Nothing :: Maybe NoStore)
             attendants
 
 
@@ -365,17 +382,29 @@ chooseProtocol _ = Http11_HPV
 
 
 coreListen ::
-       forall a ctx session b . (TLSContext ctx session, TLSServerIO b, HasSocketPeer b)
-     => (Proxy ctx )                      -- ^ This is a simple proxy type from Typeable that is used to select the type
-                                          --   of TLS backend to use during the invocation
-     -> ConnectionCallbacks               -- ^ Functions to log and control behaviour of the server
-     -> B.ByteString                      -- ^ PEM-encoded certificate chain, in this string
-     -> B.ByteString                      -- ^ PEM-encoded, un-encrypted PKCS #8 key in this string
-     -> a                                 -- ^ An entity that is used to fork new handlers
-     -> ( a -> (Either AcceptErrorCondition b -> IO()) -> IO () )    -- ^ The fork-handling functionality
-     -> [(String, Attendant)]             -- ^ List of attendants and their handlers
-     -> IO ()
-coreListen _ conn_callbacks certificate_pemfile_data key_pemfile_data listen_abstraction session_forker attendants =   do
+           forall a ctx session b resumption_store .
+           (TLSContext ctx session, TLSServerIO b, HasSocketPeer b, TLSSessionStorage resumption_store)
+         => (Proxy ctx )                      -- ^ This is a simple proxy type from Typeable that is used to select the type
+                                              --   of TLS backend to use during the invocation
+         -> ConnectionCallbacks               -- ^ Functions to log and control behaviour of the server
+         -> B.ByteString                      -- ^ PEM-encoded certificate chain, in this string
+         -> B.ByteString                      -- ^ PEM-encoded, un-encrypted PKCS #8 key in this string
+         -> a                                 -- ^ An entity that is used to fork new handlers
+         -> ( a -> (Either AcceptErrorCondition b -> IO()) -> IO () )    -- ^ The fork-handling functionality
+         -> Maybe resumption_store
+         -> [(String, Attendant)]             -- ^ List of attendants and their handlers
+         -> IO ()
+coreListen
+         _
+         conn_callbacks
+         certificate_pemfile_data
+         key_pemfile_data
+         listen_abstraction
+         session_forker
+         resumption_store
+         attendants
+
+  =   do
      let
          state = SessionHandlerState {
              _liveSessions_S = 0
@@ -388,6 +417,9 @@ coreListen _ conn_callbacks certificate_pemfile_data key_pemfile_data listen_abs
              certificate_pemfile_data
              key_pemfile_data
              (chooseProtocol attendants) :: IO ctx
+     _session_resumption_enabled <- case resumption_store of
+         Just really_there     -> enableSessionResumption ctx really_there
+         Nothing -> return False
      let
          tls_session_handler :: forall w .
              (TLSServerIO w, HasSocketPeer w) =>
