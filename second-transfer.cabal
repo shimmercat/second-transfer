@@ -132,6 +132,8 @@ library
                   , SecondTransfer.Socks5.Serializers
                   , SecondTransfer.Socks5.Parsers
 
+                  , SecondTransfer.TLS.SessionStorage
+
                   , SecondTransfer.FastCGI.Records
 
                   , SecondTransfer.Http2.MakeAttendant

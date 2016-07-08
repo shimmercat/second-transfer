@@ -20,6 +20,8 @@ module SecondTransfer.TLS.Types (
                , serviceIsClosing_CoCa
 
                , defaultConnectionCallbacks
+
+               , TLSSessionStorage                                        (..)
        ) where
 
 
@@ -39,6 +41,8 @@ import           SecondTransfer.IOCallbacks.Types                          (
                                                                            )
 
 import          SecondTransfer.IOCallbacks.WrapSocket
+
+import          SecondTransfer.TLS.SessionStorage
 
 -- | Singleton type. Used in conjunction with an `MVar`. If the MVar is full,
 --   the fuction `tlsServeWithALPNAndFinishOnRequest` knows that it should finish
@@ -62,10 +66,12 @@ class IOChannels session => TLSContext ctx session | ctx -> session, session -> 
     newTLSContextFromCertFileNames :: B.ByteString -> B.ByteString -> HttpProtocolVersion -> IO ctx -- ^ newTLSContextFromMemory cert_filename key_filename protocol_selector
     -- ^ Same as before, but using filename instead of certificates loaded into memory.
     unencryptTLSServerIO :: forall cipherio . TLSServerIO cipherio => ctx -> cipherio -> IO session
-
     -- ^ Returns the protocoll finally selected for a session.
     getSelectedProtocol :: session -> IO HttpProtocolVersion
-
+    -- ^ Some TLS implementations can use session resumption. This returns true if the
+    --   enabling is successfull
+    enableSessionResumption :: forall a . TLSSessionStorage a =>  ctx -> a -> IO Bool
+    enableSessionResumption _ _ = return False
 
 -- | Connection events
 data ConnectionEvent =

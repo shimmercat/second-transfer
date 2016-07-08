@@ -66,6 +66,104 @@ enum chosen_protocol_t{
     HTTP2_CHP = 2
 };
 
+namespace B=Botan::TLS;
+namespace C=Botan;
+
+typedef C::byte byte;
+
+typedef  void (*save_fptr) (char*, int32_t, char*, int32_t);
+typedef  void (*remove_entry_fptr) (char*, int32_t);
+typedef  void (*load_fptr) (char*, int32_t, char**, int32_t*);
+typedef  int32_t (*session_lifetime_fptr) ();
+typedef  void (*encryption_key_fptr)(char**, int32_t*);
+
+// For managing TLS session resumption, function pointers
+class resumption_callbacks_t : public B::Session_Manager {
+    save_fptr save_p;
+    remove_entry_fptr remove_entry_p;
+    load_fptr load_p;
+    session_lifetime_fptr session_lifetime_p;
+    encryption_key_fptr encryption_key_p;
+    C::SymmetricKey key;
+    C::RandomNumberGenerator* rng;
+public:
+    resumption_callbacks_t(
+        C::RandomNumberGenerator* rng,
+        save_fptr save_p,
+        remove_entry_fptr remove_entry_p,
+        load_fptr load_p,
+        session_lifetime_fptr session_lifetime_p,
+        encryption_key_fptr encryption_key_p
+                           ):
+        rng                 (rng),
+        save_p              (save_p),
+        remove_entry_p      (remove_entry_p),
+        load_p              (load_p),
+        session_lifetime_p  (session_lifetime_p),
+        encryption_key_p    (encryption_key_p)
+    {
+        char* enc_key=0;
+        int32_t enc_key_length;
+        encryption_key_p(&enc_key, &enc_key_length);
+        key = C::SymmetricKey((byte*) enc_key, enc_key_length);
+        free(enc_key);
+    }
+
+    // These I can not implement in the server
+    virtual bool load_from_server_info(const B::Server_Information &, B::Session &) {
+            return false;
+    }
+
+    virtual bool load_from_session_id(const std::vector<byte> &session_id, B::Session &session)
+    {
+        char* stored_value = 0;
+        int32_t stored_value_length = 0;
+        load_p((char*) &(session_id[0]), session_id.size(), &stored_value, &stored_value_length);
+        if ( stored_value_length > 0)
+        {
+            // Got something ... check for exceptions?
+            session = B::Session::decrypt(
+               (byte*) stored_value,
+               stored_value_length,
+               key );
+            free(stored_value);
+            return true;
+        }
+        return false;
+    }
+
+    virtual size_t remove_all()
+    {
+        return 1;
+    }
+
+    virtual void remove_entry(const std::vector<byte> & session_id)
+    {
+        remove_entry_p( (char*) &session_id[0], session_id.size() );
+    }
+
+    virtual void save(const B::Session & session)
+    {
+        std::vector<byte> encrypted_value =
+            session.encrypt(key, *rng);
+        const std::vector<byte>& session_id = session.session_id();
+        save_p(
+            (char*) &(session_id[0]),
+            session_id.size(),
+            (char*) &(encrypted_value[0]),
+            encrypted_value.size()
+        );
+    }
+
+    virtual std::chrono::seconds session_lifetime() const
+    {
+        return std::chrono::seconds( session_lifetime_p() );
+    }
+
+    virtual ~resumption_callbacks_t() {
+    }
+};
+
 
 struct buffers_t{
     char* enc_cursor;
@@ -148,11 +246,11 @@ void output_dn_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
     //iocba_push(botan_pad_ref, (char*)a, sz);
     if ( ( buffers->enc_cursor + sz) > buffers -> enc_end )
     {
-        printf("output_dn_cb enc_cursor %p enc_end %p requested extr size %l \n", 
-               buffers->enc_cursor, 
-               buffers->enc_end,
-               sz
-               );
+        // printf("output_dn_cb enc_cursor %p enc_end %p requested extr size %l \n",
+        //        buffers->enc_cursor,
+        //        buffers->enc_end,
+        //        sz
+        //        );
         throw buffer_override_exception_t(
                buffer_override_exception_t::GEN_CIPHER
                );
@@ -212,7 +310,7 @@ bool handshake_cb(buffers_t* buffers, const Botan::TLS::Session&)
 {
     //iocba_handshake_cb(botan_pad_ref);
     //printf("botan: HandshakeCompleted\n");
-    // TODO: Implement cache management
+    // TODO: Implement session cache management
     buffers -> handshake_completed = true;
 
     // Pick a protocol if none is available yet
@@ -474,7 +572,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
         printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
         return -1;
     }
-    
+
     *enc_to_send_length = (uint32_t) (
         buffers -> enc_cursor 
         - out_enc_to_send );
@@ -490,7 +588,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     {
         return - buffers -> which_alert;
     }
-                
+
     //printf("Clearing cursors and returning\n");
     return 0;
 }
@@ -570,7 +668,7 @@ extern "C" DLL_PUBLIC void iocba_close(
     buffers -> clr_end    = 0;
     try{
         channel->close();
-    } 
+    }
     catch (buffer_override_exception_t const& e)
     {
         printf("Buffer override!!\n");
@@ -606,7 +704,7 @@ extern "C" DLL_PUBLIC void iocba_close(
 
 struct botan_tls_context_t {
     second_transfer::HereCredentialsManager credentials_manager;
-    Botan::TLS::Session_Manager_In_Memory* session_manager;
+    Botan::TLS::Session_Manager* session_manager;
     Botan::AutoSeeded_RNG* rng;
     std::vector<std::string> protocols;
     second_transfer::HereTLSPolicy here_tls_policty;
@@ -677,10 +775,39 @@ extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context_from_memory(
 }
 
 
+extern "C" DLL_PUBLIC void iocba_enable_sessions(
+    botan_tls_context_t* ctx,
+    save_fptr save_p,
+    remove_entry_fptr remove_entry_p,
+    load_fptr load_p,
+    session_lifetime_fptr session_lifetime_p,
+    encryption_key_fptr encryption_key_p
+    )
+{
+    resumption_callbacks_t* rsclbk =
+        new resumption_callbacks_t(
+            ctx -> rng,
+            save_p,
+            remove_entry_p,
+            load_p,
+            session_lifetime_p,
+            encryption_key_p
+        );
+    if ( ctx -> session_manager != nullptr )
+    {
+        delete ctx -> session_manager;
+    }
+    ctx -> session_manager = rsclbk;
+}
+
+
 extern "C" DLL_PUBLIC  void iocba_delete_tls_context(botan_tls_context_t* ctx)
 {
-    delete ctx->session_manager;
     delete ctx->rng;
+    if ( ctx -> session_manager )
+    {
+        delete ctx -> session_manager;
+    }
     delete ctx;
 }
 

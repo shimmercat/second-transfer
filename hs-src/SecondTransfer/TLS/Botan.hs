@@ -42,6 +42,7 @@ import           SecondTransfer.Exception                                  (
                                                                            , forkIOExc
                                                                            )
 import           SecondTransfer.TLS.Types                                  (  TLSContext (..) )
+import           SecondTransfer.TLS.SessionStorage
 
 #include "instruments.cpphs"
 
@@ -111,6 +112,24 @@ foreign import ccall iocba_make_tls_context :: CString -> CString -> Int32 -> IO
 foreign import ccall iocba_make_tls_context_from_memory :: CString -> CUInt -> CString -> CUInt -> Int32 -> IO BotanTLSContextCSidePtr
 
 foreign import ccall "&iocba_delete_tls_server_channel" iocba_delete_tls_server_channel :: FunPtr( BotanTLSChannelPtr -> IO () )
+
+-- extern "C" DLL_PUBLIC void iocba_enable_sessions(
+--     botan_tls_context_t* ctx,
+--     save_fptr save_p,
+--     remove_entry_fptr remove_entry_p,
+--     load_fptr load_p,
+--     session_lifetime_fptr session_lifetime_p,
+--     encryption_key_fptr encryption_key_p
+--     )
+
+foreign import ccall "iocba_enable_sessions" iocba_enable_sessions ::
+    BotanTLSContextCSidePtr ->
+    FunPtr Save_Pre ->
+    FunPtr RemoveEntry_Pre ->
+    FunPtr Load_Pre ->
+    FunPtr SessionLifetime_Pre ->
+    FunPtr EncryptionKey_Pre ->
+    IO ()
 
 foreign import ccall unsafe "iocba_maybe_get_protocol" iocba_maybe_get_protocol ::
     BotanTLSChannelPtr ->
@@ -533,10 +552,21 @@ instance TLSContext BotanTLSContext BotanSession where
     unencryptTLSServerIO = unencryptChannelData
     getSelectedProtocol (BotanSession pad_ioref) = do
         botan_pad <- readIORef pad_ioref
-        -- putStrLn "Asked for protocol"
         a <- readMVar (botan_pad ^. selectedProtocol_BP)
-        -- putStrLn $ "got protocol: " ++ show a
         return a
+
+    enableSessionResumption (BotanTLSContext cpp_side) session_storage = do
+        storage_crecord <- instanceToStorageCRecord session_storage
+        withForeignPtr cpp_side $ \ c ->
+            iocba_enable_sessions
+                c
+                (storage_crecord ^. pSave_Pre)
+                (storage_crecord ^. pRemoveEntry_Pre)
+                (storage_crecord ^. pLoad_Pre)
+                (storage_crecord ^. pSessionLifetime_Pre)
+                (storage_crecord ^. pEncryptionKey_Pre)
+        return True
+
 
 
 botanTLS :: Proxy BotanTLSContext
