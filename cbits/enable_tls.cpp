@@ -178,8 +178,8 @@ struct buffers_t{
 
     // And a pointer to the engine.
     Botan::TLS::Channel* channel;
-    // Has the handshake completed?
-    bool handshake_completed;
+    // Have all the handshakes been completed?
+    bool ready_for_output;
     // Has an alert been produced?
     bool alert_produced;
     // Which alert?
@@ -195,13 +195,20 @@ struct buffers_t{
         clr_cursor(0),
         clr_end(0),
         alert_produced(false),
-        handshake_completed(false),
+        ready_for_output(false),
         chosen_protocol(NOCHOSENYET_CHP),
         channel(0),
         strategy(strategy),
         peer_closed_transport(false),
         which_alert(0)
     {
+    }
+
+    void check_readiness() {
+        if (not ready_for_output && not (channel->is_closed()) && channel->is_active())
+        {
+            ready_for_output = true;
+        }
     }
 
     void clear_cursors()
@@ -247,24 +254,15 @@ void output_dn_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
     //iocba_push(botan_pad_ref, (char*)a, sz);
     if ( ( buffers->enc_cursor + sz) > buffers -> enc_end )
     {
-        // printf("output_dn_cb enc_cursor %p enc_end %p requested extr size %l \n",
-        //        buffers->enc_cursor,
-        //        buffers->enc_end,
-        //        sz
-        //        );
+
         throw buffer_override_exception_t(
                buffer_override_exception_t::GEN_CIPHER
                );
     }
 
-    // DEBUG
-    //for(int j = 0; j < sz; j++)
-        //printf("%02X ", a[j]);
-    //printf("\n");
-    // END DEBUG
-
     memcpy(buffers->enc_cursor, (const char*) a, sz);
     buffers->enc_cursor += sz;
+    buffers->check_readiness();
 }
 
 // Invoked by botan to provide clear text
@@ -287,6 +285,7 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     buffers->which_alert = (int)alert.type();
     if ( alert.type() == Botan::TLS::Alert::CLOSE_NOTIFY)
     {
+        // std::cout << "PeerASKED to close TLS transport" << std::endl;
         buffers -> peer_closed_transport = true;
     }
     else if (alert.is_valid() && alert.is_fatal() )
@@ -307,19 +306,15 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     }
 }
 
-bool handshake_cb(buffers_t* buffers, const Botan::TLS::Session&)
+bool handshake_cb(buffers_t* buffers, const Botan::TLS::Session& session)
 {
-    //iocba_handshake_cb(botan_pad_ref);
-    //printf("botan: HandshakeCompleted\n");
-    // TODO: Implement session cache management
-    buffers -> handshake_completed = true;
-
     // Pick a protocol if none is available yet
     if ( buffers -> chosen_protocol == NOCHOSENYET_CHP )
     {
         buffers -> chosen_protocol = HTTP11_CHP;
     }
-    //printf("Handshake completed\n");
+
+    buffers->check_readiness();
     return true;
 }
 
@@ -548,8 +543,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     try {
         size_t more_data_required =
             channel->received_data( (const unsigned char*) in_data, in_length);
-        //printf("More data required %d \n", more_data_required);
-        //printf("After taking data=%p \n", channel);
+        buffers->check_readiness();
     }
     catch (buffer_override_exception_t const& e)
     {
@@ -602,7 +596,8 @@ extern "C" DLL_PUBLIC int32_t iocba_maybe_get_protocol(buffers_t* buffer)
 
 extern "C" DLL_PUBLIC int32_t iocba_handshake_completed(buffers_t* buffer)
 {
-    return (int32_t) buffer->handshake_completed;
+    buffer->check_readiness();
+    return (int32_t) buffer->ready_for_output;
 }
 
 extern "C" DLL_PUBLIC int32_t iocba_peer_closed_transport(buffers_t* buffer)
@@ -809,7 +804,7 @@ extern "C" DLL_PUBLIC  void iocba_delete_tls_context(botan_tls_context_t* ctx)
     if ( ctx -> session_manager )
     {
         delete ctx -> session_manager;
-        ctx -> session_manager = (Session_Manager*) 1; // For clarity when debugging double-frees
+        ctx -> session_manager = (B::Session_Manager*) 1; // For clarity when debugging double-frees
     }
     delete ctx;
 }
