@@ -23,3 +23,5 @@ tests/suite1/t1_accept_exceptions
 tests/suite1/t2_tls_leaks
 
 libenable_tls.dylib
+cbits_build
+/.sconsign.dblite

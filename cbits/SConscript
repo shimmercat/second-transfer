@@ -1,0 +1,26 @@
+
+Import('env', 'install_prefix', 'includes_prefix')
+
+env1 = env.Clone()
+env1.Append(CXXFLAGS=['-maes',  '-m64', '-mpclmul', '-msse4.1', '-mavx', '-mavx2'])
+env1.Append(CPPPATH='#')
+
+sl = env1.SharedLibrary('botan', 
+    ['botan_all.cpp', 'botan_all_aesni.cpp', 
+     'botan_all_rdseed.cpp', 'botan_all_rdrand.cpp',
+     'botan_all_ssse3.cpp', 'botan_all_avx2.cpp'
+     ],
+    LINKFLAGS='-pthread'
+    )
+env1.Install(install_prefix, sl)
+
+env2 = env.Clone()
+env2.Append(CPPPATH=['#'], CPPDEFINES=['INCLUDE_BOTAN_ALL_H'])
+sl = env2.SharedLibrary('enable_tls',
+    ['enable_tls.cpp'],
+    LIBS=['botan'],
+    LIBPATH=install_prefix
+    )
+
+env2.Install(install_prefix, sl)
+

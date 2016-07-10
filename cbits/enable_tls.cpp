@@ -1,11 +1,11 @@
 
-#ifdef INCLUDE_BOTAN_ALL_H
-#include "botan_all.h"
-#else
-
 #include <string>
 #include <iostream>
 #include <sstream>
+
+#ifdef INCLUDE_BOTAN_ALL_H
+#include "botan_all.h"
+#else
 
 #include <botan/botan.h>
 #include <botan/tls_session.h>
@@ -21,7 +21,7 @@
 #include <botan/data_src.h>
 #endif
 
- #include "HsFFI.h"
+// #include "HsFFI.h"
 
 #include <functional>
 
@@ -709,12 +709,17 @@ struct botan_tls_context_t {
 };
 
 
+// Oh Gods, forgive me
+pthread_mutex_t new_ctx_mutex = PTHREAD_MUTEX_INITIALIZER ;
+pthread_mutex_t new_channel_mutex = PTHREAD_MUTEX_INITIALIZER ;
+
 extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context(
     const char* cert_filename,
     const char* privkey_filename,
     int32_t prt_strt
     )
 {
+    pthread_mutex_lock(&new_ctx_mutex);
     Botan::AutoSeeded_RNG* rng=new Botan::AutoSeeded_RNG();
     std::vector< std::string > protocols;
 
@@ -730,12 +735,9 @@ extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context(
         second_transfer::HereTLSPolicy(),
         (protocol_strategy_enum_t) prt_strt
     };
+    pthread_mutex_unlock(&new_ctx_mutex);
 }
 
-
-// Oh Gods, forgive me
-pthread_mutex_t new_ctx_mutex = PTHREAD_MUTEX_INITIALIZER ;
-pthread_mutex_t new_channel_mutex = PTHREAD_MUTEX_INITIALIZER ;
 
 extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context_from_memory(
     const uint8_t* cert_data,
@@ -801,6 +803,7 @@ extern "C" DLL_PUBLIC void iocba_enable_sessions(
 extern "C" DLL_PUBLIC  void iocba_delete_tls_context(botan_tls_context_t* ctx)
 {
     delete ctx->rng;
+    ctx -> rng = 0;
     if ( ctx -> session_manager )
     {
         delete ctx -> session_manager;
