@@ -184,6 +184,8 @@ struct buffers_t{
     bool alert_produced;
     // Which alert?
     int which_alert;
+    // Is the alert faltal?
+    int alert_is_fatal;
     // Did the peer closed the transport?
     bool peer_closed_transport;
 
@@ -195,6 +197,7 @@ struct buffers_t{
         clr_cursor(0),
         clr_end(0),
         alert_produced(false),
+        alert_is_fatal(0),
         ready_for_output(false),
         chosen_protocol(NOCHOSENYET_CHP),
         channel(0),
@@ -299,6 +302,7 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
             std::cout << "TLS Layer issue: " ;
             std::cout << alert.type_string() << std::endl;
         }
+        buffers->alert_is_fatal = true;
         printf("TLS alert is fatal!!\n");
     } else {
         std::cout << alert.type_string() << std::endl;
@@ -582,10 +586,14 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     buffers-> clear_cursors();
     if ( buffers -> alert_produced )
     {
-        return - buffers -> which_alert;
+        if ( buffers -> alert_is_fatal || buffers -> peer_closed_transport)
+        {
+            // If I don't get this message we are in trouble...
+            printf("Alert assimilated as part of decryption call\n");
+            return -1;
+        }
     }
 
-    //printf("Clearing cursors and returning\n");
     return 0;
 }
 
@@ -612,6 +620,11 @@ extern "C" DLL_PUBLIC int32_t iocba_alert_produced(buffers_t* buffer)
         return (buffer -> which_alert);
     } else
         return 0;
+}
+
+extern "C" DLL_PUBLIC int32_t iocba_alert_is_fatal(buffers_t* buffer)
+{
+    return buffer->alert_is_fatal;
 }
 
 // Called with cleartext data we want to encrypt and send back... 
@@ -657,6 +670,7 @@ extern "C" DLL_PUBLIC void iocba_close(
     uint32_t *enc_to_send_length
     )
 {
+    printf("Close called on buffer_t* %p\n", buffers);
     Botan::TLS::Channel* channel = buffers->channel;
     buffers -> enc_cursor = out_enc_to_send;
     buffers -> enc_end    = out_enc_to_send + *enc_to_send_length;

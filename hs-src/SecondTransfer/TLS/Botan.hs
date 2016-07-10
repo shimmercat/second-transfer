@@ -18,7 +18,7 @@ import           Foreign.C.String                                          (CStr
 --import           Data.List                                                 (elemIndex)
 -- import           Data.Tuple                                                (swap)
 import           Data.Typeable                                             (Proxy(..))
-import           Data.Maybe                                                (fromMaybe)
+--import           Data.Maybe                                                (fromMaybe)
 import           Data.IORef
 import qualified Data.ByteString                                           as B
 import qualified Data.ByteString.Builder                                   as Bu
@@ -38,7 +38,7 @@ import           SecondTransfer.Exception                                  (
                                                                              IOProblem
                                                                            , NoMoreDataException(..)
                                                                            , TLSEncodingIssue (..)
-                                                                           , keyedReportExceptions
+                                                                           --, keyedReportExceptions
                                                                            , forkIOExc
                                                                            )
 import           SecondTransfer.TLS.Types                                  (  TLSContext (..) )
@@ -61,6 +61,7 @@ data BotanPad = BotanPad {
   , _dataCame_BP           :: MVar ()
   , _handshakeCompleted_BP :: MVar ()
   , _writeLock_BP          :: MVar ()
+  -- | active_BP : Protects Botan of multiple close attempts
   , _active_BP             :: MVar ()
   , _selectedProtocol_BP   :: MVar HttpProtocolVersion
   , _problem_BP            :: MVar ()
@@ -157,7 +158,12 @@ foreign import ccall unsafe "iocba_alert_produced" iocba_alert_produced ::
     BotanTLSChannelPtr ->
     IO Int32
 
+foreign import ccall unsafe "iocba_alert_is_fatal" iocba_alert_is_fatal ::
+    BotanTLSChannelPtr ->
+    IO Int32
 
+
+-- | Called with cleartext data we want to encode and send to the peer.
 botanPushData :: BotanPad -> LB.ByteString -> IO ()
 botanPushData botan_pad datum = do
     let
@@ -274,6 +280,7 @@ newBotanTLSContextFromMemory cert_data key_data prefer_protocol =
               return $ BotanTLSContext x
 
 
+-- | Creates a flow of encrypted data from the peer to Botan
 unencryptChannelData :: TLSServerIO a =>  BotanTLSContext -> a -> IO  BotanSession
 unencryptChannelData botan_ctx tls_data  = do
     let
@@ -336,11 +343,13 @@ unencryptChannelData botan_ctx tls_data  = do
                 pump_exc_handler
             case maybe_new_data of
                 Just new_data
+                  -- new_data is encrypted data we want to process
                   | len_new_data <- LB.length new_data, len_new_data > 0 -> do
                     can_continue <- withMVar write_lock_mvar $ \_ -> do
                         maybe_problem <- tryReadMVar problem_mvar
                         case maybe_problem of
                             Nothing -> do
+                                -- OK, we can go, no problems detected
                                 maybe_cont_data <- do
                                   let
 
@@ -352,7 +361,7 @@ unencryptChannelData botan_ctx tls_data  = do
                                     enc_reserve_length :: Int
                                     enc_reserve_length = floor $
                                       ((fromIntegral len_new_data * 1.2) :: Double) +
-                                      fromIntegral (reserve_extra serie)
+                                      fromIntegral (reserve_extra serie :: Int)
 
                                   allocaBytes cleartext_reserve_length $ \ p_clr_space ->
                                     allocaBytes enc_reserve_length $ \ p_enc_to_send ->
@@ -362,7 +371,10 @@ unencryptChannelData botan_ctx tls_data  = do
                                                     fromIntegral enc_reserve_length
                                                 poke p_clr_length $
                                                     fromIntegral cleartext_reserve_length
+                                                -- So we are taking the just received data and making it
+                                                -- available through a pointer.
                                                 Un.unsafeUseAsCStringLen (LB.toStrict new_data) $ \ (enc_pch, enc_len) ->
+                                                    -- No concurrent calls to Botan, the damn library don't like those
                                                     withMVar dontMultiThreadBotan . const $ do
                                                         engine_result <- iocba_receive_data
                                                             tls_channel_ptr
@@ -379,6 +391,9 @@ unencryptChannelData botan_ctx tls_data  = do
                                                             _ <- tryPutMVar problem_mvar ()
                                                             -- Just awake any variables
                                                             _ <- tryPutMVar data_came_mvar ()
+                                                            _ <- tryPutMVar
+                                                                selected_protocol_mvar
+                                                                (E.throw $ TLSEncodingIssue)
                                                             return Nothing
                                                           else do
                                                             enc_to_send_length <- peek p_enc_to_send_length
@@ -457,52 +472,66 @@ unencryptChannelData botan_ctx tls_data  = do
 
 closeBotan :: BotanPad -> IO ()
 closeBotan botan_pad =
-  do
-    tls_channel_fptr <- readIORef (botan_pad ^. tlsChannel_BP)
-    withForeignPtr tls_channel_fptr $ \ tls_channel_ptr -> do
-        maybe_gotit <- tryTakeMVar (botan_pad ^. active_BP)
-        case maybe_gotit of
-            Just _ -> do
-                -- Let's forbid libbotan for sending more output
-                _ <- tryPutMVar (botan_pad ^. problem_BP) ()
-                -- Cleanly close tls, if nobody else is writing there
-                last_msg <- allocaBytes 1024  $ \ p_enc_to_send -> do
-                  alloca $ \ p_enc_to_send_length ->
-                            withMVar (botan_pad ^. writeLock_BP) $ \ _ -> do
-                                poke p_enc_to_send_length 1023
-                                withMVar dontMultiThreadBotan . const $
-                                    iocba_close
-                                        tls_channel_ptr
-                                        p_enc_to_send
-                                        p_enc_to_send_length
-                                bytes_avail <- peek p_enc_to_send_length
-                                last_message <- B.packCStringLen (p_enc_to_send, fromIntegral bytes_avail)
-                                _ <- tryPutMVar (botan_pad ^. problem_BP) ()
-                                _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
-                                return last_message
+    do
+      tls_channel_fptr <- readIORef (botan_pad ^. tlsChannel_BP)
+      withForeignPtr tls_channel_fptr $ \ tls_channel_ptr -> do
+          maybe_gotit <- tryTakeMVar (botan_pad ^. active_BP)
+          case maybe_gotit of
+              Just _ -> do
+                  -- Let's forbid libbotan for sending more output
+                  _ <- tryPutMVar (botan_pad ^. problem_BP) ()
 
-                -- Send the last message, if possible at all... otherwise just ignore the
-                -- exception
-                either_sent <- E.try $ do
-                    (botan_pad ^. encryptedSide_BP . pushAction_IOC) (LB.fromStrict last_msg)
+                  alert_is_fatal <- iocba_alert_is_fatal tls_channel_ptr
+                  either_sent <- if alert_is_fatal == 0 then
+                      -- Cleanly close tls, if nobody else is writing there
+                      nice_close tls_channel_ptr
+                    else
+                      -- No need to be nice if there was a fatal alert
+                      return $ Right ()
 
-                -- Close the cypher-text transport
-                either_sent2 <- E.try $ (botan_pad ^. encryptedSide_BP . closeAction_IOC)
+                  -- Close the cypher-text transport
+                  either_sent2 <- E.try $ (botan_pad ^. encryptedSide_BP . closeAction_IOC)
 
-                -- Ignore any exceptions that happen when closing the transport, they are all
-                -- too usual when the peer closes first and such...
-                case either_sent :: Either IOProblem () of
-                    Left  _ -> return ()
-                    Right _ -> return ()
+                  -- Ignore any exceptions that happen when closing the transport, they are all
+                  -- too usual when the peer closes first and such...
+                  case either_sent :: Either IOProblem () of
+                      Left  _ -> return ()
+                      Right _ -> return ()
 
-                case either_sent2 :: Either IOProblem () of
-                    Left  _ -> return ()
-                    Right _ -> return ()
+                  case either_sent2 :: Either IOProblem () of
+                      Left  _ -> return ()
+                      Right _ -> return ()
 
+                  -- Somebody may be waiting for a protocol selected report,
+                  -- dissapoint them duly.
+                  _ <- tryPutMVar (botan_pad ^. selectedProtocol_BP) (E.throw $ TLSEncodingIssue)
+                  return ()
 
-            Nothing ->
-                -- Thing already closed, don't do it again
-                return ()
+              Nothing ->
+                  -- Thing already closed, don't do it again
+                  return ()
+  where
+
+    nice_close tls_channel_ptr = do
+        last_msg <- allocaBytes 1024  $ \ p_enc_to_send -> do
+            alloca $ \ p_enc_to_send_length ->
+                      withMVar (botan_pad ^. writeLock_BP) $ \ _ -> do
+                          poke p_enc_to_send_length 1023
+                          withMVar dontMultiThreadBotan . const $
+                              iocba_close
+                                  tls_channel_ptr
+                                  p_enc_to_send
+                                  p_enc_to_send_length
+                          bytes_avail <- peek p_enc_to_send_length
+                          last_message <- B.packCStringLen (p_enc_to_send, fromIntegral bytes_avail)
+                          _ <- tryPutMVar (botan_pad ^. problem_BP) ()
+                          _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
+                          return last_message
+
+      -- Send the last message, if possible at all... otherwise just ignore the
+      -- exception
+        E.try $ do
+            (botan_pad ^. encryptedSide_BP . pushAction_IOC) (LB.fromStrict last_msg)
 
 
 instance IOChannels BotanSession where
@@ -553,7 +582,8 @@ instance TLSContext BotanTLSContext BotanSession where
     getSelectedProtocol (BotanSession pad_ioref) = do
         botan_pad <- readIORef pad_ioref
         a <- readMVar (botan_pad ^. selectedProtocol_BP)
-        return a
+        -- Force any botled exceptions to spring
+        E.evaluate a
 
     enableSessionResumption (BotanTLSContext cpp_side) session_storage = do
         storage_crecord <- instanceToStorageCRecord session_storage

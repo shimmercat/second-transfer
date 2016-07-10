@@ -37,6 +37,7 @@ module SecondTransfer.TLS.CoreServer (
        ) where
 
 import           Control.Concurrent
+import qualified Control.Exception                                         as E
 --import           Control.Monad.IO.Class                                    (liftIO)
 --import           Control.Monad                                             (when)
 import           Control.Lens                                              ( (^.), makeLenses, over, set )
@@ -73,7 +74,7 @@ import           SecondTransfer.Socks5.Session                             (
                                                                            tlsSOCKS5Serve',
                                                                            initSocks5ServerState)
 import           SecondTransfer.Socks5.Types                               (Socks5ConnectionCallbacks)
-import           SecondTransfer.Exception                                  (forkIOExc)
+import           SecondTransfer.Exception                                  (forkIOExc, IOProblem)
 
 import           SecondTransfer.Sessions.HashableSockAddr                  (hashableSockAddrFromNSSockAddr)
 
@@ -303,7 +304,8 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
     -- Have the handshake happen in another thread
     _ <- forkIOExc "tlsSessionHandler" $ do
 
-      -- Get a new connection id
+      -- Get a new connection id... this is a pretty safe block, exceptions should
+      -- be uncommon here.
       (new_conn_id, live_now) <- modifyMVar session_handler_state_mvar $ \ s -> do
           let new_conn_id = s ^. nextConnId_S
               live_now_ = (s ^. liveSessions_S) + 1
@@ -320,58 +322,86 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io = do
               Nothing -> return ()
               Just c -> c ev
           wconn_id = ConnectionId new_conn_id
-      sock_addr <- getSocketPeerAddress encrypted_io
-      let
-          hashable_addr = hashableSockAddrFromNSSockAddr sock_addr
-          connection_data = ConnectionData
-              {
-                 _addr_CnD = hashable_addr
-               , _connId_CnD = wconn_id
-              }
-      log_event (Established_CoEv sock_addr wconn_id live_now)
-      session <- unencryptTLSServerIO ctx encrypted_io
 
-      plaintext_io_callbacks_u' <- handshake session :: IO IOCallbacks
+          report_minus_one_connection = do
+              log_event (Ended_CoEv wconn_id)
+              modifyMVar_ session_handler_state_mvar $ \ s -> do
+                  let
+                      live_now_ = (s ^. liveSessions_S) - 1
+                      new_new_s = set liveSessions_S live_now_ s
+                  new_new_s `seq` return new_new_s
 
-      -- Modulate the IO callbacks if that has been instructed.
-      plaintext_io_callbacks_u <- case (connection_callbacks ^. blanketPlainTextIO_CoCa) of
-          Nothing -> return plaintext_io_callbacks_u'
-          Just u -> u connection_data plaintext_io_callbacks_u'
+      -- If the connection has been closed, we will get some sort of exception here.
+      either_sock_addr <- E.try $ getSocketPeerAddress encrypted_io
+      case either_sock_addr :: Either E.IOException NS.SockAddr of
+          Left _exc -> do
+              report_minus_one_connection
+              -- Close the connection
+              io_callbacks <- handshake encrypted_io
+              io_callbacks ^. closeAction_IOC
 
+          Right sock_addr -> do
+              let
+                  hashable_addr = hashableSockAddrFromNSSockAddr sock_addr
+                  connection_data = ConnectionData
+                      {
+                         _addr_CnD = hashable_addr
+                       , _connId_CnD = wconn_id
+                      }
+              log_event (Established_CoEv sock_addr wconn_id live_now)
 
-      close_reported <- newMVar False
+              -- Let's decrypt stuff ... This function usually doesn't throw,
+              -- as it mainly does channel setup and very little or none actual
+              -- IO. TODO: But we may need to watch it for problems.
+              session <- {-# SCC u1 #-} unencryptTLSServerIO ctx encrypted_io
 
-      let
-          instr = do
-              modifyMVar_ close_reported $ \ close_reported_x -> do
-                  if (not close_reported_x) then  do
-                      -- We can close just once
-                      plaintext_io_callbacks_u ^. closeAction_IOC
-                      log_event (Ended_CoEv wconn_id)
-                      modifyMVar_ session_handler_state_mvar $ \ s -> do
-                          let
-                              live_now_ = (s ^. liveSessions_S) - 1
-                              new_new_s = set liveSessions_S live_now_ s
-                          new_new_s `seq` return new_new_s
-                      return True
-                    else
-                      return close_reported_x
+              -- The handshake is more about setting up channels and actions, no
+              -- actual TLS handshake is expected to happen here. In fact, this
+              -- action and the unencryptTLSServerIO could be together. The
+              -- reason to have them separated is the ctx argument above.
+              plaintext_io_callbacks_u' <-  {-# SCC u2 #-} handshake session :: IO IOCallbacks
 
-          plaintext_io_callbacks = set closeAction_IOC instr plaintext_io_callbacks_u
+              -- Modulate the IO callbacks if that has been instructed.
+              plaintext_io_callbacks_u <- case (connection_callbacks ^. blanketPlainTextIO_CoCa) of
+                  Nothing -> return plaintext_io_callbacks_u'
+                  Just u -> u connection_data plaintext_io_callbacks_u'
 
-      maybe_sel_prot <- getSelectedProtocol session
-      let maybe_attendant =
-            case maybe_sel_prot of
-                Http11_HPV ->
-                    lookup "http/1.1" attendants
-                Http2_HPV ->
-                    lookup "h2" attendants
-      case maybe_attendant of
-          Just use_attendant ->
-              use_attendant connection_data plaintext_io_callbacks
-          Nothing -> do
-              log_event (ALPNFailed_CoEv wconn_id)
-              plaintext_io_callbacks ^. closeAction_IOC
+              close_reported <- newMVar False
+
+              let
+                  instr = do
+                      modifyMVar_ close_reported $ \ close_reported_x -> do
+                          if (not close_reported_x) then  do
+                              -- We can close just once
+                              plaintext_io_callbacks_u ^. closeAction_IOC
+                              report_minus_one_connection
+                              return True
+                            else
+                              return close_reported_x
+
+                  plaintext_io_callbacks = set closeAction_IOC instr plaintext_io_callbacks_u
+
+              -- Next point where things can go wrong: a handshake may never
+              -- finish, and we may never get the protocol.
+              either_maybe_sel_prot <-  E.try $  getSelectedProtocol session
+              case either_maybe_sel_prot :: Either IOProblem HttpProtocolVersion of
+                  Right maybe_sel_prot ->  do
+                      let maybe_attendant =
+                            case maybe_sel_prot of
+                                Http11_HPV ->
+                                    lookup "http/1.1" attendants
+                                Http2_HPV ->
+                                    lookup "h2" attendants
+                      case maybe_attendant of
+                          Just use_attendant ->
+                               {-# SCC u4 #-} use_attendant connection_data plaintext_io_callbacks
+                          Nothing -> do
+                              log_event (ALPNFailed_CoEv wconn_id)
+                              plaintext_io_callbacks ^. closeAction_IOC
+
+                  Left _exc -> do
+                      plaintext_io_callbacks ^. closeAction_IOC
+                      report_minus_one_connection
     return ()
 
 
