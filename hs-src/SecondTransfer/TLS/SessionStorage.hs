@@ -19,6 +19,7 @@ module SecondTransfer.TLS.SessionStorage (
      , EncryptionKey_Pre
     ) where
 
+-- Deals with session resumption storage
 
 import           Control.Lens
 
