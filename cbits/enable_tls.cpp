@@ -295,18 +295,18 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     {
         if ( alert.type() == Botan::TLS::Alert::DECRYPT_ERROR )
         {
-            std::cout << "TLS Layer issue: Decrypt error. Probable cause: " ;
-            std::cout << "the private key and the certificate don't match." ;
+            //std::cout << "TLS Layer issue: Decrypt error. Probable cause: " ;
+            //std::cout << "the private key and the certificate don't match." ;
         } else
         {
-            std::cout << "TLS Layer issue: " ;
-            std::cout << alert.type_string() << std::endl;
+            //std::cout << "TLS Layer issue: " ;
+            //std::cout << alert.type_string() << std::endl;
         }
         buffers->alert_is_fatal = true;
-        printf("TLS alert is fatal!!\n");
+        //printf("TLS alert is fatal!!\n");
     } else {
         std::cout << alert.type_string() << std::endl;
-        printf("Non-fatal alert!!\n");
+        //printf("Non-fatal alert!!\n");
     }
 }
 
@@ -558,18 +558,18 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     {
         if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
         {
-            printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
+            // printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
             return -1;
         } else
         {
-            printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            // printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
             return -1;
         }
     }
     catch (std::exception const& e)
     {
         // TODO: control messages
-        printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
+        // printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
         return -1;
     }
 
@@ -589,7 +589,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
         if ( buffers -> alert_is_fatal || buffers -> peer_closed_transport)
         {
             // If I don't get this message we are in trouble...
-            printf("Alert assimilated as part of decryption call\n");
+            // printf("Alert assimilated as part of decryption call\n");
             return -1;
         }
     }
@@ -689,22 +689,22 @@ extern "C" DLL_PUBLIC void iocba_close(
     {
         if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
         {
-            printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
+            //printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
             return ;
         } else
         {
-            printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            //printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
             return ;
         }
     }
     catch (std::exception const& e)
     {
         // TODO: control messages
-        printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
+        //printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
         return ;
     }catch (...)
     {
-        printf("BotanTLS engine raised exception on close\n");
+        //printf("BotanTLS engine raised exception on close\n");
     }
     *enc_to_send_length = (uint32_t) (
         buffers -> enc_cursor
