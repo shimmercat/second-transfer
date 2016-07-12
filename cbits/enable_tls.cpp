@@ -295,12 +295,12 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
     {
         if ( alert.type() == Botan::TLS::Alert::DECRYPT_ERROR )
         {
-            //std::cout << "TLS Layer issue: Decrypt error. Probable cause: " ;
-            //std::cout << "the private key and the certificate don't match." ;
+            std::cout << "TLS Layer issue: Decrypt error. Probable cause: " ;
+            std::cout << "the private key and the certificate don't match." ;
         } else
         {
-            //std::cout << "TLS Layer issue: " ;
-            //std::cout << alert.type_string() << std::endl;
+            std::cout << "TLS Layer issue: " ;
+            std::cout << alert.type_string() << std::endl;
         }
         buffers->alert_is_fatal = true;
         //printf("TLS alert is fatal!!\n");
