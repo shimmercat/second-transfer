@@ -670,7 +670,7 @@ extern "C" DLL_PUBLIC void iocba_close(
     uint32_t *enc_to_send_length
     )
 {
-    printf("Close called on buffer_t* %p\n", buffers);
+    // printf("Close called on buffer_t* %p\n", buffers);
     Botan::TLS::Channel* channel = buffers->channel;
     buffers -> enc_cursor = out_enc_to_send;
     buffers -> enc_end    = out_enc_to_send + *enc_to_send_length;
