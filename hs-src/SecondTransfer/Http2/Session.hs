@@ -1180,11 +1180,21 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                     maybe_good_headers_editor <- validateIncomingHeadersServer headers_editor
 
                     case maybe_good_headers_editor of
-                        Just good_headers ->
-                            doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
+                        Right good_headers ->
+                            doOpenStream
+                                for_worker_thread
+                                headers_arrived_time
+                                stream_id
+                                frame
+                                good_headers
 
-                        Nothing -> do
-                            reportSituation $ (PeerErrored_SWC "StreamReceivedWithIncorrectHeaders")
+                        Left _bad_headers -> do
+                            let
+                                repr_bad_headers = show header_list
+                            reportSituation $ (PeerErrored_SWC $
+                                               "StreamReceivedWithIncorrectHeaders: " `mappend`
+                                               repr_bad_headers
+                                              )
                             closeConnectionBecauseIsInvalid NH2.ProtocolError
 
         else
@@ -1445,7 +1455,7 @@ sendOutPriorityTrainMany many = do
 
 
 -- TODO: Close connection on unexepcted pseudo-headers
-validateIncomingHeadersServer :: HqHeaders  -> ReaderT SessionData IO (Maybe HqHeaders)
+validateIncomingHeadersServer :: HqHeaders  -> ReaderT SessionData IO (Either HqHeaders  HqHeaders)
 validateIncomingHeadersServer headers_editor = do
     -- Check that the headers block comes with all mandatory headers.
     -- Right now I'm not checking that they come in the mandatory order though...
@@ -1469,9 +1479,9 @@ validateIncomingHeadersServer headers_editor = do
         (isJust maybe_path ) &&
         headers_are_lowercase
         then
-            return (Just h1)
+            h1 `seq` (return . Right $ h1)
         else
-            return Nothing
+            headers_editor `seq` (return . Left $ headers_editor)
 
 
 validateIncomingHeadersClient :: HqHeaders -> ReaderT SessionData IO (Maybe HqHeaders)
