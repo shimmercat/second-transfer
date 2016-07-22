@@ -184,10 +184,15 @@ botanPushData botan_pad datum = do
         problem_mvar = botan_pad ^. problem_BP
         handshake_completed_mvar = botan_pad ^. handshakeCompleted_BP
 
-    -- We are doing a lot of locking here... is it all needed?
+    -- Wait for handshake_completed_mvar . This variable is set on successfull handshake,
+    -- but also on a failed one....
     readMVar handshake_completed_mvar
     channel <- readIORef channel_ioref
     data_to_send <- withMVar write_lock $ \ _ -> do
+        -- Therefore, the first thing we do when we wake up is to check if there has been
+        -- any problems with the engine. If none, proceed normally. If there has been
+        -- a problem, raise an exception to the call chain, which eventually involves
+        -- the client of this module.
         mp <- tryReadMVar problem_mvar
         case mp of
             Nothing ->
@@ -403,7 +408,7 @@ encryptedToBotan botan_pad   =
             fromIntegral cleartext_reserve_length
         -- So we are taking the just received data and making it
         -- available through a pointer.
-        Un.unsafeUseAsCStringLen (LB.toStrict new_data) $ \ (enc_pch, enc_len) ->
+        Un.unsafeUseAsCStringLen (LB.toStrict new_data) $ \ (enc_pch, enc_len) -> do
             -- No concurrent calls to Botan, the damn library don't like those
             engine_result  <- withMVar dontMultiThreadBotan . const $ do
                 iocba_receive_data
@@ -421,6 +426,7 @@ encryptedToBotan botan_pad   =
                 _ <- tryPutMVar problem_mvar ()
                 -- Just awake any variables
                 _ <- tryPutMVar data_came_mvar ()
+                _ <- tryPutMVar handshake_completed_mvar ()
                 _ <- tryPutMVar
                     selected_protocol_mvar
                     (E.throw $ TLSEncodingIssue)

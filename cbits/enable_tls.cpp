@@ -52,6 +52,15 @@
    #endif
 #endif
 
+
+#ifdef ETLS_INSTRUMENTS
+#define TRACE printf
+#else
+inline int blackhole(const char* fmt, ...)
+{}
+#define TRACE blackhole
+#endif
+
 namespace second_transfer {
 
 
@@ -302,7 +311,7 @@ void data_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
 
 void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigned char a[], size_t sz) 
 {
-     printf("BOTAN WAS TO DELIVER ALERT: %s \n", alert.type_string().c_str());
+     TRACE("BOTAN WAS TO DELIVER ALERT: %s \n", alert.type_string().c_str());
     // TODO: find something better to do here
     buffers->alert_produced = true;
     buffers->which_alert = (int)alert.type();
@@ -323,10 +332,10 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
             std::cout << alert.type_string() << std::endl;
         }
         buffers->alert_is_fatal = true;
-        printf("TLS alert is fatal!!\n");
+        TRACE("TLS alert is fatal!!\n");
     } else {
         std::cout << alert.type_string() << std::endl;
-        printf("Non-fatal alert!!\n");
+        TRACE("Non-fatal alert!!\n");
     }
 }
 
@@ -555,7 +564,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     uint32_t *cleartext_received_length
     )
 {
-    //printf("Entering iocba_receive_data\n");
+    //TRACE("Entering iocba_receive_data\n");
     Botan::TLS::Channel* channel = buffers -> channel;
     //
     buffers -> enc_cursor = out_enc_to_send;
@@ -563,7 +572,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     //
     buffers -> clr_cursor = out_cleartext_received;
     buffers -> clr_end    = out_cleartext_received + *cleartext_received_length;
-    //printf("Botan receives data\n");
+    //TRACE("Botan receives data\n");
     try {
         size_t more_data_required =
             channel->received_data( (const unsigned char*) in_data, in_length);
@@ -571,37 +580,37 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     }
     catch (buffer_override_exception_t const& e)
     {
-        printf("Buffer override at iocba_receive_data!! (received %d bytes for cleartext and %d bytes for encoded)\n", *cleartext_received_length, *enc_to_send_length);
+        TRACE("Buffer override at iocba_receive_data!! (received %d bytes for cleartext and %d bytes for encoded)\n", *cleartext_received_length, *enc_to_send_length);
         return -1;
     }
     catch (Botan::TLS::TLS_Exception const& e)
     {
         if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
         {
-            printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
+            TRACE("BotanTLS engine instance likely crashed before: %s \n", e.what());
             return -1;
         } else
         {
-            printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            TRACE("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
             return -1;
         }
     }
     catch (std::exception const& e)
     {
         // TODO: control messages
-        printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
+        TRACE("BotanTLS engine crashed with generic exception: %s \n", e.what());
         return -1;
     }
 
     *enc_to_send_length = (uint32_t) (
         buffers -> enc_cursor 
         - out_enc_to_send );
-    //printf("Returning %d bytes \n", *enc_to_send_length);
+    //TRACE("Returning %d bytes \n", *enc_to_send_length);
     *cleartext_received_length = (uint32_t) (
         buffers -> clr_cursor 
         - out_cleartext_received 
         );
-    //printf("Returning %d bytes of cleartext \n", *cleartext_received_length);
+    //TRACE("Returning %d bytes of cleartext \n", *cleartext_received_length);
     // So that we get a clean segfault if we do something wrong
     buffers-> clear_cursors();
     if ( buffers -> alert_produced )
@@ -609,7 +618,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
         if ( buffers -> alert_is_fatal || buffers -> peer_closed_transport)
         {
             // If I don't get this message we are in trouble...
-            // printf("Alert assimilated as part of decryption call\n");
+            // TRACE("Alert assimilated as part of decryption call\n");
             return -1;
         }
     }
@@ -667,11 +676,11 @@ extern "C" DLL_PUBLIC int32_t iocba_cleartext_push(
     buffers -> enc_cursor = out_enc_to_send;
     buffers -> enc_end    = out_enc_to_send + *enc_to_send_length;
     try {
-        // printf("Before send channel=%p \n", channel);
+        // TRACE("Before send channel=%p \n", channel);
         channel->send( (const unsigned char*) in_clr, clr_length);
     } catch (buffer_override_exception_t const& )
     {
-        printf("Buffer override trying to encrypt cleartext\n");
+        TRACE("Buffer override trying to encrypt cleartext\n");
     }
     catch (std::exception const& e)
     {
@@ -696,7 +705,7 @@ extern "C" DLL_PUBLIC void iocba_close(
     uint32_t *enc_to_send_length
     )
 {
-    // printf("Close called on buffer_t* %p\n", buffers);
+    // TRACE("Close called on buffer_t* %p\n", buffers);
     Botan::TLS::Channel* channel = buffers->channel;
     buffers -> enc_cursor = out_enc_to_send;
     buffers -> enc_end    = out_enc_to_send + *enc_to_send_length;
@@ -708,29 +717,29 @@ extern "C" DLL_PUBLIC void iocba_close(
     }
     catch (buffer_override_exception_t const& e)
     {
-        printf("Buffer override at iocba_close!!\n");
+        TRACE("Buffer override at iocba_close!!\n");
         return ;
     }
     catch (Botan::TLS::TLS_Exception const& e)
     {
         if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
         {
-            printf("BotanTLS engine (close) instance likely crashed before: %s \n", e.what());
+            TRACE("BotanTLS engine (close) instance likely crashed before: %s \n", e.what());
             return ;
         } else
         {
-            printf("BotanTLS engine  (close) instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            TRACE("BotanTLS engine  (close) instance crashed (normal if ALPN didn't go well): %s \n", e.what());
             return ;
         }
     }
     catch (std::exception const& e)
     {
         // TODO: control messages
-        //printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
+        //TRACE("BotanTLS engine crashed with generic exception: %s \n", e.what());
         return ;
     }catch (...)
     {
-        printf("BotanTLS engine raised exception on close\n");
+        TRACE("BotanTLS engine raised exception on close\n");
     }
     *enc_to_send_length = (uint32_t) (
         buffers -> enc_cursor
@@ -787,7 +796,7 @@ extern "C" DLL_PUBLIC botan_tls_context_t* iocba_make_tls_context_from_memory(
     int32_t prt_strt
 )
 {
-    // printf("New tls context from memory\n");
+    // TRACE("New tls context from memory\n");
     pthread_mutex_lock(&new_ctx_mutex);
     Botan::AutoSeeded_RNG* rng=new Botan::AutoSeeded_RNG();
     std::vector< std::string > protocols;
@@ -856,7 +865,7 @@ extern "C" DLL_PUBLIC  void iocba_delete_tls_context(botan_tls_context_t* ctx)
 extern "C" DLL_PUBLIC buffers_t* iocba_new_tls_server_channel (
        botan_tls_context_t* ctx)
 {
-    //printf("New tls server channel\n");
+    //TRACE("New tls server channel\n");
     pthread_mutex_lock(&new_channel_mutex);
     buffers_t* buffers = new buffers_t(ctx->protocol_strategy);
     auto* server =
