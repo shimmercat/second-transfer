@@ -216,12 +216,12 @@ library
 
   if os(linux)
       if flag(enable-botan)
-        extra-libraries: enable_tls
+        extra-libraries: enable_tls, enable_fastopen
         extra-lib-dirs: /usr/local/lib/shimmercat-build/link-now/artifacts
 
   if os(darwin)
       if flag(enable-botan)
-          extra-libraries: second_transfer__enable_tls
+          extra-libraries: enable_tls, enable_fastopen
           extra-lib-dirs: /usr/local/lib/shimmercat-build/
           ld-options: -framework Security
   if os(windows)

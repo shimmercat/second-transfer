@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving  #-}
+{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving, ForeignFunctionInterface  #-}
 module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
               , TLSServerSocketIOCallbacks                          (..)
@@ -28,6 +28,8 @@ import qualified Data.Conduit.List                                  as CL
 
 
 import           System.IO.Error                                    (ioeGetErrorString)
+import           Foreign.C.Types                                    (CInt(..))
+
 
 import qualified Network.Socket                                     as NS
 
@@ -40,6 +42,11 @@ import           SecondTransfer.IOCallbacks.WrapSocket              (
                                                                      )
 
 #include "instruments.cpphs"
+
+foreign import ccall unsafe "iocba_enable_fastopen" iocba_enable_fastopen ::
+    CInt ->
+    IO ()
+
 
 
 -- | Simple alias to SocketIOCallbacks where we expect
@@ -76,6 +83,11 @@ createAndBindListeningSocket hostname portnumber = do
 #endif
     NS.setSocketOption the_socket NS.RecvBuffer 32000
     NS.setSocketOption the_socket NS.SendBuffer 32000
+
+    let
+        NS.MkSocket sck_descr _ _ _ _ = the_socket
+    iocba_enable_fastopen (fromIntegral sck_descr)
+
     -- Linux honors the Low Water thingy below, and this setting is OK for HTTP/2 connections, but
     -- not very needed since the TLS wrapping will inflate the packet well beyond that size.
     -- See about this option here: http://stackoverflow.com/questions/8245937/whats-the-purpose-of-the-socket-option-so-sndlowat
