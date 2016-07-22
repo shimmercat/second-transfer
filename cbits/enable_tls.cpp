@@ -77,6 +77,9 @@ typedef  void (*load_fptr) (char*, int32_t, char**, int32_t*);
 typedef  int32_t (*session_lifetime_fptr) ();
 typedef  void (*encryption_key_fptr)(char**, int32_t*);
 
+// Use to sneak out information about successfull session retrievals
+thread_local int successfull_retrieval=0;
+
 // For managing TLS session resumption, function pointers
 class resumption_callbacks_t : public B::Session_Manager {
     save_fptr save_p;
@@ -127,8 +130,10 @@ public:
                stored_value_length,
                key );
             free(stored_value);
+            successfull_retrieval = 1;
             return true;
         }
+        successfull_retrieval = -1;
         return false;
     }
 
@@ -188,6 +193,10 @@ struct buffers_t{
     int alert_is_fatal;
     // Did the peer closed the transport?
     bool peer_closed_transport;
+    // Has this session been resumed? 0 -unknown / not
+    // resumed at this point. 1 - resumed , -1, tried to
+    // resume but token was not in the manager. 
+    int session_was_resumed;
 
     buffers_t(
         protocol_strategy_enum_t strategy
@@ -203,14 +212,25 @@ struct buffers_t{
         channel(0),
         strategy(strategy),
         peer_closed_transport(false),
+        session_was_resumed(0),
         which_alert(0)
     {
     }
 
+    // Checks a few hints that Botan may put here and there.
+    // ALWAYS call this function after the Botan functions, to ensure
+    // that some thread-local variables we are using are handled correctly.
     void check_readiness() {
         if (not ready_for_output && not (channel->is_closed()) && channel->is_active())
         {
             ready_for_output = true;
+        }
+        if ( successfull_retrieval != 0)
+        {
+            session_was_resumed = successfull_retrieval;
+            // Reset the value so that we can say something sensible
+            // about the next session
+            successfull_retrieval = 0;
         }
     }
 
@@ -282,13 +302,13 @@ void data_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
 
 void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigned char a[], size_t sz) 
 {
-    // printf("BOTAN WAS TO DELIVER ALERT: %d \n", alert.type_string().c_str());
+     printf("BOTAN WAS TO DELIVER ALERT: %s \n", alert.type_string().c_str());
     // TODO: find something better to do here
     buffers->alert_produced = true;
     buffers->which_alert = (int)alert.type();
     if ( alert.type() == Botan::TLS::Alert::CLOSE_NOTIFY)
     {
-        // std::cout << "PeerASKED to close TLS transport" << std::endl;
+        std::cout << "PeerASKED to close TLS transport" << std::endl;
         buffers -> peer_closed_transport = true;
     }
     else if (alert.is_valid() && alert.is_fatal() )
@@ -303,10 +323,10 @@ void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigne
             std::cout << alert.type_string() << std::endl;
         }
         buffers->alert_is_fatal = true;
-        //printf("TLS alert is fatal!!\n");
+        printf("TLS alert is fatal!!\n");
     } else {
         std::cout << alert.type_string() << std::endl;
-        //printf("Non-fatal alert!!\n");
+        printf("Non-fatal alert!!\n");
     }
 }
 
@@ -551,25 +571,25 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     }
     catch (buffer_override_exception_t const& e)
     {
-        printf("Buffer override!!\n");
+        printf("Buffer override at iocba_receive_data!! (received %d bytes for cleartext and %d bytes for encoded)\n", *cleartext_received_length, *enc_to_send_length);
         return -1;
     }
     catch (Botan::TLS::TLS_Exception const& e)
     {
         if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
         {
-            // printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
+            printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
             return -1;
         } else
         {
-            // printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
             return -1;
         }
     }
     catch (std::exception const& e)
     {
         // TODO: control messages
-        // printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
+        printf("BotanTLS engine crashed with generic exception: %s \n", e.what());
         return -1;
     }
 
@@ -606,6 +626,12 @@ extern "C" DLL_PUBLIC int32_t iocba_handshake_completed(buffers_t* buffer)
 {
     buffer->check_readiness();
     return (int32_t) buffer->ready_for_output;
+}
+
+extern "C" DLL_PUBLIC int32_t iocba_session_was_resumed(buffers_t* buffer)
+{
+    buffer->check_readiness();
+    return (int32_t) buffer->session_was_resumed;
 }
 
 extern "C" DLL_PUBLIC int32_t iocba_peer_closed_transport(buffers_t* buffer)
@@ -682,18 +708,18 @@ extern "C" DLL_PUBLIC void iocba_close(
     }
     catch (buffer_override_exception_t const& e)
     {
-        printf("Buffer override!!\n");
+        printf("Buffer override at iocba_close!!\n");
         return ;
     }
     catch (Botan::TLS::TLS_Exception const& e)
     {
         if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
         {
-            //printf("BotanTLS engine instance likely crashed before: %s \n", e.what());
+            printf("BotanTLS engine (close) instance likely crashed before: %s \n", e.what());
             return ;
         } else
         {
-            //printf("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
+            printf("BotanTLS engine  (close) instance crashed (normal if ALPN didn't go well): %s \n", e.what());
             return ;
         }
     }
@@ -704,7 +730,7 @@ extern "C" DLL_PUBLIC void iocba_close(
         return ;
     }catch (...)
     {
-        //printf("BotanTLS engine raised exception on close\n");
+        printf("BotanTLS engine raised exception on close\n");
     }
     *enc_to_send_length = (uint32_t) (
         buffers -> enc_cursor

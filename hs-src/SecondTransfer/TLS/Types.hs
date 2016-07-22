@@ -72,6 +72,11 @@ class IOChannels session => TLSContext ctx session | ctx -> session, session -> 
     --   enabling is successfull
     enableSessionResumption :: forall a . TLSSessionStorage a =>  ctx -> a -> IO Bool
     enableSessionResumption _ _ = return False
+    -- ^ Says if a session was resumed. For backends without support for session resumption,
+    --   this always returns False. Notice that this call may block if the information
+    --   about the session's resumption status is not yet in memory.
+    sessionWasResumed :: session -> IO Bool
+    sessionWasResumed _ = return False
 
 -- | Connection events
 data ConnectionEvent =

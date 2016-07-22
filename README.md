@@ -52,3 +52,10 @@ Development
 Uploading documentation (provided you have access to the package in Hackage):
 
     $ ./hackage-upload-docs.sh second-transfer 0.5.4.0 <hackage-user> <hackage-password>
+
+Running with instrumentation
+----------------------------
+
+Use this:
+
+    LD_PRELOAD=/usr/local/lib/shimmercat-build/deps/libasan.so  SAN_OPTIONS=verbosity=1:help=true shimmercat devlove
