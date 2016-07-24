@@ -62,6 +62,14 @@ instance TLSServerIO TLSServerSocketIOCallbacks
 instance HasSocketPeer TLSServerSocketIOCallbacks where
     getSocketPeerAddress (TLSServerSocketIOCallbacks s) = getSocketPeerAddress s
 
+
+-- | Enables TCP Fast Open, if possible. At the moment though the ratio between
+--   benefits, support and feasibility points towards disabling this.
+enableFastOpen :: NS.Socket -> IO ()
+enableFastOpen (NS.MkSocket sock_descr _ _ _ _) =
+    iocba_enable_fastopen sock_descr
+
+
 -- | Creates a listening socket at the provided network address (potentially a local interface)
 --   and the given port number. It returns the socket. This result can be used by the function
 --   tcpServe below
@@ -84,9 +92,7 @@ createAndBindListeningSocket hostname portnumber = do
     NS.setSocketOption the_socket NS.RecvBuffer 32000
     NS.setSocketOption the_socket NS.SendBuffer 32000
 
-    let
-        NS.MkSocket sck_descr _ _ _ _ = the_socket
-    iocba_enable_fastopen (fromIntegral sck_descr)
+    --enableFastOpen the_socket
 
     -- Linux honors the Low Water thingy below, and this setting is OK for HTTP/2 connections, but
     -- not very needed since the TLS wrapping will inflate the packet well beyond that size.
@@ -109,6 +115,7 @@ createAndBindListeningSocketNSSockAddr host_addr = do
         _ -> error "NetworkAddressTypeNotHandled"
 #ifndef WIN32
     NS.setSocketOption the_socket NS.ReusePort 1
+    -- enableFastOpen the_socket
 #endif
     NS.setSocketOption the_socket NS.RecvBuffer 64000
     NS.setSocketOption the_socket NS.SendBuffer 64000
