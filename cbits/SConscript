@@ -26,4 +26,3 @@ env2.Install(install_prefix, sl)
 sl=env2.SharedLibrary('enable_fastopen',
     ['enable_fastopen.cpp'])
 env2.Install(install_prefix, sl)
-

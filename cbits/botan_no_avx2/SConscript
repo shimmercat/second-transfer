@@ -1,0 +1,15 @@
+
+Import('env', 'install_prefix', 'includes_prefix')
+
+env1 = env.Clone()
+env1.Append(CXXFLAGS=['-maes',  '-m64', '-mpclmul', '-msse4.1'])
+env1.Append(CPPPATH='#')
+
+sl = env1.SharedLibrary('botan_noavx',
+    ['botan_all.cpp', 'botan_all_aesni.cpp',
+     'botan_all_rdseed.cpp', 'botan_all_rdrand.cpp',
+     'botan_all_ssse3.cpp'
+     ],
+    LINKFLAGS='-pthread'
+    )
+env1.Install(install_prefix, sl)
