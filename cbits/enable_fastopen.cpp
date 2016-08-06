@@ -7,6 +7,8 @@
 
 extern "C" void iocba_enable_fastopen(int32_t sfd)
 {
-    int qlen = 5; // ??
-    setsockopt(sfd, SOL_TCP, TCP_FASTOPEN, &qlen, sizeof(qlen));
+    // TO-DO: Add preprocessor flags so that this only gets called in 
+    // Linux.
+    // int qlen = 5; // ??
+    //setsockopt(sfd, SOL_TCP, TCP_FASTOPEN, &qlen, sizeof(qlen));
 }

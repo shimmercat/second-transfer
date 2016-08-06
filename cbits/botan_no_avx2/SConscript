@@ -1,15 +1,31 @@
 
 Import('env', 'install_prefix', 'includes_prefix')
 
+import sys
+import os.path
+
+plat = sys.platform
+
 env1 = env.Clone()
 env1.Append(CXXFLAGS=['-maes',  '-m64', '-mpclmul', '-msse4.1'])
 env1.Append(CPPPATH='#')
 
-sl = env1.SharedLibrary('botan_noavx',
-    ['botan_all.cpp', 'botan_all_aesni.cpp',
-     'botan_all_rdseed.cpp', 'botan_all_rdrand.cpp',
-     'botan_all_ssse3.cpp'
-     ],
-    LINKFLAGS='-pthread'
+if plat == 'linux2':
+    sl = env1.SharedLibrary('botan_noavx',
+       ['botan_all.cpp', 'botan_all_aesni.cpp',
+        'botan_all_rdseed.cpp', 'botan_all_rdrand.cpp',
+        'botan_all_ssse3.cpp'
+       ],
+       LINKFLAGS='-pthread'
+    )
+elif plat == 'darwin' :
+    sl = env1.SharedLibrary('botan_noavx',
+       map(lambda x: os.path.join('darwin', x), 
+	       ['botan_all.cpp', 'botan_all_aesni.cpp',
+		'botan_all_rdseed.cpp', 'botan_all_rdrand.cpp',
+		'botan_all_ssse3.cpp'
+	       ]
+       ),
+       LINKFLAGS='-pthread -framework Security'
     )
 env1.Install(install_prefix, sl)

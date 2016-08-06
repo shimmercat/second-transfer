@@ -222,8 +222,7 @@ library
   if os(darwin)
       if flag(enable-botan)
           extra-libraries: enable_tls, enable_fastopen
-          extra-lib-dirs: /usr/local/lib/shimmercat-build/
-          ld-options: -framework Security
+          extra-lib-dirs: /usr/local/lib/shimmercat-build/link-now/artifacts
   if os(windows)
       cpp-options: -DWIN32
       if flag(enable-botan)
