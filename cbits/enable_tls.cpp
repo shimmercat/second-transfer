@@ -311,13 +311,13 @@ void data_cb (buffers_t* buffers, const unsigned char a[], size_t sz)
 
 void alert_cb (buffers_t* buffers, Botan::TLS::Alert const& alert, const unsigned char a[], size_t sz) 
 {
-     TRACE("BOTAN WAS TO DELIVER ALERT: %s \n", alert.type_string().c_str());
+    TRACE("BOTAN WAS TO DELIVER ALERT: %s \n", alert.type_string().c_str());
     // TODO: find something better to do here
     buffers->alert_produced = true;
     buffers->which_alert = (int)alert.type();
     if ( alert.type() == Botan::TLS::Alert::CLOSE_NOTIFY)
     {
-        std::cout << "PeerASKED to close TLS transport" << std::endl;
+        TRACE("PeerASKED to close TLS transport\n");
         buffers -> peer_closed_transport = true;
     }
     else if (alert.is_valid() && alert.is_fatal() )
