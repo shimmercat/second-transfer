@@ -590,7 +590,6 @@ unwrapChunks =
       input <- await
       case input of
           Nothing -> throw $ HTTP11SyntaxException "ChunkedParsingLeftUnfinished"
-
           Just bs ->
               let
                   parse_result = fn bs

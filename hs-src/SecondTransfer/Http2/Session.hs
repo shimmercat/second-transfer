@@ -743,11 +743,12 @@ sessionInputThread  = do
                  continue
 
         TT.MiddleFrame_SIC frame@(NH2.Frame (NH2.FrameHeader _ _ nh2_stream_id) (NH2.DataFrame somebytes)) -> unlessReceivingHeaders $ do
-            -- So I got data to process
+            -- So I got data to process, probably as part of a POST request.
             -- TODO: Handle end of stream
             let stream_id = nh2_stream_id
 
             -- The call below will block if there is not space in the mvar which is sending data to the
+            -- stream worker...
             was_ok <- streamWorkerSendData stream_id somebytes
 
             if was_ok
