@@ -1,6 +1,7 @@
 module SecondTransfer.Sessions(
     makeSessionsContext
     ,makeDefaultSessionsContext
+    ,acquireNewSessionTag
     ,SessionsContext(..)
 
     ,module SecondTransfer.Sessions.Config
