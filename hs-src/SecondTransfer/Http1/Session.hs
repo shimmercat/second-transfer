@@ -6,7 +6,13 @@ module SecondTransfer.Http1.Session(
 
 
 import           Control.Lens
-import           Control.Exception                       (catch, try)
+import           Control.Exception                       (
+                                                          catch,
+                                                          try,
+                                                          catches,
+                                                          Handler      (..),
+                                                          AsyncException
+                                                         )
 --import           Control.Concurrent                      (forkIO)
 import           Control.Monad.IO.Class                  (liftIO, MonadIO)
 import           Control.Monad                           (when)
@@ -56,6 +62,10 @@ instance ActivityMeteredSession SimpleSessionMetrics where
 -- | Session attendant that speaks HTTP/1.1
 --
 -- This attendant should be OK with keep-alive, but not with pipelining.
+-- Notice that the attendant works in its own thread, so a return from here
+-- is no warranty that we are done.
+--
+-- Also, notice that on
 http11Attendant :: SessionsContext -> AwareWorker -> Attendant
 http11Attendant sessions_context coherent_worker connection_info attendant_callbacks
     =
@@ -121,19 +131,29 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             MustContinue_H1PC new_parser -> do
                 --putStrLn "MustContinue_H1PC"
-                catch
+                catches
                     (do
                         -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
                         -- possible
                         new_bytes <- best_effort_pull_action True
                         add_data new_parser new_bytes session_tag reuse_no
                     )
-                    ( (\ _e -> do
-                        -- This is a pretty harmless condition that happens
-                        -- often when the remote peer closes the connection
-                        close_action
-                        return Nothing
-                    ) :: IOProblem -> IO (Maybe LB.ByteString) )
+                    [
+                        Handler ( (\ _e -> do
+                             -- This is a pretty harmless condition that happens
+                             -- often when the remote peer closes the connection
+                             close_action
+                             return Nothing
+                         ) :: IOProblem -> IO (Maybe LB.ByteString) ),
+
+                        Handler ( (\ _e -> do
+                             -- This happens when we kill the processing thread
+                             -- because E.G. the transfer is going too slowly
+                             close_action
+                             return Nothing
+                         ) :: AsyncException -> IO (Maybe LB.ByteString) )
+
+                    ]
 
             OnlyHeaders_H1PC headers _leftovers -> do
                 -- putStrLn $ "OnlyHeaders_H1PC " ++ (show leftovers)
@@ -328,6 +348,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
             response_headers    = principal_stream ^. headers_PS
             transfer_encoding =  response_headers ^.  chunked_Hi
             cnt_length_header =  response_headers ^.  contentLength_Hi
+            interrupt_effect   = principal_stream ^. effect_PS . interrupt_Ef
             status_code :: Maybe Int
             status_code =  fromIntegral <$> response_headers ^. status_Hi
             headers_text_as_lbs =
@@ -337,6 +358,15 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
         close_release_key <- ReT.register close_action
 
         let
+            close_behavior =
+                case interrupt_effect of
+                    Just InterruptConnectionAfter_IEf ->
+                        return () -- Let the key expire and the connection be closed
+                    _ -> do
+                        -- Let the connection remain open
+                        _ <- ReT.unprotect close_release_key
+                        return ()
+
             handle_as_headers_only  =
               do
                 -- TODO: Take care of footers
@@ -348,7 +378,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                     -- up.
                     --putStrLn "PurpodselyCausingMyhem"
                     --push_action "\r\n"
-                _ <- ReT.unprotect close_release_key
+                close_behavior
                 return ()
 
             handle_as_chunked set_transfer_encoding =
@@ -373,8 +403,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         (CL.map wrapChunk =$= piecewiseconsume)
                 -- Don't forget the zero-length terminating chunk...
                 _ <- maybepushtext $ wrapChunk ""
-                -- If I got to this point, I can keep the connection alive for a future request
-                _ <- ReT.unprotect close_release_key
+                -- If I got to this point, I can keep the connection alive for a future request, unless...
+                close_behavior
                 return ()
 
         case (transfer_encoding, cnt_length_header) of
@@ -393,8 +423,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                                =$=
                                piecewiseconsumecounting content_length
                           )
-                -- Got here, keep the connection open
-                _ <- ReT.unprotect close_release_key
+                -- Got here, keep the connection open if possible
+                close_behavior
                 return ()
 
             (False, Nothing)

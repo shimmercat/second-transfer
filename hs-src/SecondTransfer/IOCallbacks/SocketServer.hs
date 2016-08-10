@@ -9,6 +9,7 @@ module SecondTransfer.IOCallbacks.SocketServer(
 
               -- ** Socket server with callbacks
               , tcpServe
+              , tcpServeWithSockAddr
               , tlsServe
 
               -- ** Socket server with iterators
@@ -145,6 +146,18 @@ tcpServe  listen_socket closing action =
                case either_condition_or_pair of
                    Left condition -> action $ Left condition
                    Right (a,_b) -> action $ Right a
+           )
+
+
+-- | tcpServe but Also passing the address
+tcpServeWithSockAddr :: NS.Socket -> (IO Bool) -> (Either AcceptErrorCondition (NS.Socket, NS.SockAddr) -> IO () ) -> IO ()
+tcpServeWithSockAddr  listen_socket closing action =
+    tcpItcli listen_socket closing $$
+       CL.mapM_
+           (\ either_condition_or_pair ->
+               case either_condition_or_pair of
+                   Left condition -> action $ Left condition
+                   Right x -> action $ Right x
            )
 
 

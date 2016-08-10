@@ -47,6 +47,7 @@ module SecondTransfer.Exception (
     , ioProblem
     , gatewayAbortedException
     , ioException
+    , threadKilled   -- NOTE: Will capture other excepitons :-(
     ) where
 
 import           Control.Exception
@@ -229,6 +230,11 @@ instance Exception IOProblem
 
 ioProblem :: Proxy IOProblem
 ioProblem = Proxy
+
+
+-- | This is a little bit too general, let's hope for the best
+threadKilled :: Proxy AsyncException
+threadKilled = Proxy
 
 -- | A concrete case of the above exception. Throw one of this
 --   if you don't want to implement your own type. Use
