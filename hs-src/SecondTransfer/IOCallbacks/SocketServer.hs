@@ -94,7 +94,8 @@ createAndBindListeningSocket hostname portnumber = do
 
     --enableFastOpen the_socket
 
-    -- Linux honors the Low Water thingy below, and this setting is OK for HTTP/2 connections, but
+    -- Linux honors the Low Water thingy below,
+    -- and this setting is OK for HTTP/2 connections, but
     -- not very needed since the TLS wrapping will inflate the packet well beyond that size.
     -- See about this option here: http://stackoverflow.com/questions/8245937/whats-the-purpose-of-the-socket-option-so-sndlowat
     --
@@ -155,7 +156,7 @@ tcpItcli :: NS.Socket
 tcpItcli listen_socket closing =
     -- NOTICE: The messages below should be considered traps. Whenever one
     -- of them shows up, we have hit a new abnormal condition that should
-    -- be learn from
+    -- be learned from
     do
         let
           report_abnormality = do
