@@ -589,7 +589,11 @@ unwrapChunks =
     go fn = do
       input <- await
       case input of
-          Nothing -> throw $ HTTP11SyntaxException "ChunkedParsingLeftUnfinished"
+          Nothing -> do
+              -- Due to buggy pears, we have to be more accepting
+              -- throw $ HTTP11SyntaxException "ChunkedParsingLeftUnfinished"
+              yield ""
+              return ()
           Just bs ->
               let
                   parse_result = fn bs
@@ -757,6 +761,7 @@ methodHasRequestBody' mth = case  mth of
     Head_HtM    ->  False
     Options_HtM ->  False
     Put_HtM     ->  True
+    Delete_HtM  ->  False
 
 
 -- These are most likely wrong TODO: fix
@@ -766,18 +771,15 @@ methodHasResponseBody mth | mth == "GET"     = True
                          | mth == "HEAD"    =  False
                          | mth == "OPTIONS" =  False
                          | mth == "PUT"     =  True
-                         | mth == "DELETE"  =  False
+                         | mth == "DELETE"  =  True
                          | mth == "TRACE"   =  False
                          | otherwise        =  False
 
 
 responseStatusHasResponseBody :: Int -> Bool
 responseStatusHasResponseBody code
-  | code == 301                     = True
-  | code == 302                     = True
-  | code == 303                     = True
+  | code == 204                     = False
   | code == 304                     = False
-  -- TODO: Add the other codes
   | otherwise                       = True
 
 
