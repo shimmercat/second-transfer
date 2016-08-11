@@ -4,7 +4,10 @@ module SecondTransfer.Socks5.Session (
                , ConnectOrForward                                  (..)
                , Socks5ServerState
                , initSocks5ServerState
+               , targetAddress_S5
+               , socket_S5
      ) where
+
 
 import           Control.Concurrent
 import qualified Control.Exception                                  as E
@@ -51,7 +54,7 @@ initSocks5ServerState :: Socks5ServerState
 initSocks5ServerState = Socks5ServerState 0
 
 data ConnectOrForward =
-    Connect_COF B.ByteString IOCallbacks
+    Connect_COF B.ByteString IOCallbacks IndicatedAddress
   | Forward_COF B.ByteString Word16
   | Drop_COF B.ByteString
 
@@ -115,10 +118,11 @@ negotiateSocksAndForward approver socks_here =
                 -- Can accept a connect, to what?
                 let
                     address = req_packet ^. address_SP3
+                    port = req_packet ^. port_SP3
                     named_host = case address of
                         DomainName_IA name -> name
                         _  -> E.throw . SOCKS5ProtocolException $ "UnsupportedAddress " ++ show address
-                if  approver named_host then
+                if  approver named_host && port == 443 then
                     do
                         -- First I need to answer to the client that we are happy and ready
                         let
@@ -133,7 +137,7 @@ negotiateSocksAndForward approver socks_here =
                         -- Now that I have the attendant, let's just activate it ...
 
                         -- CORRECT WAY:
-                        return $ Connect_COF named_host socks_here
+                        return $ Connect_COF named_host socks_here address
 
                     else do
                         -- Logging? We need to get that real right.
@@ -167,16 +171,18 @@ negotiateSocksForwardOrConnect approver socks_here =
             server_selects = ServerSelectsMethod_Packet ProtocolVersion 0 -- No auth
         ps putServerSelectsMethod_Packet server_selects
         (req_packet, _next2) <- tr "client-request" next1 parseClientRequest_Packet
+        let
+            target_port_number = req_packet ^. port_SP3
         case req_packet ^. cmd_SP3 of
 
             Connect_S5PC  -> do
                 -- Can accept a connect, to what?
                 let
                     address = req_packet ^. address_SP3
-                    port_number = req_packet ^. port_SP3
+
                     externalConnectProcessing  =
                       do
-                        maybe_forwarding_callbacks <- connectOnBehalfOfClient address port_number
+                        maybe_forwarding_callbacks <- connectOnBehalfOfClient address target_port_number
                         case maybe_forwarding_callbacks of
                             Just (_indicated_address, io_callbacks) -> do
                                 let
@@ -193,7 +199,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                                         ps putServerReply_Packet server_reply
                                         -- Now couple the two streams ...
                                         _ <- couple socks_here io_callbacks
-                                        return $ Forward_COF (pack . show $ address) (fromIntegral port_number)
+                                        return $ Forward_COF (pack . show $ address) (fromIntegral target_port_number)
                                     )
                                     (
                                       (\ _e ->
@@ -208,24 +214,29 @@ negotiateSocksForwardOrConnect approver socks_here =
 
                 -- /let
                 case address of
-                    DomainName_IA named_host ->
-                        if  approver named_host
-                          then do
-                            -- First I need to answer to the client that we are happy and ready
-                            let
-                                server_reply = ServerReply_Packet {
-                                    _version_SP4    = ProtocolVersion
-                                  , _replyField_SP4 = Succeeded_S5RF
-                                  , _reservedField_SP4 = 0
-                                  , _address_SP4 = IPv4_IA 0x7f000001
-                                  , _port_SP4 = 10001
-                                    }
-                            ps putServerReply_Packet server_reply
-                            -- Now that I have the attendant, let's just activate it ...
-                            return $ Connect_COF named_host socks_here
-                          else do
-                            -- Forward to an external host
-                            externalConnectProcessing
+                    DomainName_IA named_host
+                      | target_port_number == 443 ->
+                            if  approver named_host
+                              then do
+                                -- First I need to answer to the client that we are happy and ready
+                                let
+                                    server_reply = ServerReply_Packet {
+                                        _version_SP4    = ProtocolVersion
+                                      , _replyField_SP4 = Succeeded_S5RF
+                                      , _reservedField_SP4 = 0
+                                      , _address_SP4 = IPv4_IA 0x7f000001
+                                      , _port_SP4 = 10001
+                                        }
+                                ps putServerReply_Packet server_reply
+                                -- Now that I have the attendant, let's just activate it ...
+                                return $ Connect_COF named_host socks_here address
+                              else do
+                                -- Forward to an external host
+                                externalConnectProcessing
+                      | otherwise ->
+                            return . Drop_COF . pack$
+                                 "Connections to port other than 443 are rejected by SOCKS5"
+
                     IPv4_IA _ -> do
                         -- TODO: Some address sanitization
                         externalConnectProcessing
@@ -310,17 +321,24 @@ toSocks5Addr _                      = error "toSocks5Addr not fully implemented"
 
 -- | Simple alias to SocketIOCallbacks where we expect
 --   encrypted contents over a SOCKS5 Socket
-newtype TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks SocketIOCallbacks
+data TLSServerSOCKS5Callbacks = TLSServerSOCKS5Callbacks {
+    _socket_S5 :: SocketIOCallbacks,
+    _targetAddress_S5 :: IndicatedAddress
+    }
+
+
+makeLenses ''TLSServerSOCKS5Callbacks
 
 -- type TLSServerSOCKS5AcceptResult = Either AcceptErrorCondition TLSServerSOCKS5Callbacks
 
 instance IOChannels TLSServerSOCKS5Callbacks where
-    handshake (TLSServerSOCKS5Callbacks cb) = handshake cb
+    handshake s = handshake (s ^. socket_S5)
+
 
 instance TLSEncryptedIO TLSServerSOCKS5Callbacks
 instance TLSServerIO TLSServerSOCKS5Callbacks
 instance HasSocketPeer TLSServerSOCKS5Callbacks where
-    getSocketPeerAddress (TLSServerSOCKS5Callbacks s) = getSocketPeerAddress s
+    getSocketPeerAddress s = getSocketPeerAddress (s ^. socket_S5)
 
 
 
@@ -390,9 +408,12 @@ tlsSOCKS5Serve' s5s_mvar socks5_callbacks approver forward_connections listen_so
                            then negotiateSocksForwardOrConnect approver io_callbacks
                            else negotiateSocksAndForward       approver io_callbacks
                      case maybe_negotiated_io of
-                         Connect_COF fate _negotiated_io -> do
+                         Connect_COF fate _negotiated_io address -> do
                              let
-                                 tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks socket_io_callbacks
+                                 tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks {
+                                     _socket_S5 = socket_io_callbacks,
+                                     _targetAddress_S5 = address
+                                     }
                              log_event $ HandlingHere_S5Ev fate wconn_id
                              onsocks5_action . Right $ tls_server_socks5_callbacks
                          Drop_COF fate -> do
