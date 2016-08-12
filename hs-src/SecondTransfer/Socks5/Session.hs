@@ -234,8 +234,12 @@ negotiateSocksForwardOrConnect approver socks_here =
                                 -- Forward to an external host
                                 externalConnectProcessing
                       | otherwise ->
-                            return . Drop_COF . pack$
-                                 "Connections to port other than 443 are rejected by SOCKS5"
+                            if not (approver named_host)
+                              then
+                                externalConnectProcessing
+                              else
+                                return . Drop_COF . pack$
+                                    "Connections to port other than 443 are rejected by SOCKS5"
 
                     IPv4_IA _ -> do
                         -- TODO: Some address sanitization
