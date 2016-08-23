@@ -65,7 +65,11 @@ instance ActivityMeteredSession SimpleSessionMetrics where
 -- Notice that the attendant works in its own thread, so a return from here
 -- is no warranty that we are done.
 --
--- Also, notice that on
+-- Also,  that  a content-length header must be set in any
+-- answer that carries a body (because of HTTP status and HTTP method of
+-- the request), or otherwise the session will add a 'transfer-encoding: chunked'
+-- header and send the response as chunked.
+--
 http11Attendant :: SessionsContext -> AwareWorker -> Attendant
 http11Attendant sessions_context coherent_worker connection_info attendant_callbacks
     =
