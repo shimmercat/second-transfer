@@ -31,6 +31,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , PriorityEffect(..)
     , HttpProtocolVersion(..)
     , HashableSockAddr(..)
+    , ProcessingReport(..)
 
     , headers_RQ
     , inputData_RQ
@@ -40,6 +41,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , dataAndConclusion_PS
     , effect_PS
     , label_PS
+    , processingReport_PS
 
     , dataAndConclusion_Psh
     , requestHeaders_Psh
@@ -65,6 +67,8 @@ module SecondTransfer.MainLoop.CoherentWorker(
 
     , tupledPrincipalStreamToPrincipalStream
     , requestToTupledRequest
+
+    , totalBackendTime_PRep
     ) where
 
 
@@ -248,6 +252,20 @@ data Effect = Effect {
 instance Show Effect where
     show _ = "<some-effect>"
 
+
+-- | For the component that is creating the content
+--   to report process-specific data
+--   useful for debugging and monitoring
+data ProcessingReport = ProcessingReport {
+    -- | For whatever the best definition is for the given
+    --   backend
+    _totalBackendTime_PRep :: TimeSpec
+    }
+    deriving Show
+
+makeLenses ''ProcessingReport
+
+
 makeLenses ''Effect
 
 defaultEffects :: Effect
@@ -266,6 +284,7 @@ data PrincipalStream = PrincipalStream {
   _pushedStreams_PS        :: PushedStreams,
   _dataAndConclusion_PS    :: DataAndConclusion,
   _effect_PS               :: Effect,
+  _processingReport_PS     :: Maybe ProcessingReport,
   _label_PS                :: Maybe B.ByteString
   }
 
