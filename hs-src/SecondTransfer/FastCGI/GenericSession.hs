@@ -394,11 +394,12 @@ requestHeadersToCGI maybe_document_root headers =
         notThis "path"          .
         notThis "request-uri"   .
         notThis "document_root" .
+        notThis "proxy"         .   -- HTTPOXY security vulnerability
         notThis "script_name"   $
         const True
         ) h10
 
-    h2 = h100 `seq` map capitalize h10
+    h2 =  map capitalize h100
 
     -- We need a path
     path =
