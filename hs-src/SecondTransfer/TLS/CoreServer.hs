@@ -482,9 +482,8 @@ continueToHandshake
         Nothing -> return plaintext_io_callbacks_u'
         Just u -> u connection_data plaintext_io_callbacks_u'
 
-    close_reported <- newMVar False
-
     let
+        close_reported = plaintext_io_callbacks ^. closeActionCalled_IOC
         instr = do
             modifyMVar_ close_reported $ \ close_reported_x -> do
                 if (not close_reported_x) then  do
