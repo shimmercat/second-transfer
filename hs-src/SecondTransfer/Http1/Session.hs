@@ -100,14 +100,21 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     -- pull_action = attendant_callbacks ^. pullAction_IOC
     close_action = attendant_callbacks ^. closeAction_IOC
     best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
+    close_action_called_mvar = attendant_callbacks ^. closeActionCalled_IOC
 
     new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
-    new_session a b c = case maybe_callback of
-        Just (NewSessionCallback callback) -> callback a b c
+    new_session address generic_handle weakable_key = case maybe_callback of
+        Just (NewSessionCallback callback) ->
+            callback
+                address
+                generic_handle
+                close_action_called_mvar
         Nothing -> return ()
       where
         maybe_callback =
-            (sessions_context ^. (sessionsConfig . sessionsCallbacks . newSessionCallback_SC) )
+            (sessions_context ^.
+                 (sessionsConfig . sessionsCallbacks . newSessionCallback_SC)
+            )
 
     go :: TimeSpec -> Int -> Maybe LB.ByteString -> Int -> IO ()
     go started_time session_tag (Just leftovers) reuse_no = do

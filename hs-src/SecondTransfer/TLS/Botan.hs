@@ -44,7 +44,7 @@ import           SecondTransfer.Exception                                  (
 import           SecondTransfer.TLS.Types                                  (  TLSContext (..) )
 import           SecondTransfer.TLS.SessionStorage
 
-import           Debug.Trace
+--import           Debug.Trace
 
 #include "instruments.cpphs"
 
@@ -333,7 +333,7 @@ unencryptChannelData botan_ctx tls_data  = do
           -- is empty (closeBotan empties this variable.)
           , _active_BP             = active_mvar
           }
-        tls_pull_data_action = tls_io_callbacks ^. bestEffortPullAction_IOC
+        --tls_pull_data_action = tls_io_callbacks ^. bestEffortPullAction_IOC
 
     tls_channel_ptr <- withForeignPtr fctx $ \ x -> iocba_new_tls_server_channel  x
     -- tls_channel_fptr <- newForeignPtr iocba_delete_server_channel
@@ -439,12 +439,15 @@ encryptedToBotan botan_pad   =
                 -- Do I have a encoding?
                 have_protocol <- iocba_maybe_get_protocol
                     tls_channel_ptr
+                handshake_completed <- iocba_handshake_completed tls_channel_ptr
                 case have_protocol of
-                    0 -> return ()
+                    0 -> if handshake_completed /= 0
+                           then error "ProtocolMustHasBeenChosenByNow"
+                           else tryPutMVar selected_protocol_mvar Http11_HPV >> return ()
                     1 -> tryPutMVar selected_protocol_mvar Http11_HPV >> return ()
                     2 -> tryPutMVar selected_protocol_mvar Http2_HPV >> return ()
-                    _ -> return ()
-                handshake_completed <- iocba_handshake_completed tls_channel_ptr
+                    -- The code below is just a stupid default, if another protocol was indicated.
+                    _ -> tryPutMVar selected_protocol_mvar Http11_HPV >> return ()
                 when (handshake_completed /= 0) $
                     (tryPutMVar handshake_completed_mvar  ()) >> return ()
                 peer_closed_transport <- iocba_peer_closed_transport tls_channel_ptr
@@ -649,6 +652,7 @@ instance IOChannels BotanSession where
           , _pullAction_IOC = pull_action
           , _bestEffortPullAction_IOC = best_effort_pull_action'
           , _closeAction_IOC = close_action
+          , _closeActionCalled_IOC = botan_pad' ^. (encryptedSide_BP . closeActionCalled_IOC)
             }
 
 

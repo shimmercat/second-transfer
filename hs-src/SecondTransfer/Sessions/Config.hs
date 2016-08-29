@@ -44,7 +44,7 @@ module SecondTransfer.Sessions.Config(
        ) where
 
 
--- import           Control.Concurrent.MVar (MVar)
+import           Control.Concurrent.MVar                  (MVar)
 import           Control.Exception                        (SomeException)
 import           Control.Lens                             (makeLenses)
 
@@ -155,7 +155,7 @@ instance ActivityMeteredSession SessionGenericHandle where
 --   is the address of the client, and the second parameter is a controller that can be used to
 --   reduce the number of connections from time to time, the third parameter is a key on which
 --   the second paramter should be made a weak pointer
-newtype NewSessionCallback =  NewSessionCallback ( HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO () )
+newtype NewSessionCallback =  NewSessionCallback ( HashableSockAddr -> SessionGenericHandle -> MVar Bool -> IO () )
 
 -- | Callbacks that you can provide your sessions to notify you
 --   of interesting things happening in the server.

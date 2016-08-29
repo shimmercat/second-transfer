@@ -83,6 +83,10 @@ data ConnectionEvent =
     Established_CoEv NS.SockAddr ConnectionId Int64        -- ^ New connection. The second member says how many live connections are now
   | ALPNFailed_CoEv ConnectionId                           -- ^ An ALPN negotiation failed
   | Ended_CoEv ConnectionId                                -- ^ A connection ended.
+  | TooManyInHandshake_CoEv NS.SockAddr                    -- ^ Somebody was opening too many TCP connections  without
+                                                           --   finishing the TLS handshake, and therefore we are
+                                                           --   dropping connections from that client.
+  | TLSHandshakeTimeOut_CoEv NS.SockAddr                   -- ^ When I can't finish the handshake
   | AcceptError_CoEv AcceptErrorCondition                  -- ^. A condition
 
 

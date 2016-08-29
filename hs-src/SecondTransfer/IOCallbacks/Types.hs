@@ -16,6 +16,7 @@ module SecondTransfer.IOCallbacks.Types (
                , pullAction_IOC
                , closeAction_IOC
                , bestEffortPullAction_IOC
+               , closeActionCalled_IOC
 
                  -- * Classifying IO callbacks
                  -- $ classifiers
@@ -47,7 +48,6 @@ import           Control.Concurrent.MVar
 
 import           Data.Int                                     (Int64)
 
---import qualified Data.ByteString                              as B
 import qualified Data.ByteString.Lazy                         as LB
 --import qualified Data.ByteString.Builder                      as Bu
 
@@ -173,7 +173,11 @@ data IOCallbacks = IOCallbacks {
     --   Notice that with argument False, this may return an empty string.
     _bestEffortPullAction_IOC     :: BestEffortPullAction,
     -- | this is called when we wish to close the channel.
-    _closeAction_IOC              :: CloseAction
+    _closeAction_IOC              :: CloseAction,
+    -- | If closeAction has been called or not. We make it an MVar to be able to avoid
+    --   concurrent modificationof this, so that in a multi-threaded progra only one
+    --   caller be able to actually close the socket.
+    _closeActionCalled_IOC        :: MVar Bool
     }
 
 makeLenses ''IOCallbacks

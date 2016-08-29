@@ -185,6 +185,7 @@ library
                  attoparsec >= 0.12,
                  clock >= 0.6,
                  filepath >= 1.4.0 && < 1.5,
+                 unordered-containers >= 0.2.7,
                  resourcet >= 1.1,
                  BoundedChan >= 1.0.3,
                  --pqueue >= 1.3.0,

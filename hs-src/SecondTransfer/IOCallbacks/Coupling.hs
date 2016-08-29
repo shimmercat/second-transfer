@@ -145,17 +145,16 @@ popIOCallbacksIntoExistance = do
           , _bToA_IOCT = sd2
           , _closed_IOCT = closed
             }
-    let
-        action_set_a = popActions t aToB_IOCT bToA_IOCT
-        action_set_b = popActions t bToA_IOCT aToB_IOCT
+    action_set_a <- popActions t aToB_IOCT bToA_IOCT
+    action_set_b <- popActions t bToA_IOCT aToB_IOCT
     return
         (
           IOCSideA (t, action_set_a),
           IOCSideB (t, action_set_b)
         )
 
-popActions :: IOCTransit -> Lens' IOCTransit SideDatum -> Lens' IOCTransit SideDatum -> IOCallbacks
-popActions t pullside pushside =
+popActions :: IOCTransit -> Lens' IOCTransit SideDatum -> Lens' IOCTransit SideDatum -> IO IOCallbacks
+popActions t pullside pushside = do
   let
 
     throwIfNeeded :: IO ()
@@ -221,15 +220,20 @@ popActions t pullside pushside =
 
                | otherwise -> error "Function supposed to be total"
 
+  already_closed_mvar <- newMVar False
+
+  let
     close_action = do
         _ <- tryPutMVar (t ^. closed_IOCT ) ()
+        modifyMVar_ already_closed_mvar $ \ _ -> return True
         return ()
 
-    in IOCallbacks {
+  return $ IOCallbacks {
        _pushAction_IOC = push_action
      , _pullAction_IOC = pull_action
      , _bestEffortPullAction_IOC = best_effort_pull_action
      , _closeAction_IOC = close_action
+     , _closeActionCalled_IOC = already_closed_mvar
        }
 
 

@@ -3,8 +3,11 @@
 -}
 module SecondTransfer.Sessions.Tidal (
        TidalContext                                     (..)
+     , TidalCtxAction                                   (..)
+     , TidalReporterCallback
      , maxConnectionPerPeer_TiC
      , highWaterMark_TiC
+     , maybeTidalReporter_TiC
      , newTidalSession
      , defaultTidalContext
      , tidalConnectionManager
@@ -37,7 +40,7 @@ import qualified Data.Vector                            as DVec
 --import qualified Data.Sequence                          as Sq
 --import           Data.IORef
 import qualified Data.HashTable.ST.Cuckoo               as Ht
-import           Data.Maybe                             (catMaybes)
+import           Data.Maybe                             (catMaybes, isJust)
 import           Data.Vector.Algorithms.Merge           (sortBy)
 
 import           System.Mem.Weak
@@ -45,6 +48,19 @@ import           System.Mem.Weak
 
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.IOCallbacks.Types
+
+
+-- | Tell about tidal interventions using these
+--   datums
+data TidalCtxAction =
+     HighWatermarkReached_TCA
+    |DroppingExcessConnections_TCA Int
+    deriving (Show, Eq)
+
+
+-- | Invoked when there is something interesting to say.
+type TidalReporterCallback =
+    TidalCtxAction -> IO ()
 
 
 -- | Configuration structure
@@ -55,6 +71,9 @@ data TidalContext = TidalContext {
     -- | High water mark. When the number of connections go higher than this number,
     --   some of them are pruned.
   , _highWaterMark_TiC        :: Int
+    -- | Callback that this manager will use to reporter interesting things happening
+    --   in the manager.
+  , _maybeTidalReporter_TiC   :: Maybe TidalReporterCallback
   }
 
 makeLenses ''TidalContext
@@ -64,11 +83,12 @@ defaultTidalContext :: TidalContext
 defaultTidalContext = TidalContext {
     _maxConnectionPerPeer_TiC = 8
   , _highWaterMark_TiC = 780
+  , _maybeTidalReporter_TiC = Nothing
   }
 
-type ConnectionEntry = (HashableSockAddr ,Weak SessionGenericHandle)
+type ConnectionEntry = (HashableSockAddr , SessionGenericHandle)
 
-type ConnectionList =  [ConnectionEntry]
+type ConnectionList =  [MVar ConnectionEntry]
 
 -- | State structure. Will live for the entire server lifetime
 data TidalS = TidalS {
@@ -82,14 +102,19 @@ makeLenses ''TidalS
 type TidalM = ReaderT TidalS IO
 
 
-justRegisterNewConnection :: HashableSockAddr -> a -> SessionGenericHandle -> TidalM ()
+justRegisterNewConnection :: HashableSockAddr -> MVar bool -> SessionGenericHandle -> TidalM ()
 justRegisterNewConnection sock_addr weakkey sgh =
   do
     connection_vector_mvar <- view connections_TdS
     liftIO $ do
-        weakling <- mkWeak weakkey sgh Nothing
-        modifyMVar_ connection_vector_mvar
-            $ \ sq ->  return $ (sock_addr, weakling) : sq
+        new_entry <- newMVar (sock_addr, sgh)
+        let
+            free_action = do
+                _ <- takeMVar new_entry
+                return ()
+        _ <- mkWeakMVar weakkey free_action
+        modifyMVar_ connection_vector_mvar $ \ sq ->  do
+                return $ new_entry : sq
 
 type MemoTable s = Ht.HashTable s HashableSockAddr Int
 
@@ -100,11 +125,12 @@ pruneSameHost =
   do
     -- number below, it is per peer.
     max_connections <- view (context_TdS . maxConnectionPerPeer_TiC)
+    maybe_reporter <- view (context_TdS . maybeTidalReporter_TiC)
     current_connections_mvar <- view connections_TdS
     to_drop <- liftIO . modifyMVar current_connections_mvar $ \ current_connections -> do
         let
-            countAndAdvance :: MemoTable s -> HashableSockAddr -> ST s Bool
-            countAndAdvance h addr = do
+            countAndAdvance :: MemoTable RealWorld -> HashableSockAddr -> IO Bool
+            countAndAdvance h addr = stToIO $  do
                 e <- Ht.lookup h addr
                 case e of
                     Just n ->
@@ -119,24 +145,49 @@ pruneSameHost =
                           Ht.insert h addr 1
                           return True
 
-            foldOperator :: MemoTable s -> ConnectionList -> ConnectionEntry -> ST s ConnectionList
-            foldOperator h drop_connections (addr, weakling) =
+            foldOperator :: MemoTable RealWorld -> ConnectionList -> MVar ConnectionEntry -> IO ConnectionList
+            foldOperator h drop_connections entry =
               do
-                keep <- countAndAdvance  h addr
-                if keep
-                    then return drop_connections
-                    else return ( (addr,weakling):drop_connections )
+                maybe_entry <- tryReadMVar entry
+                case maybe_entry of
+                    Nothing -> return drop_connections
+                    Just  (addr, _gsh)  -> do
+                        keep <- countAndAdvance  h addr
+                        if keep
+                            then return drop_connections
+                            else return ( entry :drop_connections )
 
-            to_drop :: ConnectionList
-            to_drop = runST $ do
-                e <- Ht.new
+            -- A list of connections to drop
+            to_drop :: IO ConnectionList
+            to_drop =   do
+                e <- stToIO $ Ht.new
                 foldM (foldOperator e) [] current_connections
 
+        -- Remove any old sessions from the list of live connections.
         remaining <- dropDeathConnections current_connections
         return (remaining, to_drop)
 
     -- We can invoke this function outside the lock, since it is not going to change the list .
-    liftIO $ dropConnections to_drop
+    --
+    -- to_drop_list is a list of connections to drop because the client host has too many
+    -- sessions open.
+    to_drop_list <- liftIO $ do to_drop
+    -- The actual count of connections dropped, after accounting for connections that
+    -- has already been closed.
+    dropped_count <- liftIO $ dropConnections to_drop_list
+    case maybe_reporter of
+        Nothing -> return ()
+        Just reporter -> liftIO $
+            -- Only produce the watermark message if there were actually a few connections dropped
+            -- here
+            if  (dropped_count > 0)
+              then do
+                reporter HighWatermarkReached_TCA
+                reporter (DroppingExcessConnections_TCA dropped_count)
+              else do
+                return ()
+
+
 
     return ()
 
@@ -147,26 +198,31 @@ pruneSameHost =
 -- | Expects the connection list to be locked. Drops the death connections
 --   and returns a list with the entries for the ones which are still alive.
 dropDeathConnections :: ConnectionList -> IO ConnectionList
-dropDeathConnections conns = filterM  (\ (_addr, weakling) -> do
-    maybesomething <- deRefWeak weakling
-    case maybesomething of
-        Nothing -> return False
-        _ -> return True
-    ) conns
+dropDeathConnections conns = filterM  (\ entry_mvar -> do
+                                            maybe_entry <- tryReadMVar entry_mvar
+                                            return $ isJust maybe_entry)  conns
 
 
-dropConnections :: ConnectionList -> IO ()
-dropConnections conns = forM_  conns $ \ (_addr, weakling) -> do
-    maybesomething <- deRefWeak weakling
-    case maybesomething of
-        Nothing -> return ()
-        (Just generic_handle ) -> do
-            case generic_handle of
-                Whole_SGH a ->
-                    cleanlyCloseSession a
+dropConnections :: ConnectionList -> IO Int
+dropConnections conns = foldM  (\ counter entry_mvar -> do
+        maybesomething <- tryTakeMVar  entry_mvar
+        case maybesomething of
+            Nothing -> do
+                --putStrLn "deRef went blank"
+                return counter
+            (Just (_sock_addr, generic_handle) ) -> do
+                -- putStrLn "NOT BLANK"
+                case generic_handle of
+                    Whole_SGH a -> do
+                        cleanlyCloseSession a
+                        counter `seq` (return $ counter + 1)
 
-                Partial_SGH _ iocallbacks ->
-                    (iocallbacks ^. closeAction_IOC)
+                    Partial_SGH _ iocallbacks -> do
+                        (iocallbacks ^. closeAction_IOC)
+                        counter `seq` (return $ counter + 1)
+    )
+    0
+    conns
 
 
 -- | Drops the oldest connections without activity ....
@@ -176,17 +232,17 @@ pruneOldestConnections how_many_to_drop =
     -- First, create a vector with the information we are interested in ....
     current_connections_mvar <- view connections_TdS
     to_drop <- liftIO . withMVar current_connections_mvar $ \ current_connections -> do
-        sortable_conns_list <- catMaybes <$> mapM (\ (addr, weakling) ->  do
-                                                     w <- deRefWeak weakling
+        sortable_conns_list <- catMaybes <$> mapM (\ entry_mvar ->  do
+                                                     w <- tryReadMVar entry_mvar
                                                      case w of
-                                                         Just g -> return . Just $  (addr, g, weakling)
+                                                         Just (addr, gsh) -> return . Just $  (addr, entry_mvar, gsh)
                                                          Nothing -> return Nothing
                                                ) current_connections
         let
             sortable_vector = DVec.fromList $ sortable_conns_list
-        with_time_spec <- DVec.mapM (\ (addr, generic_handle, weakling) -> do
-                                       last_act_time <- sessionLastActivity generic_handle
-                                       return ( (addr, weakling), last_act_time)
+        with_time_spec <- DVec.mapM (\ (_addr, entry_mvar, gsh) -> do
+                                       last_act_time <- sessionLastActivity gsh
+                                       return ( entry_mvar, last_act_time)
                                  ) sortable_vector
 
         let
@@ -197,11 +253,17 @@ pruneOldestConnections how_many_to_drop =
             -- This contains everybody that we can drop ...
             to_drop = DVec.take how_many_to_drop sorted_time_spec
         return . DVec.toList . DVec.map fst $ to_drop
-    liftIO $ dropConnections to_drop
+    _ <- liftIO $ dropConnections to_drop
+    return ()
 
 
-whenAddingConnection ::  HashableSockAddr -> SessionGenericHandle -> a -> TidalM ()
-whenAddingConnection sock_addr handle key =
+-- | This simple callback is executed every time a new connection is opened.
+--   The callback keeps a growing counter, but it doesn't track connections
+--   that close naturally.
+--   When the high watermark is reached, it does a cleanup by removing
+--   any connections which has been closed and such.
+whenAddingConnection ::  HashableSockAddr -> SessionGenericHandle -> MVar Bool -> TidalM ()
+whenAddingConnection sock_addr handle already_closed_mvar =
   do
     highwater_mark <- view (context_TdS . highWaterMark_TiC)
     connections_mvar <- view connections_TdS
@@ -215,7 +277,7 @@ whenAddingConnection sock_addr handle key =
         pruneSameHost
         pruneOldestConnections (highwater_mark `div` 3)
 
-    justRegisterNewConnection sock_addr key handle
+    justRegisterNewConnection sock_addr already_closed_mvar handle
 
 
 newTidalSession :: TidalContext -> IO TidalS
@@ -232,5 +294,6 @@ tidalConnectionManager tidals   =
 closeAllConnections :: TidalS -> IO ()
 closeAllConnections
     (TidalS { _context_TdS = _tidal_context, _connections_TdS = connections_mvar }) = do
-    withMVar connections_mvar $ \ connections ->
-        dropConnections connections
+    withMVar connections_mvar $ \ connections -> do
+        _ <- dropConnections connections
+        return ()

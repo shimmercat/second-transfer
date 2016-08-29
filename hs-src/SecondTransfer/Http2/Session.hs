@@ -395,18 +395,47 @@ instance CleanlyPrunableSession SessionData where
     cleanlyCloseSession s = runReaderT (quietlyCloseConnection NH2.NoError) s
 
 
-http2ServerSession :: ConnectionData -> AwareWorker -> Int -> SessionsContext -> IO Session
-http2ServerSession conn_data a i sctx = http2Session (Just conn_data) Server_SR a (error "NotAClient") i sctx
+http2ServerSession :: ConnectionData -> AwareWorker -> Int -> SessionsContext -> MVar Bool -> IO Session
+http2ServerSession conn_data a i sctx close_action_called_mvar =
+  http2Session
+     (Just conn_data)
+     Server_SR
+     a
+     (error "NotAClient")
+     i
+     sctx
+     close_action_called_mvar
 
 
-http2ClientSession :: ClientState -> Int -> SessionsContext -> IO Session
-http2ClientSession client_state session_id sctx =
-    http2Session Nothing Client_SR (error "NotAServer") client_state session_id sctx
-
+http2ClientSession :: ClientState -> Int -> SessionsContext -> MVar Bool -> IO Session
+http2ClientSession client_state session_id sctx close_action_called_mvar =
+    http2Session
+       Nothing
+       Client_SR
+       (error "NotAServer")
+       client_state
+       session_id
+       sctx
+       close_action_called_mvar
 
 --                                v- {headers table size comes here!!}
-http2Session :: Maybe ConnectionData -> SessionRole -> AwareWorker -> ClientState  -> Int -> SessionsContext -> IO Session
-http2Session maybe_connection_data session_role aware_worker client_state session_id sessions_context =   do
+http2Session ::
+    Maybe ConnectionData ->
+    SessionRole ->
+    AwareWorker ->
+    ClientState  ->
+    Int ->
+    SessionsContext  ->
+    MVar Bool ->
+    IO Session
+http2Session
+    maybe_connection_data
+    session_role aware_worker
+    client_state
+    session_id
+    sessions_context
+    close_action_called_mvar
+  =   do
     session_input             <- newChan
     session_output            <- newSessionOutput
     session_output_mvar       <- newMVar session_output
@@ -498,7 +527,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
 
     let
 
-        new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
+        new_session :: HashableSockAddr -> SessionGenericHandle -> MVar Bool -> IO ()
         new_session a b c = case maybe_callback of
             Just (NewSessionCallback callback) -> callback a b c
             Nothing -> return ()
@@ -564,7 +593,9 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
 
     -- Create a thread that captures headers and sends them down the tube
     _ <- forkIOExc "s2f2" $ exc_guard SessionHeadersOutputThread_HTTP2SessionComponent
-           $ runReaderT (headersOutputThread headers_output session_output_mvar) session_data
+           $ runReaderT
+                 (headersOutputThread headers_output session_output_mvar)
+                 session_data
 
     -- New session! TODO: Have to fix this manager code maybe?
     case maybe_hashable_addr of
@@ -572,7 +603,7 @@ http2Session maybe_connection_data session_role aware_worker client_state sessio
               new_session
                  hashable_addr
                  (Whole_SGH session_data)
-                 session_data
+                 close_action_called_mvar
 
           Nothing ->
               return ()

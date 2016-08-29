@@ -14,7 +14,7 @@ import           SecondTransfer.IOCallbacks.Types
 
 
 insertNoise :: Int -> LB.ByteString -> IOCallbacks -> IO IOCallbacks
-insertNoise offset noise (IOCallbacks push pull bpa ca) =
+insertNoise offset noise (IOCallbacks push pull bpa ca closed) =
   do
     written_data <- newIORef 0
     recv_data <- newIORef 0
@@ -49,4 +49,4 @@ insertNoise offset noise (IOCallbacks push pull bpa ca) =
                   return g
 
 
-    return $ IOCallbacks npush npull nbpa ca
+    return $ IOCallbacks npush npull nbpa ca closed

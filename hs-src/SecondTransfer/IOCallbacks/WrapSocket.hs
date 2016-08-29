@@ -19,6 +19,7 @@ import           Control.Concurrent
 import qualified Control.Exception                                  as E
 import           Control.Lens                                       (makeLenses, (^.))
 
+
 import qualified Data.ByteString                                    as B
 import qualified Data.ByteString.Lazy                               as LB
 --import           Data.ByteString.Char8                              (pack, unpack)
@@ -120,6 +121,7 @@ socketIOCallbacks socket = do
           , _pullAction_IOC           = pull_action
           , _bestEffortPullAction_IOC = best_effort_pull_action'
           , _closeAction_IOC          = close_action
+          , _closeActionCalled_IOC    = socket_already_closed
             }
     return $ SocketIOCallbacks {
         _socket_SS = socket

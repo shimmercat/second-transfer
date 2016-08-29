@@ -190,6 +190,7 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         push_action = io_callbacks ^. pushAction_IOC
         pull_action = io_callbacks ^. pullAction_IOC
         close_action = io_callbacks ^. closeAction_IOC
+        close_action_called_mvar = io_callbacks ^. closeActionCalled_IOC
         (ConnectionId new_session_id') = connection_info ^. connId_CnD
         new_session_id = fromIntegral new_session_id'
 
@@ -205,10 +206,12 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
                                             aware_worker
                                             new_session_id
                                             sessions_context
+                                            close_action_called_mvar
         ClientState_SP client_state -> http2ClientSession
                                             client_state
                                             new_session_id
                                             sessions_context
+                                            close_action_called_mvar
 
     let
         session_role = case session_payload of
