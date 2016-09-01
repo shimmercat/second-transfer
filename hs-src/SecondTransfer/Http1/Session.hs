@@ -167,7 +167,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                     ]
 
             OnlyHeaders_H1PC headers _leftovers -> do
-                -- putStrLn $ "OnlyHeaders_H1PC " ++ (show leftovers)
+                -- putStrLn $ "OnlyHeaders_H1PC " ++ (show _leftovers)
                 -- Ready for action...
                 -- ATTENTION: Not use for pushed streams here....
                 -- We must decide what to do if the user return those
@@ -204,6 +204,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                     modified_headers = addExtraHeaders sessions_context headers
                 started_time <- getTime Monotonic
                 set_leftovers <- newIORef ""
+
+                -- putStrLn $ "STOP condition: " ++ (show stopcondition)
 
                 let
                     source :: Source AwareWorkerStack B.ByteString
@@ -298,9 +300,11 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                   do
                     if B.length piece > 0
                        then do
+                           --liftIO $ putStrLn "SawContentRichPiece"
                            yield piece
                            gorc (LB.fromStrict i) (Ap.parse chunkParser)
-                       else
+                       else do
+                           -- liftIO $ putStrLn "SawEmptyPiece"
                            return ()
         gorc leftovers (Ap.parse chunkParser)
 

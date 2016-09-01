@@ -565,10 +565,11 @@ wrapChunk bs = let
 
 
 unwrapChunks :: Monad m => Conduit B.ByteString m B.ByteString
-unwrapChunks =
+unwrapChunks  =
     do
+      -- Leftovers are fed and they will be read here.
       input <- await
-      case input of
+      case {- trace ("CHNK iNPUT:" ++ show input)  -}  input  of
           Nothing -> return ()
           Just bs ->
               let
@@ -588,7 +589,7 @@ unwrapChunks =
                     leftover leftovers
     go fn = do
       input <- await
-      case input of
+      case {- trace ( "CHNK Input: " ++ show input)  $  -} input of
           Nothing -> do
               -- Due to buggy pears, we have to be more accepting
               -- throw $ HTTP11SyntaxException "ChunkedParsingLeftUnfinished"

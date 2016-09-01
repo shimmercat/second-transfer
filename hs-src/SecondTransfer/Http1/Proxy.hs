@@ -190,7 +190,7 @@ processHttp11Output bepa method =
         unwrapping_chunked leftovers =
             (do
                 yield leftovers
-                pull_forever
+                pump_until_exception ""
             ) =$= unwrapChunks
 
         pump_until_exception fragment = do

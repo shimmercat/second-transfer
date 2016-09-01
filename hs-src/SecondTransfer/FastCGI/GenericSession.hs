@@ -300,7 +300,7 @@ processOutputAndStdErr request_id method client_input ioc =
             -- liftIO $ putStrLn "exiting plain"
             lift finalizer
 
-        unwrapped_chunked = do
+        unwrapped_chunked  = do
             -- liftIO $ putStrLn "entering chunked"
             source =$= CL.filter (\x -> B.length x > 0) =$= unwrapChunks
             -- liftIO $ putStrLn "exiting chunks"
