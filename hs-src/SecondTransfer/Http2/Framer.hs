@@ -78,7 +78,7 @@ import           SecondTransfer.Http2.CalmState
 import           SecondTransfer.MainLoop.Logging        (logit)
 #endif
 
---import           Debug.Trace
+-- import           Debug.Trace
 
 
 http2PrefixLength :: Int
@@ -396,14 +396,12 @@ readNextFrame max_acceptable_size pull_action  = do
                 -- Copies 9 bytes of a frame header
                 (frame_type_id, frame_header) = NH2.decodeFrameHeader . LB.toStrict $ frame_header_bs
                 NH2.FrameHeader payload_length _ _ =  frame_header
-            -- liftIO . putStrLn $ "payload length: " ++ (show payload_length) ++ " max sz " ++ show max_acceptable_size
             if payload_length + 9 > max_acceptable_size
               then do
                 yield $ Left "ReceivedHTTP/2FrameExceedingLegalSize"
                 return ()
               else do
                 -- Get as many bytes as the payload length identifies
-                -- liftIO . putStrLn $ "Payload length requested " ++ show payload_length
                 either_payload_bs <- lift $ E.try (pull_action payload_length)
                 case either_payload_bs :: Either IOProblem LB.ByteString of
                     Left _ -> do
@@ -609,7 +607,6 @@ outputGatherer session_output = do
        loopPart ::  FramerSession ()
        loopPart  = do
            command_or_frame  <- liftIO $ getFrameFromSession session_output
-           -- liftIO . putStrLn . show $ command_or_frame
            case command_or_frame of
 
                Command_StFB (CancelSession_SOC error_code) -> do
@@ -724,7 +721,7 @@ startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify  = do
         priority_effect =  effect ^. priorityEffect_Ef
 
         -- The starting value of the calm, as dicated by the effects
-        calm_0 = case priority_effect of
+        calm_0 = case  priority_effect of
             NoEffect_PrEf  -> newCalmState 0 []
             Uniform_PrEf default_calm -> newCalmState default_calm []
             PerYield_PrEf start_calm cmap -> newCalmState start_calm cmap
@@ -829,7 +826,7 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
                       (NH2.DataFrame "")
 
                   priority = getCurrentCalm calm
-
+              -- liftIO $ putStrLn $ "calm = " ++ show priority ++ " for stream " ++ show stream_id
               withNormalPrioritySend priority stream_id ordinal formatted
               delivery_notify stream_id last_effect ordinal
               -- And just before returning, be sure to release the structures related to this
@@ -884,6 +881,7 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
                       }
                     )
                     (NH2.DataFrame $ LB.toStrict to_send)
+            -- liftIO $ putStrLn $ "b prio = " ++ show priority ++ " for stream " ++ show stream_id
             withNormalPrioritySend priority stream_id ordinal formatted
             -- Notify any interested party about the frame being "delivered" (but it may still be at
             -- the latest queue)
