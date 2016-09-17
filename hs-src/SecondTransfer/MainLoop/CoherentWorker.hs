@@ -46,6 +46,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , dataAndConclusion_Psh
     , requestHeaders_Psh
     , responseHeaders_Psh
+    , priority_Psh
     , label_Psh
 
     , startedTime_Pr
@@ -178,33 +179,6 @@ type PushedStreams = [ IO PushedStream ]
 type DataAndConclusion = ConduitM () B.ByteString AwareWorkerStack Footers
 
 
--- | A pushed stream, represented by a list of request headers,
---   a list of response headers, and the usual response body  (which
---   may include final footers (not implemented yet)).
-data PushedStream = PushedStream {
-  _requestHeaders_Psh    :: HqHeaders,
-  _responseHeaders_Psh   :: HqHeaders,
-  _dataAndConclusion_Psh :: DataAndConclusion,
-  _label_Psh             :: Maybe B.ByteString
-  }
-
-makeLenses ''PushedStream
-
-
--- | First argument is the ordinal of this data frame, second an approximation of when
---   the frame was delivered, according to the monotonic clock. Do not linger in this call,
---   it may delay some important thread
-type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
-
-
--- | Types of interrupt effects that can be signaled by aware workers. These include whole
---   connection shutdowns and stream resets. In all the cases, the reason given will be
---   NO_ERROR.
-data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway /after/ this stream finishes delivery
-                       |InterruptConnectionNow_IEf    -- ^ Close and send GoAway /without/ delivering this stream.  This implies that
-                                                      --   other fields of the PrincipalStream record will be ignored.
-
-
 -- | Valid priority effects
 --
 --
@@ -225,6 +199,36 @@ data PriorityEffect =
                                        --   is raised (e.g., the priority is lowered), by the positive
                                        --   number given as second part of the pair
   deriving Show
+
+
+-- | A pushed stream, represented by a list of request headers,
+--   a list of response headers, and the usual response body  (which
+--   may include final footers (not implemented yet)).
+data PushedStream = PushedStream {
+  _requestHeaders_Psh    :: HqHeaders,
+  _responseHeaders_Psh   :: HqHeaders,
+  _dataAndConclusion_Psh :: DataAndConclusion,
+  _label_Psh             :: Maybe B.ByteString,
+  _priority_Psh          :: PriorityEffect
+  }
+
+
+makeLenses ''PushedStream
+
+
+-- | First argument is the ordinal of this data frame, second an approximation of when
+--   the frame was delivered, according to the monotonic clock. Do not linger in this call,
+--   it may delay some important thread
+type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
+
+
+-- | Types of interrupt effects that can be signaled by aware workers. These include whole
+--   connection shutdowns and stream resets. In all the cases, the reason given will be
+--   NO_ERROR.
+data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway /after/ this stream finishes delivery
+                       |InterruptConnectionNow_IEf    -- ^ Close and send GoAway /without/ delivering this stream.  This implies that
+                                                      --   other fields of the PrincipalStream record will be ignored.
+
 
 -- TODO:  another kind of priority effect would be one here the priorities are
 --        known in advance. Only problem here is determining if the action would

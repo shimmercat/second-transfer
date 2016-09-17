@@ -1829,15 +1829,18 @@ normallyHandleStream principal_stream = do
                 response_headers           = pushed_stream ^. responseHeaders_Psh
                 pushed_data_and_conclusion = pushed_stream ^. dataAndConclusion_Psh
                 maybe_label_of_pushed      = pushed_stream ^. label_Psh
+                push_prio_effect           = pushed_stream ^. priority_Psh
             child_stream_id <- liftIO $ modifyMVar next_push_stream_mvar
                                      $ (\ x -> return (x+2,x) )
 
             liftIO $ do
                 reserveStream stream_state_table child_stream_id maybe_label_of_pushed
+                -- The push promise goes with the same priority of the parent stream, therefore
+                -- effects is for the most part left unchanged.
                 writeChan headers_output . PushPromise_HM $
                     (stream_id, child_stream_id, request_headers, effects)
 
-            return (child_stream_id, response_headers, pushed_data_and_conclusion, effects)
+            return (child_stream_id, response_headers, pushed_data_and_conclusion, push_prio_effect)
       else
         return []
 
@@ -1879,14 +1882,20 @@ normallyHandleStream principal_stream = do
         -- Now, time to fork threads for the pusher streams
         -- we send those pushers even if the main stream is cancelled...
         forM_ data_promises
-            $ \ (child_stream_id, response_headers, pushed_data_and_conclusion, _effects) -> do
+            $ \ (child_stream_id, response_headers, pushed_data_and_conclusion, push_prio_effect) -> do
                   environment <- ask
                   let
+                      fr_delivery_callback          = effects ^. fragmentDeliveryCallback_Ef
+                      pushed_stream_effect =
+                         (set priorityEffect_Ef push_prio_effect) .
+                         (set fragmentDeliveryCallback_Ef fr_delivery_callback ) $
+                         defaultEffects
+
                       action = pusherThread
                                     child_stream_id
                                     response_headers
                                     pushed_data_and_conclusion
-                                    effects
+                                    pushed_stream_effect
                   -- And let the action run in its own thread
                   liftIO .
                       forkIOExc "s2f8" .
