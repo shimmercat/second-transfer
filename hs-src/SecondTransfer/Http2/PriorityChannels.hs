@@ -9,8 +9,9 @@ module SecondTransfer.Http2.PriorityChannels (
 
 import            Control.Lens
 import            Control.Concurrent
-import            Control.Monad.IO.Class                 (liftIO)
+import            Control.Monad.IO.Class                       (liftIO)
 import            Control.Monad.Trans.Reader
+import qualified  Control.Concurrent.BoundedChan                as A
 
 import qualified Data.ByteString.Lazy                           as LB
 import qualified Data.ByteString.Builder                        as Bu
@@ -34,9 +35,12 @@ data ChannelToken = ChannelToken {
 makeLenses ''ChannelToken
 
 
+boundedChanSize :: Int
+boundedChanSize = 4
+
 
 -- | Ok, here is where the data will come...
-type Gateways = DM.Map ChannelKey (MVar ChannelToken)
+type Gateways = DM.Map ChannelKey (A.BoundedChan ChannelToken)
 
 
 data PriorityChannelsState = PriorityChannelsState {
@@ -98,7 +102,7 @@ putInPriorityChannel_AtM system_priority priority stream_id packet_ordinal datum
             Just chm -> return (gateways, chm)
 
             Nothing -> do
-               new_channel <-  newEmptyMVar
+               new_channel <-  A.newBoundedChan boundedChanSize
                let
                    gw2' = DM.insert channel_key new_channel gateways
                return (gw2', new_channel )
@@ -110,7 +114,7 @@ putInPriorityChannel_AtM system_priority priority stream_id packet_ordinal datum
 
     -- As soon as we succeed on actually putting the data into the channel, notify
     -- of it.
-    liftIO $ putMVar channel token
+    liftIO $ A.writeChan channel token
     _ <- liftIO $ tryPutMVar ready_mvar ()
 
     return ()
@@ -195,13 +199,14 @@ getDataUpTo_AtM is_first return_at_trigger
 
             Nothing -> return mempty
 
+
 gowy :: Gateways -> IO (Maybe ChannelToken)
 gowy  gw =
     case DM.minView gw of
         Nothing ->  return Nothing
 
         Just (a_channel, gw1) -> do
-            maybe_token <- tryTakeMVar a_channel
+            maybe_token <- A.tryReadChan a_channel
             case maybe_token of
                 Nothing ->
                     -- Try to take the datum from the next

@@ -27,7 +27,11 @@ data CalmState = CalmState {
 
 
 newCalmState :: Int -> CalmEnhacementMap -> CalmState
-newCalmState start_calm cemap = CalmState cemap 0 start_calm
+newCalmState start_calm cemap = CalmState {
+   _restOfMap = cemap,
+   _currentOffset = 0,
+   _currentCalm = start_calm
+   }
 
 
 getCurrentCalm :: CalmState -> Int
