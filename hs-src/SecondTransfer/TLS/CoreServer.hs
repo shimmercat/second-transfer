@@ -416,7 +416,11 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io infligh
                               modifyMVar_ inflight $ \ inflight_hm -> let
                                   count = HS.lookupDefault 0 hashable_addr_strict inflight_hm
                                   new_count = count - 1
-                                  new_inflight = HS.insert hashable_addr_strict new_count inflight_hm
+                                  new_inflight = if new_count > 0
+                                    then
+                                      HS.insert hashable_addr_strict new_count inflight_hm
+                                    else
+                                      HS.delete hashable_addr_strict inflight_hm
                                 in return new_inflight
 
                            -- If I don't have a source address, proceed always. The lack
