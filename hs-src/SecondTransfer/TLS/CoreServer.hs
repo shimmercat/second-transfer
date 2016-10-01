@@ -352,6 +352,8 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io infligh
                       new_new_s = set liveSessions_S live_now_ s
                   new_new_s `seq` return new_new_s
 
+          limits_not_enabled = not $ connection_callbacks ^. ddosProtectionsEnabled_CoCa
+
       -- If the connection has been closed, we will get some sort of exception here.
       either_sock_addr <- E.try $ getSocketPeerAddress encrypted_io
       case either_sock_addr :: Either E.IOException NS.SockAddr of
@@ -371,7 +373,6 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io infligh
                       }
 
               -- If there are too many connections, drop this one
-
               proceed <- case hashable_addr of
                   Just hashable_addr_strict -> do
                       connections_now <- withMVar inflight $ \ inflight_hm -> let
@@ -384,7 +385,7 @@ tlsSessionHandler session_handler_state_mvar attendants ctx encrypted_io infligh
                   -- transport weirdiness.
                   Nothing -> return True
 
-              if proceed
+              if proceed || limits_not_enabled
                 then do
                   case hashable_addr of
                       Just hashable_addr_strict -> do
@@ -622,11 +623,13 @@ coreListen
          tls_session_handler either_aerr =
              case either_aerr of
                  Left connect_condition ->
+
                      case (conn_callbacks ^. logEvents_CoCa) of
                          Just lgfn -> lgfn $ AcceptError_CoEv connect_condition
-
                          Nothing -> return ()
+
                  Right good ->
+
                      case (conn_callbacks ^. serviceIsClosing_CoCa) of
                          Nothing ->
                              tlsSessionHandler state_mvar attendants ctx good inflight

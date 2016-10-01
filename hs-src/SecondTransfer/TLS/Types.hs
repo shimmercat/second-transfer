@@ -18,6 +18,7 @@ module SecondTransfer.TLS.Types (
                , logEvents_CoCa
                , blanketPlainTextIO_CoCa
                , serviceIsClosing_CoCa
+               , ddosProtectionsEnabled_CoCa
 
                , defaultConnectionCallbacks
 
@@ -103,7 +104,8 @@ type ServiceIsClosingCallback = IO Bool
 
 -- | Callbacks used by  client applications to get notified about interesting
 --   events happening at a connection level, or to get asked about things
---   (e.g, about if it is proper to accept a connection). These are used from CoreServer
+--   (e.g, about if it is proper to accept a connection).
+--  These are used from CoreServer
 data ConnectionCallbacks = ConnectionCallbacks {
     -- | Invoked after the connection is accepted, and after it is finished.
     _logEvents_CoCa            :: Maybe LogCallback
@@ -116,6 +118,10 @@ data ConnectionCallbacks = ConnectionCallbacks {
     --   is accepted. If True, the connection is rejected, the socket is
     --   closed and the thread finished
  , _serviceIsClosing_CoCa     :: Maybe ServiceIsClosingCallback
+
+    -- | DDoS protections enabled or disabled. We may change this in the
+    --   future to more granular things
+ , _ddosProtectionsEnabled_CoCa :: Bool
     }
 
 makeLenses ''ConnectionCallbacks
@@ -126,4 +132,5 @@ defaultConnectionCallbacks = ConnectionCallbacks {
     _logEvents_CoCa = Nothing
   , _blanketPlainTextIO_CoCa = Nothing
   , _serviceIsClosing_CoCa = Nothing
+  , _ddosProtectionsEnabled_CoCa = True
     }
