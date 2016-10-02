@@ -454,6 +454,7 @@ http1Method =
     <|> Ap.string "POST"
     <|> Ap.string "HEAD"
     <|> Ap.string "PUT"
+    <|> Ap.string "PATCH"
     <|> Ap.string "OPTIONS"
     <|> Ap.string "TRACE"
     <|> Ap.string "CONNECT"
@@ -739,6 +740,7 @@ validMethod mth | mth == "GET"     =  mth
                 | mth == "HEAD"    =  mth
                 | mth == "OPTIONS" =  mth
                 | mth == "PUT"     =  mth
+                | mth == "PATCH"     =  mth
                 | mth == "DELETE"  =  mth
                 | mth == "TRACE"   =  mth
                 | otherwise        = "GET"
@@ -747,6 +749,7 @@ validMethod mth | mth == "GET"     =  mth
 methodHasRequestBody :: B.ByteString -> Bool
 methodHasRequestBody mth | mth == "GET"     =  False
                          | mth == "POST"    =  True
+                         | mth == "PATCH"   =  True
                          | mth == "HEAD"    =  False
                          | mth == "OPTIONS" =  False
                          | mth == "PUT"     =  True
@@ -757,6 +760,7 @@ methodHasRequestBody mth | mth == "GET"     =  False
 
 methodHasRequestBody' :: HttpMethod -> Bool
 methodHasRequestBody' mth = case  mth of
+    Patch_HtM   -> True
     Get_HtM     ->  False
     Post_HtM    ->  True
     Head_HtM    ->  False
@@ -772,6 +776,7 @@ methodHasResponseBody mth | mth == "GET"     = True
                          | mth == "HEAD"    =  False
                          | mth == "OPTIONS" =  False
                          | mth == "PUT"     =  True
+                         | mth == "PATCH"   =  True
                          | mth == "DELETE"  =  True
                          | mth == "TRACE"   =  False
                          | otherwise        =  False
