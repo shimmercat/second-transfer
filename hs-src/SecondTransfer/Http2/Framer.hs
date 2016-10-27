@@ -180,6 +180,11 @@ instance ActivityMeteredSession SimpleSessionControl where
     sessionLastActivity (SimpleSessionControl (t,_button)) = return t
 
 
+-- | Notifies of deliveries with
+--   callback  (ordinal, byte_count)
+type DeliveryNotifyCallback =  (Int,  Int) -> FramerSession  ()
+
+
 -- | Wraps a session, provided that we get who will be taking care of the session
 --  and the session context.
 wrapSession :: SessionPayload -> SessionsContext -> Attendant
@@ -428,7 +433,7 @@ readNextFrame max_acceptable_size pull_action  = do
                                 yield . Left $ "CouldNotDecodeHTTP/2FramePayload"
 
 
--- This works by pulling bytes from the input side of the pipeline and converting them to frames.
+-- | This works by pulling bytes from the input side of the pipeline and converting them to frames.
 -- The frames are then put in the SessionInput. In the other end of the SessionInput they can be
 -- interpreted according to their HTTP/2 meaning.
 --
@@ -559,7 +564,6 @@ inputGatherer pull_action session_input = do
                 -- We may as well exit this thread
                return ()
 
-type DeliveryNotifyCallback =  GlobalStreamId -> Effect -> Int  -> FramerSession  ()
 
 -- | All the output frames come this way first
 outputGatherer :: SessionOutput -> FramerSession ()
@@ -580,22 +584,32 @@ outputGatherer session_output = do
     session_id <- view sessionIdAtFramer
 
     let
-       delivery_notify :: GlobalStreamId -> Effect -> Int  -> FramerSession  ()
-       delivery_notify stream_id effect ordinal =
-           liftIO $ do
-               case (frame_sent_report_callback, effect ^. fragmentDeliveryCallback_Ef ) of
-                   (Just c1, Just c2) -> liftIO $ do
+       delivery_notify :: GlobalStreamId -> Effect -> IO ( (Int, Int)  -> FramerSession  () )
+       delivery_notify stream_id effect = do
+           last_pos_ioref <- newIORef 0
+           case (frame_sent_report_callback, effect ^. fragmentDeliveryCallback_Ef ) of
+               (Just c1, Just c2) -> return $ \ (ordinal, byte_count) -> liftIO $ do
                        -- Here we invoke the client's callback.
                        when_delivered <- getTime Monotonic
                        c1 session_id stream_id ordinal when_delivered
-                       c2 ordinal when_delivered
-                   (Nothing, Just c2) -> liftIO $ do
+                       first_bytes <- readIORef last_pos_ioref
+                       let
+                           last_bytes = first_bytes + byte_count
+                       writeIORef last_pos_ioref last_bytes
+                       ordinal `seq` first_bytes `seq` last_bytes `seq`
+                           c2 when_delivered (ordinal, first_bytes, last_bytes)
+               (Nothing, Just c2) -> return $ \ (ordinal, byte_count) -> liftIO $ do
                        when_delivered <- getTime Monotonic
-                       c2 ordinal when_delivered
-                   (Just c1, Nothing) -> liftIO $ do
+                       first_bytes <- readIORef last_pos_ioref
+                       let
+                           last_bytes = first_bytes + byte_count
+                       writeIORef last_pos_ioref last_bytes
+                       ordinal `seq` first_bytes `seq` last_bytes `seq`
+                           c2 when_delivered (ordinal, first_bytes, last_bytes)
+               (Just c1, Nothing) -> return $ \ (ordinal, _byte_count) -> liftIO $ do
                        when_delivered <- getTime Monotonic
                        c1 session_id stream_id ordinal when_delivered
-                   (Nothing, Nothing) -> return ()
+               (Nothing, Nothing) -> return $ \ (_ordinal, _byte_count) -> return ()
 
     let
 
@@ -628,7 +642,8 @@ outputGatherer session_output = do
                        bs = serializeMany frames
                    -- Send the headers first
                    withHighPrioritySend bs
-                   startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify
+                   dn_instance <- liftIO $ delivery_notify stream_id effect
+                   startStreamOutputQueue effect stream_bytes_mvar stream_id dn_instance
                    cont
 
                PriorityTrain_StFB frames -> do
@@ -828,7 +843,7 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
                   priority = getCurrentCalm calm
               -- liftIO $ putStrLn $ "calm = " ++ show priority ++ " for stream " ++ show stream_id
               withNormalPrioritySend priority stream_id ordinal formatted
-              delivery_notify stream_id last_effect ordinal
+              delivery_notify (ordinal, 0)
               -- And just before returning, be sure to release the structures related to this
               -- stream
               finishFlowControlForStream stream_id
@@ -885,7 +900,7 @@ flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_
             withNormalPrioritySend priority stream_id ordinal formatted
             -- Notify any interested party about the frame being "delivered" (but it may still be at
             -- the latest queue)
-            delivery_notify stream_id last_effect ordinal
+            delivery_notify (ordinal, use_bytes)
             flowControlOutput
                 stream_id
                 (capacity - use_bytes)

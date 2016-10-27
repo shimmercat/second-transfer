@@ -216,10 +216,14 @@ data PushedStream = PushedStream {
 makeLenses ''PushedStream
 
 
--- | First argument is the ordinal of this data frame, second an approximation of when
---   the frame was delivered, according to the monotonic clock. Do not linger in this call,
---   it may delay some important thread
-type FragmentDeliveryCallback = Int -> TimeSpec -> IO ()
+-- | First argument is an approximation of when
+--   the frame was delivered, according to the monotonic clock.
+--   The tuple coming afterwards contains (ordinal, first_byte, after_last_byte),
+--   where `first_byte` says which is the index of the first byte just delivered, and
+--   `after_last_byte` is the index of the first byte to be delivered in the next packet,
+--   if there is one.
+--   Do not linger in this call,  it may delay some important thread
+type FragmentDeliveryCallback =  TimeSpec -> (Int, Int, Int) -> IO ()
 
 
 -- | Types of interrupt effects that can be signaled by aware workers. These include whole
@@ -238,7 +242,9 @@ data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway
 -- | Sometimes a response needs to be handled a bit specially,
 --   for example by reporting delivery details back to the worker
 data Effect = Effect {
-  -- | A callback to be called whenever a data-packet for this stream is .
+  -- | A callback to be called whenever a data-packet for this stream is delivered.
+  --   The arguments are a packet ordinal, a byte boundary pair of indices [first, last)
+  --  and a timespec
   _fragmentDeliveryCallback_Ef :: Maybe FragmentDeliveryCallback
 
   -- | In certain circunstances a stream can use an internal priority,
@@ -332,7 +338,8 @@ tupledPrincipalStreamToPrincipalStream (headers, pushed_streams, data_and_conclu
         _pushedStreams_PS = pushed_streams,
         _dataAndConclusion_PS = data_and_conclusion,
         _effect_PS = defaultEffects,
-        _label_PS = Nothing
+        _label_PS = Nothing,
+        _processingReport_PS = Nothing
       }
 
 requestToTupledRequest ::  Request -> TupledRequest
