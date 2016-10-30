@@ -165,7 +165,7 @@ module SecondTransfer(
     --
     -- | Use these functions to create your TLS-compliant
     --   HTTP/2 server in a snap.
-    , tlsServeWithALPN
+
 #ifndef BOTAN_DISABLED
     , botanTLS
 #endif

@@ -33,14 +33,6 @@ import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.Exception
 
 
--- | Error conditions that may happen sometimes upon
---   trying to accept a new connection
-data AcceptErrorCondition =
-     ResourceExhausted_AEC
-  |  Signal_AEC Int
-  |  Misc_AEC  String
-
-
 -- | IOCallbacks around an active socket
 data SocketIOCallbacks = SocketIOCallbacks {
     _socket_SS    :: NS.Socket
@@ -64,6 +56,8 @@ data SomeHasSocketPeer where
     -- = forall a . HasSocketPeer a => SomeHasSocketPeer a
     SomeHasSocketPeer :: HasSocketPeer a => a -> SomeHasSocketPeer
 
+
+instance PlainTextIO SocketIOCallbacks
 
 instance HasSocketPeer SocketIOCallbacks where
     getSocketPeerAddress s = NS.getPeerName $ s ^. socket_SS

@@ -2,14 +2,13 @@
              FunctionalDependencies,
              PartialTypeSignatures,
              OverloadedStrings,
+             GADTs,
              ScopedTypeVariables,
              TemplateHaskell
              #-}
 module SecondTransfer.TLS.CoreServer (
                -- * Simpler interfaces
-               -- These functions are simple enough but don't work with controllable
-               -- processes.
-                 tlsServeWithALPN
+                 flatAction
                , tlsServeWithALPNNSSockAddr
                --, tlsSessionHandler
                , tlsServeWithALPNUnderSOCKS5SockAddr
@@ -21,6 +20,7 @@ module SecondTransfer.TLS.CoreServer (
                , tlsServeWithALPNNSSockAddr_Prepare
                , tlsServeWithALPNNSSockAddr_Do
                , Socks5Hold
+               , AcceptOutcome (..)
 
                , tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
                , tlsServeWithALPNUnderSOCKS5SockAddr_Do
@@ -41,7 +41,7 @@ import qualified Control.Exception                                         as E
 --import           Control.Monad.IO.Class                                    (liftIO)
 import           Control.Monad                                             (when)
 import           Control.Lens                                              ( (^.), makeLenses, over, set )
-import           GHC.Stack
+-- import           GHC.Stack
 
 --import           Data.Conduit
 -- import qualified Data.Conduit                                              as Con(yield)
@@ -67,16 +67,15 @@ import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.TLS.Types
 import           SecondTransfer.IOCallbacks.SocketServer
 import           SecondTransfer.IOCallbacks.WrapSocket                     (
-                                                                           HasSocketPeer(..),
-                                                                           AcceptErrorCondition(..)
+                                                                           HasSocketPeer(..)
                                                                            )
 
 import           SecondTransfer.Socks5.Session                             (
-                                                                           -- tlsSOCKS5Serve,
                                                                            tlsSOCKS5Serve',
                                                                            initSocks5ServerState)
 import           SecondTransfer.Socks5.Types                               (Socks5ConnectionCallbacks)
-import           SecondTransfer.Exception                                  (forkIOExc, IOProblem)
+import           SecondTransfer.Exception                                  (forkIOExc, IOProblem,
+                                                                            ignoreException, threadKilled)
 
 import           SecondTransfer.Sessions.HashableSockAddr                  (hashableSockAddrFromNSSockAddr,
                                                                             HashableSockAddr
@@ -113,35 +112,157 @@ data NoStore
 
 instance TLSSessionStorage NoStore
 
--- | Convenience function to open a port and listen there for connections and
---   select protocols and so on.
-tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
-                 => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
-                                          --   of TLS backend to use during the invocation
-                 -> ConnectionCallbacks   -- ^ Control and log connections
-                 -> B.ByteString              -- ^ String with contents of certificate chain
-                 -> B.ByteString              -- ^ String with contents of PKCS #8 key
-                 -> String                -- ^ Name of the network interface
-                 -> NamedAttendants       -- ^ List of attendants and their handlers
-                 -> Int                   -- ^ Port to listen for connections
-                 -> IO ()
-tlsServeWithALPN proxy  conn_callbacks cert_filename key_filename interface_name attendants interface_port = do
-    -- let
-    --     tls_serve socket
-    listen_socket <- createAndBindListeningSocket interface_name interface_port
-    coreListen
-        proxy
-        conn_callbacks
-        cert_filename
-        key_filename
-        listen_socket
-        (tlsServe closing)
-        (Nothing :: Maybe NoStore)
-        attendants
-  where
-    closing = case conn_callbacks ^. serviceIsClosing_CoCa of
-        Just clbk -> clbk
-        Nothing -> (return False)
+
+
+-- | A special, limited session handler that will close the connection very quickly.
+flatAction :: forall plain . (PlainTextIO plain, HasSocketPeer plain) =>
+    MVar SessionHandlerState ->
+    Attendant  ->
+    plain  ->
+    MVar InFlightRegistry
+           -> IO ()
+flatAction session_handler_state_mvar attendant sio inflight = do
+    io_callbacks <- handshake sio
+    _ <- forkIOExc "clientThreadRedirector" .
+       ignoreException threadKilled () $ do
+
+          -- Get a new connection id... this is a pretty safe block, exceptions should
+          -- be uncommon here.
+          (new_conn_id, live_now) <- modifyMVar session_handler_state_mvar $ \ s -> do
+              let new_conn_id = s ^. nextConnId_S
+                  live_now_ = (s ^. liveSessions_S) + 1
+                  new_s = over nextConnId_S ( + 1 ) s
+                  new_new_s = live_now_ `seq` set liveSessions_S live_now_ new_s
+              return $  new_new_s `seq` (new_new_s, (new_conn_id, live_now_) )
+
+          connection_callbacks <- withMVar session_handler_state_mvar $ \ s -> do
+              return $ s ^. connCallbacks_S
+          let
+              log_events_maybe = connection_callbacks ^. logEvents_CoCa
+              log_event :: ConnectionEvent -> IO ()
+              log_event ev = case log_events_maybe of
+                  Nothing -> return ()
+                  Just c -> c ev
+              wconn_id = ConnectionId new_conn_id
+
+              report_minus_one_connection _mark = do
+                  log_event (Ended_CoEv wconn_id)
+                  -- putStrLn $ "mark:  " ++ _mark
+                  modifyMVar_ session_handler_state_mvar $ \ s -> do
+                      let
+                          live_now_ = (s ^. liveSessions_S) - 1
+                          new_new_s = set liveSessions_S live_now_ s
+                      new_new_s `seq` return new_new_s
+
+              limits_not_enabled = not $ connection_callbacks ^. ddosProtectionsEnabled_CoCa
+
+
+          either_sock_addr <- E.try $ getSocketPeerAddress sio
+
+          case either_sock_addr :: Either E.IOException NS.SockAddr of
+
+              Left _exc -> do
+                  report_minus_one_connection "no-peer"
+                  -- Close the connection
+                  io_callbacks ^. closeAction_IOC
+
+              Right sock_addr -> do
+                  let
+                      hashable_addr = hashableSockAddrFromNSSockAddr sock_addr
+                      connection_data = ConnectionData
+                          {
+                             _addr_CnD = hashable_addr
+                           , _connId_CnD = wconn_id
+                          }
+
+                  -- If there are too many connections, drop this one
+                  proceed <- case hashable_addr of
+                      Just hashable_addr_strict -> do
+                          connections_now <- withMVar inflight $ \ inflight_hm -> let
+                              count = HS.lookupDefault 0 hashable_addr_strict inflight_hm
+                            in return count
+                          return $ connections_now < maxHandshakesInTransit
+
+                      -- If I don't have a source address, proceed always. The lack
+                      -- of source address can be due to some SOCKS5 or strange
+                      -- transport weirdiness.
+                      Nothing -> return True
+
+                   -- Pass it to the attendant
+                  if proceed || limits_not_enabled
+                      then do
+                          case hashable_addr of
+                              Just hashable_addr_strict -> do
+                                  modifyMVar_ inflight $ \ inflight_hm -> let
+                                      count = HS.lookupDefault 0 hashable_addr_strict inflight_hm
+                                      new_count = count + 1
+                                      new_inflight = HS.insert hashable_addr_strict new_count inflight_hm
+                                    in return new_inflight
+                              Nothing -> return ()
+                          E.finally
+                               (attendant connection_data io_callbacks)
+                               (case hashable_addr of
+                                   Just hashable_addr_strict -> do
+                                       modifyMVar_ inflight $ \ inflight_hm -> let
+                                           count = HS.lookupDefault 0 hashable_addr_strict inflight_hm
+                                           new_count = count - 1
+                                           new_inflight = if new_count > 0
+                                             then
+                                               HS.insert hashable_addr_strict new_count inflight_hm
+                                             else
+                                               HS.delete hashable_addr_strict inflight_hm
+                                         in return new_inflight
+
+                                    -- If I don't have a source address, proceed always. The lack
+                                    -- of source address can be due to some SOCKS5 or strange
+                                    -- transport weirdiness.
+                                   Nothing -> return ()
+                               )
+                      else do
+                        -- Just close the connection, without adding a new one, but report
+                        -- the event
+                        plaintext_io_callbacks <- handshake sio
+                        log_event (TooManyInHandshake_CoEv sock_addr)
+                        plaintext_io_callbacks ^. closeAction_IOC
+                        report_minus_one_connection "too-many-from-same"
+    -- Let's create a thread killer for clients that hang along for too
+    -- much time.
+    _ <- forkIOExc "clientThreadKiller" $ do
+        -- TODO: Good place to have a tunable.
+        threadDelay 3000000
+        (io_callbacks ^. closeAction_IOC)
+    return ()
+
+
+-- -- | Convenience function to open a port and listen there for connections and
+-- --   select protocols and so on.
+-- tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
+--                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
+--                                           --   of TLS backend to use during the invocation
+--                  -> ConnectionCallbacks   -- ^ Control and log connections
+--                  -> B.ByteString              -- ^ String with contents of certificate chain
+--                  -> B.ByteString              -- ^ String with contents of PKCS #8 key
+--                  -> String                -- ^ Name of the network interface
+--                  -> NamedAttendants       -- ^ List of attendants and their handlers
+--                  -> Int                   -- ^ Port to listen for connections
+--                  -> IO ()
+-- tlsServeWithALPN proxy  conn_callbacks cert_filename key_filename interface_name attendants interface_port = do
+--     -- let
+--     --     tls_serve socket
+--     listen_socket <- createAndBindListeningSocket interface_name interface_port
+--     coreListen
+--         proxy
+--         conn_callbacks
+--         cert_filename
+--         key_filename
+--         listen_socket
+--         (tlsServe closing)
+--         (Nothing :: Maybe NoStore)
+--         attendants
+--   where
+--     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
+--         Just clbk -> clbk
+--         Nothing -> (return False)
 
 
 -- | Use a previously given network address
@@ -153,8 +274,9 @@ tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
                  -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
                  -> NamedAttendants        -- ^ List of attendants and their handlers
+                 -> Attendant
                  -> IO ()
-tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock_addr attendants = do
+tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock_addr attendants flat_attendant = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
     -- Close the socket if need comes
     coreListen
@@ -163,13 +285,21 @@ tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock
         cert_filename
         key_filename
         listen_socket
-        (tlsServe closing)
+        tls_serve --(tlsServe' closing)
         (Nothing :: Maybe NoStore)
         attendants
+        flat_attendant
   where
+    tls_serve =
+        let
+            x :: NS.Socket -> (AcceptOutcome SocketIOCallbacks TLSServerSocketIOCallbacks  -> IO () ) -> IO ()
+            x = (tlsServe' closing)
+        in x
+
     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
         Just clbk -> clbk
         Nothing -> (return False)
+
 
 
 data NormalTCPHold   = NormalTCPHold ( IO () )
@@ -205,10 +335,21 @@ tlsServeWithALPNNSSockAddr_Prepare
             cert_filename
             key_filename
             listen_socket
-            (tlsServe closing)
+            tls_serve
             maybe_resumption_store
             attendants
+            flat_attendant
   where
+    flat_attendant :: Attendant
+    flat_attendant _ _ =
+        error "PhantomFlatAttendantCalled"
+
+    tls_serve =
+        let
+            x :: NS.Socket -> (AcceptOutcome SocketIOCallbacks TLSServerSocketIOCallbacks  -> IO () ) -> IO ()
+            x = (tlsServe' closing)
+        in x
+
     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
         Just clbk -> clbk
         Nothing -> (return False)
@@ -228,6 +369,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx s
                  -> NS.SockAddr           -- ^ Address to bind to
                  -> NamedAttendants       -- ^ List of attendants and their handlers,
                  -> [B.ByteString]        -- ^ Names of "internal" hosts
+                 -> Attendant             -- ^ Flat attendant
                  -> Bool                  -- ^ Should I forward connection requests?
                  -> IO ()
 tlsServeWithALPNUnderSOCKS5SockAddr
@@ -239,6 +381,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr
     host_addr
     attendants
     internal_hosts
+    flat_attendant
     forward_no_internal = do
     let
         approver :: B.ByteString -> Bool
@@ -259,7 +402,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr
        (tlsSOCKS5Serve' socks5_state_mvar socks5_callbacks approver forward_no_internal)
        (Nothing :: Maybe NoStore)
        attendants
-
+       flat_attendant
 
 -- | Opaque hold type
 data Socks5Hold = Socks5Hold (IO ())
@@ -275,6 +418,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare ::   forall ctx session  . (TLSConte
                  -> NS.SockAddr           -- ^ Address to bind to
                  -> IO NamedAttendants    -- ^ List of attendants and their handlers, as it will be built
                  -> [B.ByteString]        -- ^ Names of "internal" hosts
+                 -> Attendant             -- ^ Flat attendant
                  -> Bool                  -- ^ Should I forward connection requests?
                  -> IO Socks5Hold
 tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
@@ -286,6 +430,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
     host_addr
     make_attendants
     internal_hosts
+    flat_attendant
     forward_no_internal = do
     let
         approver :: B.ByteString -> Bool
@@ -307,6 +452,7 @@ tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
                  forward_no_internal)
             (Nothing :: Maybe NoStore)
             attendants
+            flat_attendant
 
 
 tlsServeWithALPNUnderSOCKS5SockAddr_Do :: Socks5Hold -> IO ()
@@ -581,17 +727,20 @@ chooseProtocol _ = Http11_HPV
 
 
 coreListen ::
-           forall a ctx session b resumption_store .
-           (TLSContext ctx session, TLSServerIO b, HasSocketPeer b, TLSSessionStorage resumption_store)
+           forall a ctx session plain encrypted resumption_store .
+           (TLSContext ctx session, PlainTextIO plain, TLSServerIO encrypted,
+            HasSocketPeer encrypted, HasSocketPeer plain, TLSSessionStorage resumption_store)
          => (Proxy ctx )                      -- ^ This is a simple proxy type from Typeable that is used to select the type
                                               --   of TLS backend to use during the invocation
          -> ConnectionCallbacks               -- ^ Functions to log and control behaviour of the server
          -> B.ByteString                      -- ^ PEM-encoded certificate chain, in this string
          -> B.ByteString                      -- ^ PEM-encoded, un-encrypted PKCS #8 key in this string
          -> a                                 -- ^ An entity that is used to fork new handlers
-         -> ( a -> (Either AcceptErrorCondition b -> IO()) -> IO () )    -- ^ The fork-handling functionality
+         -> ( a -> (AcceptOutcome plain encrypted -> IO()) -> IO () )    -- ^ The fork-handling functionality
          -> Maybe resumption_store
          -> [(String, Attendant)]             -- ^ List of attendants and their handlers
+         -> Attendant                         -- ^ Special attendant for connections coming "flat", i.e.
+                                              --   which are not supposed to be wrapped in a TLS stack.
          -> IO ()
 coreListen
          _
@@ -602,7 +751,7 @@ coreListen
          session_forker
          resumption_store
          attendants
-
+         flat_attendant
   =   do
      let
          state = SessionHandlerState {
@@ -621,18 +770,35 @@ coreListen
          Just really_there     -> enableSessionResumption ctx really_there
          Nothing -> return False
      let
-         tls_session_handler :: forall w .
-             (TLSServerIO w, HasSocketPeer w) =>
-             Either AcceptErrorCondition w -> IO ()
+         tls_session_handler :: forall w io .
+             (PlainTextIO io,  TLSServerIO w, HasSocketPeer w, HasSocketPeer io) =>
+             AcceptOutcome io w -> IO ()
          tls_session_handler either_aerr =
              case either_aerr of
-                 Left connect_condition ->
+                 ErrorCondition_AOu connect_condition ->
 
                      case (conn_callbacks ^. logEvents_CoCa) of
                          Just lgfn -> lgfn $ AcceptError_CoEv connect_condition
                          Nothing -> return ()
 
-                 Right good ->
+                 Plain_AOu good ->
+                     case (conn_callbacks ^. serviceIsClosing_CoCa) of
+                         Nothing ->
+                             flatAction state_mvar flat_attendant good inflight
+
+                         Just clbk -> do
+                             service_is_closing <- clbk
+                             if not service_is_closing
+                               then
+                                 flatAction state_mvar flat_attendant good inflight
+                               else do
+                                 -- Close inmediately the connection, without doing
+                                 -- anything else
+                                 ioc <- handshake good
+                                 ioc ^. closeAction_IOC
+
+
+                 ForTLS_AOu good ->
 
                      case (conn_callbacks ^. serviceIsClosing_CoCa) of
                          Nothing ->
