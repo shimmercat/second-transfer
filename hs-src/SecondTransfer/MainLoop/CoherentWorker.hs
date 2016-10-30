@@ -210,6 +210,8 @@ data PushedStream = PushedStream {
   _dataAndConclusion_Psh :: DataAndConclusion,
   _label_Psh             :: Maybe B.ByteString,
   _priority_Psh          :: PriorityEffect
+  -- TODO:
+  -- _fragmentDeliveryCallback_Psh :: FragmentDeliveryCallback
   }
 
 
