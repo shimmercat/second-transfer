@@ -13,7 +13,7 @@ env1.Append(CPPPATH='#')
 if plat == 'linux2':
     sl = env1.SharedLibrary('botan_noavx',
        ['botan_all.cpp', 'botan_all_aesni.cpp',
-        'botan_all_rdseed.cpp', 'botan_all_rdrand.cpp', 'botan_all_internal.cpp',
+        'botan_all_rdseed.cpp', 'botan_all_rdrand.cpp', 
         'botan_all_ssse3.cpp'
        ],
        LINKFLAGS='-pthread'

@@ -34,12 +34,12 @@
 
 /*
 * This file was automatically generated running
-* './configure.py --amalgamation --disable-avx2'
+* './configure.py --amalgamation'
 *
 * Target
-*  - Compiler: clang++  -m64 -pthread -stdlib=libc++ -std=c++11 -D_REENTRANT -fstack-protector -O3
+*  - Compiler: g++  -m64 -pthread -fstack-protector -std=c++11 -D_REENTRANT -O3 -momit-leaf-frame-pointer
 *  - Arch: x86_64/x86_64
-*  - OS: darwin
+*  - OS: linux
 */
 
 #define BOTAN_VERSION_MAJOR 1
@@ -56,7 +56,7 @@
 #define BOTAN_INSTALL_PREFIX R"(/usr/local)"
 #define BOTAN_INSTALL_HEADER_DIR "include/botan-1.11"
 #define BOTAN_INSTALL_LIB_DIR "lib"
-#define BOTAN_LIB_LINK "-framework Security"
+#define BOTAN_LIB_LINK "-lrt"
 
 #ifndef BOTAN_DLL
   #define BOTAN_DLL __attribute__((visibility("default")))
@@ -208,13 +208,14 @@ Each read generates 32 bits of output
 #endif
 
 /* Target identification and feature test macros */
-#define BOTAN_TARGET_OS_IS_DARWIN
+#define BOTAN_TARGET_OS_IS_LINUX
 #define BOTAN_TARGET_OS_TYPE_IS_UNIX
+#define BOTAN_TARGET_OS_HAS_CLOCK_GETTIME
 #define BOTAN_TARGET_OS_HAS_DLOPEN
 #define BOTAN_TARGET_OS_HAS_FILESYSTEM
 #define BOTAN_TARGET_OS_HAS_GETTIMEOFDAY
 #define BOTAN_TARGET_OS_HAS_GMTIME_R
-#define BOTAN_TARGET_OS_HAS_MEMSET_S
+#define BOTAN_TARGET_OS_HAS_POSIX_MLOCK
 #define BOTAN_TARGET_OS_HAS_READDIR
 #define BOTAN_TARGET_OS_HAS_SOCKETS
 #define BOTAN_TARGET_OS_HAS_THREADS
@@ -222,6 +223,7 @@ Each read generates 32 bits of output
 
 #define BOTAN_TARGET_ARCH_IS_X86_64
 #define BOTAN_TARGET_SUPPORTS_AESNI
+#define BOTAN_TARGET_SUPPORTS_AVX2
 #define BOTAN_TARGET_SUPPORTS_BMI2
 #define BOTAN_TARGET_SUPPORTS_CLMUL
 #define BOTAN_TARGET_SUPPORTS_RDRAND
@@ -253,7 +255,7 @@ Each read generates 32 bits of output
   #define BOTAN_TARGET_CPU_DEFAULT_CACHE_LINE_SIZE 32
 #endif
 
-#define BOTAN_BUILD_COMPILER_IS_CLANG
+#define BOTAN_BUILD_COMPILER_IS_GCC
 
 
 #if defined(__GNUG__) || defined(__clang__)
@@ -384,7 +386,6 @@ Each read generates 32 bits of output
 #define BOTAN_HAS_EMSA_RAW 20131128
 #define BOTAN_HAS_EMSA_X931 20140118
 #define BOTAN_HAS_ENTROPY_SOURCE 20151120
-#define BOTAN_HAS_ENTROPY_SRC_DARWIN_SECRANDOM 20150925
 #define BOTAN_HAS_ENTROPY_SRC_DEV_RANDOM 20131128
 #define BOTAN_HAS_ENTROPY_SRC_EGD 20131128
 #define BOTAN_HAS_ENTROPY_SRC_PROC_WALKER 20131128
@@ -415,6 +416,7 @@ Each read generates 32 bits of output
 #define BOTAN_HAS_KECCAK 20131128
 #define BOTAN_HAS_KEYPAIR_TESTING 20131128
 #define BOTAN_HAS_LION 20131128
+#define BOTAN_HAS_LOCKING_ALLOCATOR 20131128
 #define BOTAN_HAS_MAC 20150626
 #define BOTAN_HAS_MCEIES 20150706
 #define BOTAN_HAS_MCELIECE 20150922
@@ -474,6 +476,7 @@ Each read generates 32 bits of output
 #define BOTAN_HAS_STREAM_CIPHER 20131128
 #define BOTAN_HAS_SYSTEM_RNG 20141202
 #define BOTAN_HAS_THREEFISH_512 20131224
+#define BOTAN_HAS_THREEFISH_512_AVX2 20160903
 #define BOTAN_HAS_THRESHOLD_SECRET_SHARING 20131128
 #define BOTAN_HAS_TIGER 20131128
 #define BOTAN_HAS_TLS 20150319
@@ -768,6 +771,83 @@ operator^=(std::vector<T, Alloc>& out,
 
 
 #if defined(BOTAN_HAS_LOCKING_ALLOCATOR)
+
+#if defined(BOTAN_TARGET_OS_HAS_THREADS)
+
+
+namespace Botan {
+
+template<typename T> using lock_guard_type = std::lock_guard<T>;
+typedef std::mutex mutex_type;
+
+}
+
+#elif defined(BOTAN_TARGET_OS_TYPE_IS_UNIKERNEL)
+
+// No threads
+
+namespace Botan {
+
+template<typename Mutex>
+class lock_guard
+   {
+   public:
+      explicit lock_guard(Mutex& m) : m_mutex(m)
+         { m_mutex.lock(); }
+
+      ~lock_guard() { m_mutex.unlock(); }
+
+      lock_guard(const lock_guard& other) = delete;
+      lock_guard& operator=(const lock_guard& other) = delete;
+   private:
+      Mutex& m_mutex;
+   };
+
+class noop_mutex
+   {
+   public:
+      void lock() {}
+      void unlock() {}
+   };
+
+typedef noop_mutex mutex_type;
+template<typename T> using lock_guard_type = lock_guard<T>;
+
+}
+
+#else
+  #error "Threads unexpectedly disabled in non unikernel build"
+#endif
+
+
+namespace Botan {
+
+class BOTAN_DLL mlock_allocator
+   {
+   public:
+      static mlock_allocator& instance();
+
+      void* allocate(size_t num_elems, size_t elem_size);
+
+      bool deallocate(void* p, size_t num_elems, size_t elem_size);
+
+      mlock_allocator(const mlock_allocator&) = delete;
+
+      mlock_allocator& operator=(const mlock_allocator&) = delete;
+
+   private:
+      mlock_allocator();
+
+      ~mlock_allocator();
+
+      mutex_type m_mutex;
+      std::vector<std::pair<size_t, size_t>> m_freelist;
+      byte* m_pool = nullptr;
+      size_t m_poolsize = 0;
+   };
+
+}
+
 #endif
 
 namespace Botan {
@@ -3748,54 +3828,6 @@ class BOTAN_DLL Entropy_Sources final
    };
 
 }
-
-
-#if defined(BOTAN_TARGET_OS_HAS_THREADS)
-
-
-namespace Botan {
-
-template<typename T> using lock_guard_type = std::lock_guard<T>;
-typedef std::mutex mutex_type;
-
-}
-
-#elif defined(BOTAN_TARGET_OS_TYPE_IS_UNIKERNEL)
-
-// No threads
-
-namespace Botan {
-
-template<typename Mutex>
-class lock_guard
-   {
-   public:
-      explicit lock_guard(Mutex& m) : m_mutex(m)
-         { m_mutex.lock(); }
-
-      ~lock_guard() { m_mutex.unlock(); }
-
-      lock_guard(const lock_guard& other) = delete;
-      lock_guard& operator=(const lock_guard& other) = delete;
-   private:
-      Mutex& m_mutex;
-   };
-
-class noop_mutex
-   {
-   public:
-      void lock() {}
-      void unlock() {}
-   };
-
-typedef noop_mutex mutex_type;
-template<typename T> using lock_guard_type = lock_guard<T>;
-
-}
-
-#else
-  #error "Threads unexpectedly disabled in non unikernel build"
-#endif
 
 
 namespace Botan {
