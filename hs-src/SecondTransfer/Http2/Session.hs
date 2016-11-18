@@ -64,6 +64,7 @@ import           Data.Conduit
 import qualified Data.HashTable.IO                      as H
 import qualified Data.IntSet                            as NS
 import           Data.Maybe                             (isJust)
+import qualified Data.Map.Strict                        as Dm
 import qualified Data.IORef                             as DIO
 import           Data.Typeable
 
@@ -289,99 +290,101 @@ instance ClientPetitioner ClientState where
 
 -------------- end of Regarding client state
 
--- SessionData is the actual state of the session, including the channels to the framer
+-- |SessionData is the actual state of the session, including the channels to the framer
 -- outside.
 --
--- NH2.Frame != Frame
 data SessionData = SessionData {
-    -- ATTENTION: Ignore the warning coming from here for now
+    -- | ATTENTION: Ignore the warning coming from here for now
     _sessionsContext             :: SessionsContext
 
     ,_sessionInput               :: Chan TT.SessionInputCommand
 
-    -- We need to lock this channel occassionally so that we can order multiple
+    -- | We need to lock this channel occassionally so that we can order multiple
     -- header frames properly....that's the reason for the outer MVar
     --
     --  TODO: This outer MVar is no longer needed, since multi-headers and
     --  and such are handled specially now . REMOVE!
     ,_sessionOutput              :: MVar SessionOutputChannelAbstraction
 
-    -- Use to encode
+    -- | Use to encode
     ,_toEncodeHeaders            :: MVar HP.DynamicTable
 
-    -- And used to decode
+    -- | And used to decode
     ,_toDecodeHeaders            :: MVar HP.DynamicTable
 
-    -- While I'm receiving headers, anything which
+    -- | While I'm receiving headers, anything which
     -- is not a header should end in the connection being
     -- closed
     ,_receivingHeaders           :: MVar (Maybe Int)
 
-    -- _lastGoodStream is used both to report the last good stream in the
+    -- | _lastGoodStream is used both to report the last good stream in the
     -- GoAwayFrame and to keep track of streams oppened by the client. In
     -- other words, it contains the stream_id of the last valid client
     -- stream and is updated as soon as the first frame of that stream is
     -- received.
     ,_lastGoodStream             :: MVar GlobalStreamId
 
-    -- Used for decoding the headers... actually, this dictionary should
+    -- | Used for decoding the headers... actually, this dictionary should
     -- even contain just one entry... BIG TODO!!!
     ,_stream2HeaderBlockFragment :: MVar Bu.Builder
 
-    -- Used for worker threads... this is actually a pre-filled template
+    -- | Used for worker threads... this is actually a pre-filled template
     -- I make copies of it in different contexts, and as needed.
     ,_forWorkerThread            :: WorkerThreadEnvironment
 
-    -- When acting as a server, this is the handler for processing requests
+    -- | When acting as a server, this is the handler for processing requests
     ,_awareWorker                :: AwareWorker
 
-    -- When acting as a client, this is where new requests are taken
+    -- | When acting as a client, this is where new requests are taken
     -- from
     ,_simpleClient               :: ClientState
 
-    -- Some streams may be cancelled
+    -- | Some streams may be cancelled
     ,_streamsCancelled           :: MVar NS.IntSet
 
-    -- Data input mechanism corresponding to some threads
+    -- | Data input mechanism corresponding to some threads
     ,_stream2PostInputMechanism  :: HashTable Int PostInputMechanism
 
-    -- Worker thread register. This is a dictionary from stream id to
+    -- | Worker thread register. This is a dictionary from stream id to
     -- the ThreadId of the thread with the worker thread. I use this to
     -- raise asynchronous exceptions in the worker thread if the stream
     -- is cancelled by the client. This way we get early finalization.
     -- Notice that ThreadIds here retain the thread's stack in place.
     ,_stream2WorkerThread        :: HashTable Int ThreadId
 
-    -- Use to retrieve/set the session id
+    -- | Use to retrieve/set the session id
     ,_sessionIdAtSession         :: ! Int
 
-    -- And used to keep peer session settings
+    -- | And used to keep peer session settings
     ,_sessionSettings            :: SessionSettings
 
-    -- What is the next stream available for push?
+    -- | What is the next stream available for push?
     ,_nextPushStream             :: MVar Int
 
-    -- What role does this session has?
+    -- | What role does this session has?
     ,_sessionRole                :: SessionRole
 
-    -- When did we start this session?
+    -- | When did we start this session?
     ,_startTime                  :: TimeSpec
 
-    -- The address of the peer.
+    -- | The address of the peer.
     ,_peerAddress                :: Maybe HashableSockAddr
 
-    -- Used to decide what to do when some exceptions bubble
+    -- | Used to decide what to do when some exceptions bubble
     ,_sessionIsEnding            :: DIO.IORef Bool
 
-    -- Used to store latency reports
+    -- | Used to store latency reports
     ,_latencyReports             :: MVar [(Int, Double)]
 
-    -- Used to store information about an emitted ping
+    -- | Used to store information about an emitted ping
     -- frame in the connection
     ,_emittedPings               :: MVar [(Int, TimeSpec)]
 
-    -- Bookeep the state of the streams
-    , _streamStateTable           :: StreamStateTable
+    -- | Bookeep the state of the streams
+    , _streamStateTable          :: StreamStateTable
+
+    -- | Passed up to the worker
+    , _sessionStore              :: MVar SessionStore
     }
 
 
@@ -478,6 +481,7 @@ http2Session
     -- Empty initial latency report
     latency_reports           <- newMVar []
     emitted_pings             <- newMVar []
+    session_store             <- newMVar Dm.empty
 
     stream_state_table        <- H.newSized 100
 
@@ -1254,6 +1258,7 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
     maybe_hashable_addr       <- view peerAddress
     stream2workerthread       <- view stream2WorkerThread
     session_input             <- view sessionInput
+    the_session_store         <- view sessionStore
     coherent_worker           <- view awareWorker
     -- Add any extra headers, on demand
     --headers_extra_good      <- addExtraHeaders good_headers
@@ -1295,7 +1300,8 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
             _anouncedProtocols_Pr = Nothing,
             _peerAddress_Pr = maybe_hashable_addr,
             _pushIsEnabled_Pr = push_enabled,
-            _sessionLatencyRegister_Pr = latency_report
+            _sessionLatencyRegister_Pr = latency_report,
+            _sessionStore_Pr = the_session_store
             }
         request' = Request {
             _headers_RQ = header_list_after,

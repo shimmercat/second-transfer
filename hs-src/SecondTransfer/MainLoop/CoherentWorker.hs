@@ -32,6 +32,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , HttpProtocolVersion(..)
     , HashableSockAddr(..)
     , ProcessingReport(..)
+    , SessionStore
 
     , headers_RQ
     , inputData_RQ
@@ -80,6 +81,9 @@ import qualified Data.ByteString                       as B
 import           Data.Conduit
 --import           Data.Foldable                         (find)
 import           System.Clock                          (TimeSpec)
+import           Control.Concurrent                    (MVar)
+import qualified Data.Map.Strict                       as Dm
+import qualified Data.Dynamic                          as DD
 
 import           SimpleHttpHeadersHq
 
@@ -106,13 +110,24 @@ type InputDataStream = Source AwareWorkerStack B.ByteString
 type SessionLatencyRegister = [(Int, Double)]
 
 
+-- | A generic store of things to live in the session. This is usefull to tie
+--   the lifetime of objects to the session, and to avoid global locks in the
+--   server for variables indexed on the session id.
+--
+--   This store is to be used by  AwareWorkers processing requests. The keys
+--   in the map are internally assigned numbers.
+--
+--   A session is understood as state data associated to a single TCP connection.
+type SessionStore = Dm.Map Int DD.Dynamic
+
+
 -- | Data related to the request
 data Perception = Perception {
     -- | The HTTP/2 stream id. Or the serial number of the request in an
     -- HTTP/1.1 session.
     _streamId_Pr :: Int,
     -- | A number uniquely identifying the session. This number is unique and
-    --   the same for each TPC connection that a client opens using a given protocol.
+    --   the same for each TCP connection that a client opens using a given protocol.
     _sessionId_Pr :: Int,
     -- | Monotonic time close to when the request was first seen in
     -- the processing pipeline.
@@ -126,7 +141,11 @@ data Perception = Perception {
     -- | Say if this connection enables Push
     _pushIsEnabled_Pr    :: Bool,
     -- | Records any values of latencies reported for this session
-    _sessionLatencyRegister_Pr :: SessionLatencyRegister
+    _sessionLatencyRegister_Pr :: SessionLatencyRegister,
+    -- | Gives access to the user-accessible session store. You can use the mvar
+    --   to lock and modify the session, but don't linger on that, as it may break
+    --   other streams.
+    _sessionStore_Pr     :: MVar SessionStore
   }
 
 makeLenses ''Perception
@@ -142,6 +161,7 @@ defaultPerception = Perception {
   , _peerAddress_Pr = Nothing
   , _pushIsEnabled_Pr = False
   , _sessionLatencyRegister_Pr = []
+  , _sessionStore_Pr = error "NoSessionStore"
   }
 
 

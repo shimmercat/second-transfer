@@ -13,7 +13,7 @@ import           Control.Exception                       (
                                                           Handler      (..),
                                                           AsyncException
                                                          )
---import           Control.Concurrent                      (forkIO)
+import           Control.Concurrent                      (newMVar, MVar)
 import           Control.Monad.IO.Class                  (liftIO, MonadIO)
 import           Control.Monad                           (when)
 import qualified Control.Monad.Trans.Resource            as ReT
@@ -26,7 +26,7 @@ import           Data.Conduit
 import qualified Data.Conduit.List                       as CL
 import           Data.IORef
 import qualified Data.Attoparsec.ByteString              as Ap
--- import           Data.Monoid                            (mconcat, mappend)
+import qualified Data.Map.Strict                         as Dm
 
 import           SimpleHttpHeadersHq
 
@@ -91,7 +91,9 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                      -- putStrLn "Warning, created session without registering it"
                      return ()
 
-            go started_time new_session_tag (Just "") 1
+            the_session_store <- newMVar Dm.empty
+
+            go started_time new_session_tag (Just "") 1 the_session_store
         return ()
   where
     maybe_hashable_addr = connection_info ^. addr_CnD
@@ -116,18 +118,28 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                  (sessionsConfig . sessionsCallbacks . newSessionCallback_SC)
             )
 
-    go :: TimeSpec -> Int -> Maybe LB.ByteString -> Int -> IO ()
-    go started_time session_tag (Just leftovers) reuse_no = do
-        maybe_leftovers <- add_data newIncrementalHttp1Parser leftovers session_tag reuse_no
-        go started_time session_tag maybe_leftovers (reuse_no + 1)
+    go :: TimeSpec -> Int -> Maybe LB.ByteString -> Int -> MVar SessionStore -> IO ()
+    go started_time session_tag (Just leftovers) reuse_no the_session_store = do
+        maybe_leftovers <-
+            add_data
+                newIncrementalHttp1Parser
+                leftovers session_tag
+                reuse_no
+                the_session_store
+        go started_time session_tag maybe_leftovers (reuse_no + 1) the_session_store
 
-    go _ _ Nothing _  =
+    go _ _ Nothing _  _ =
         return ()
 
     -- This function will invoke itself as long as data is coming for the currently-being-parsed
     -- request/response.
-    add_data :: IncrementalHttp1Parser  -> LB.ByteString -> Int -> Int -> IO (Maybe LB.ByteString)
-    add_data parser bytes session_tag reuse_no = do
+    add_data ::
+        IncrementalHttp1Parser  ->
+        LB.ByteString ->
+        Int ->
+        Int ->
+        MVar SessionStore -> IO (Maybe LB.ByteString)
+    add_data parser bytes session_tag reuse_no the_session_store = do
         let
             completion = addBytes parser bytes
             -- completion = addBytes parser $ traceShow ("At session " ++ (show session_tag) ++ " Received: " ++ (unpack bytes) ) bytes
@@ -147,7 +159,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
                         -- possible
                         new_bytes <- best_effort_pull_action True
-                        add_data new_parser new_bytes session_tag reuse_no
+                        add_data new_parser new_bytes session_tag reuse_no the_session_store
                     )
                     [
                         Handler ( (\ _e -> do
@@ -187,7 +199,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _anouncedProtocols_Pr      = Nothing,
                           _peerAddress_Pr            = maybe_hashable_addr,
                           _pushIsEnabled_Pr          = False,
-                          _sessionLatencyRegister_Pr = []
+                          _sessionLatencyRegister_Pr = [],
+                          _sessionStore_Pr           = the_session_store
                         }
                     }
                 ReT.runResourceT $ answer_by_principal_stream principal_stream
@@ -226,12 +239,12 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _anouncedProtocols_Pr      = Nothing,
                           _peerAddress_Pr            = maybe_hashable_addr,
                           _pushIsEnabled_Pr          = False,
-                          _sessionLatencyRegister_Pr = []
+                          _sessionLatencyRegister_Pr = [],
+                          _sessionStore_Pr           = the_session_store
                         }
                     }
                 ReT.runResourceT $ answer_by_principal_stream principal_stream
                 return $ Just ""
-
 
     counting_read :: LB.ByteString -> Int -> IORef LB.ByteString -> Source IO B.ByteString
     counting_read leftovers n set_leftovers = do
