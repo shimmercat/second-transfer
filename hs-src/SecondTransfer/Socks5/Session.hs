@@ -37,8 +37,7 @@ import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.IOCallbacks.SocketServer
 import           SecondTransfer.IOCallbacks.Coupling                (couple)
 import           SecondTransfer.IOCallbacks.WrapSocket              (
-                                                                     HasSocketPeer(..),
-                                                                     AcceptErrorCondition
+                                                                     HasSocketPeer(..)
                                                                      )
 
 -- For debugging purposes
@@ -54,7 +53,7 @@ initSocks5ServerState :: Socks5ServerState
 initSocks5ServerState = Socks5ServerState 0
 
 data ConnectOrForward =
-    Connect_COF B.ByteString IOCallbacks IndicatedAddress
+    Connect_COF B.ByteString IOCallbacks IndicatedAddress Word16
   | Forward_COF B.ByteString Word16
   | Drop_COF B.ByteString
 
@@ -122,7 +121,7 @@ negotiateSocksAndForward approver socks_here =
                     named_host = case address of
                         DomainName_IA name -> name
                         _  -> E.throw . SOCKS5ProtocolException $ "UnsupportedAddress " ++ show address
-                if  approver named_host && port == 443 then
+                if  approver named_host && (port == 443 || port == 80) then
                     do
                         -- First I need to answer to the client that we are happy and ready
                         let
@@ -137,7 +136,7 @@ negotiateSocksAndForward approver socks_here =
                         -- Now that I have the attendant, let's just activate it ...
 
                         -- CORRECT WAY:
-                        return $ Connect_COF named_host socks_here address
+                        return $ Connect_COF named_host socks_here address port
 
                     else do
                         -- Logging? We need to get that real right.
@@ -215,7 +214,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                 -- /let
                 case address of
                     DomainName_IA named_host
-                      | target_port_number == 443 ->
+                      | (target_port_number == 443 || target_port_number == 80) ->
                             if  approver named_host
                               then do
                                 -- First I need to answer to the client that we are happy and ready
@@ -229,7 +228,7 @@ negotiateSocksForwardOrConnect approver socks_here =
                                         }
                                 ps putServerReply_Packet server_reply
                                 -- Now that I have the attendant, let's just activate it ...
-                                return $ Connect_COF named_host socks_here address
+                                return $ Connect_COF named_host socks_here address target_port_number
                               else do
                                 -- Forward to an external host
                                 externalConnectProcessing
@@ -338,7 +337,7 @@ makeLenses ''TLSServerSOCKS5Callbacks
 instance IOChannels TLSServerSOCKS5Callbacks where
     handshake s = handshake (s ^. socket_S5)
 
-
+instance PlainTextIO TLSServerSOCKS5Callbacks
 instance TLSEncryptedIO TLSServerSOCKS5Callbacks
 instance TLSServerIO TLSServerSOCKS5Callbacks
 instance HasSocketPeer TLSServerSOCKS5Callbacks where
@@ -358,7 +357,7 @@ tlsSOCKS5Serve' ::
  -> (B.ByteString -> Bool)
  -> Bool
  -> NS.Socket
- -> ( Either AcceptErrorCondition TLSServerSOCKS5Callbacks -> IO () )
+ -> ( AcceptOutcome TLSServerSOCKS5Callbacks  TLSServerSOCKS5Callbacks -> IO () )
  -> IO ()
 tlsSOCKS5Serve' s5s_mvar socks5_callbacks approver forward_connections listen_socket onsocks5_action =
      tcpServe listen_socket service_is_closing socks_action
@@ -381,7 +380,7 @@ tlsSOCKS5Serve' s5s_mvar socks5_callbacks approver forward_connections listen_so
          case (socks5_callbacks ^. logEvents_S5CC) of
              Nothing -> return ()
              Just lgfn -> lgfn $ AcceptCondition_S5Ev accept_condition
-         onsocks5_action $ Left accept_condition
+         onsocks5_action $ ErrorCondition_AOu accept_condition
 
      process_connection active_socket = do
          conn_id <- modifyMVar s5s_mvar $ \ s5s -> do
@@ -412,14 +411,18 @@ tlsSOCKS5Serve' s5s_mvar socks5_callbacks approver forward_connections listen_so
                            then negotiateSocksForwardOrConnect approver io_callbacks
                            else negotiateSocksAndForward       approver io_callbacks
                      case maybe_negotiated_io of
-                         Connect_COF fate _negotiated_io address -> do
+                         Connect_COF fate _negotiated_io address port -> do
                              let
                                  tls_server_socks5_callbacks = TLSServerSOCKS5Callbacks {
                                      _socket_S5 = socket_io_callbacks,
                                      _targetAddress_S5 = address
                                      }
                              log_event $ HandlingHere_S5Ev fate wconn_id
-                             onsocks5_action . Right $ tls_server_socks5_callbacks
+                             if port == 443
+                               then
+                                 onsocks5_action . ForTLS_AOu $ tls_server_socks5_callbacks
+                               else
+                                 onsocks5_action . Plain_AOu $ tls_server_socks5_callbacks
                          Drop_COF fate -> do
                              log_event $ Dropped_S5Ev fate wconn_id
                              (io_callbacks ^. closeAction_IOC)

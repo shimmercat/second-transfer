@@ -2,297 +2,17 @@
 #ifndef BOTAN_AMALGAMATION_INTERNAL_H__
 #define BOTAN_AMALGAMATION_INTERNAL_H__
 
-#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-
-#if defined(_MSC_VER) && (_MSC_VER <= 1800)
-
-   #define BOTAN_WORKAROUND_GH_321
-   #define NOMINMAX 1
-   #define WIN32_LEAN_AND_MEAN 1
-   #include <windows.h>
-
-#endif
-
-namespace Botan {
-
-#if defined(BOTAN_WORKAROUND_GH_321)
-
-class WinCS_Mutex
-   {
-   public:
-      WinCS_Mutex()
-         {
-         ::InitializeCriticalSection(&m_cs);
-         }
-
-      ~WinCS_Mutex()
-         {
-         ::DeleteCriticalSection(&m_cs);
-         }
-
-      void lock()
-         {
-         ::EnterCriticalSection(&m_cs);
-         }
-
-      void unlock()
-         {
-         ::LeaveCriticalSection(&m_cs);
-         }
-
-   private:
-      CRITICAL_SECTION m_cs;
-   };
-
-#endif
-
-template<typename T>
-class Algo_Registry
-   {
-   public:
-      typedef typename T::Spec Spec;
-
-      typedef std::function<T* (const Spec&)> maker_fn;
-
-      static Algo_Registry<T>& global_registry()
-         {
-         static Algo_Registry<T> g_registry;
-         return g_registry;
-         }
-
-      void add(const std::string& name, const std::string& provider, maker_fn fn, byte pref)
-         {
-         std::lock_guard<mutex> lock(m_mutex);
-         if(!m_algo_info[name].add_provider(provider, fn, pref))
-            throw Exception("Duplicated registration of " + name + "/" + provider);
-         }
-
-      std::vector<std::string> providers_of(const Spec& spec)
-         {
-         std::lock_guard<mutex> lock(m_mutex);
-         auto i = m_algo_info.find(spec.algo_name());
-         if(i != m_algo_info.end())
-            return i->second.providers();
-         return std::vector<std::string>();
-         }
-
-      void set_provider_preference(const Spec& spec, const std::string& provider, byte pref)
-         {
-         std::lock_guard<mutex> lock(m_mutex);
-         auto i = m_algo_info.find(spec.algo_name());
-         if(i != m_algo_info.end())
-            i->second.set_pref(provider, pref);
-         }
-
-      T* make(const Spec& spec, const std::string& provider = "")
-         {
-         const std::vector<maker_fn> makers = get_makers(spec, provider);
-
-         try
-            {
-            for(auto&& maker : makers)
-               {
-               if(T* t = maker(spec))
-                  return t;
-               }
-            }
-         catch(std::exception& e)
-            {
-            throw Lookup_Error("Creating '" + spec.as_string() + "' failed: " + e.what());
-            }
-
-         return nullptr;
-         }
-
-      class Add
-         {
-         public:
-            Add(const std::string& basename, maker_fn fn, const std::string& provider, byte pref)
-               {
-               Algo_Registry<T>::global_registry().add(basename, provider, fn, pref);
-               }
-
-            Add(bool cond, const std::string& basename, maker_fn fn, const std::string& provider, byte pref)
-               {
-               if(cond)
-                  Algo_Registry<T>::global_registry().add(basename, provider, fn, pref);
-               }
-         };
-
-   private:
-
-#if defined(BOTAN_WORKAROUND_GH_321)
-      using mutex = WinCS_Mutex;
-#else
-      using mutex = std::mutex;
-#endif
-
-      Algo_Registry()  { }
-
-      std::vector<maker_fn> get_makers(const Spec& spec, const std::string& provider)
-         {
-         std::lock_guard<mutex> lock(m_mutex);
-         return m_algo_info[spec.algo_name()].get_makers(provider);
-         }
-
-      struct Algo_Info
-         {
-         public:
-            bool add_provider(const std::string& provider, maker_fn fn, byte pref)
-               {
-               if(m_maker_fns.count(provider) > 0)
-                  return false;
-
-               m_maker_fns[provider] = fn;
-               m_prefs.insert(std::make_pair(pref, provider));
-               return true;
-               }
-
-            std::vector<std::string> providers() const
-               {
-               std::vector<std::string> v;
-               for(auto&& k : m_prefs)
-                  v.push_back(k.second);
-               return v;
-               }
-
-            void set_pref(const std::string& provider, byte pref)
-               {
-               auto i = m_prefs.begin();
-               while(i != m_prefs.end())
-                  {
-                  if(i->second == provider)
-                     i = m_prefs.erase(i);
-                  else
-                     ++i;
-                  }
-               m_prefs.insert(std::make_pair(pref, provider));
-               }
-
-            std::vector<maker_fn> get_makers(const std::string& req_provider)
-               {
-               std::vector<maker_fn> r;
-
-               if(!req_provider.empty())
-                  {
-                  // find one explicit provider requested by user or fail
-                  auto i = m_maker_fns.find(req_provider);
-                  if(i != m_maker_fns.end())
-                     r.push_back(i->second);
-                  }
-               else
-                  {
-                  for(auto&& pref : m_prefs)
-                     r.push_back(m_maker_fns[pref.second]);
-                  }
-
-               return r;
-               }
-         private:
-            std::multimap<byte, std::string, std::greater<byte>> m_prefs;
-            std::unordered_map<std::string, maker_fn> m_maker_fns;
-         };
-
-      mutex m_mutex;
-      std::unordered_map<std::string, Algo_Info> m_algo_info;
-   };
-
-template<typename T> T*
-make_a(const typename T::Spec& spec, const std::string& provider = "")
-   {
-   return Algo_Registry<T>::global_registry().make(spec, provider);
-   }
-
-template<typename T> std::vector<std::string> providers_of(const typename T::Spec& spec)
-   {
-   return Algo_Registry<T>::global_registry().providers_of(spec);
-   }
-
-template<typename T> T*
-make_new_T(const typename Algo_Registry<T>::Spec& spec)
-   {
-   if(spec.arg_count() == 0)
-      return new T;
-   return nullptr;
-   }
-
-template<typename T, size_t DEF_VAL> T*
-make_new_T_1len(const typename Algo_Registry<T>::Spec& spec)
-   {
-   return new T(spec.arg_as_integer(0, DEF_VAL));
-   }
-
-template<typename T, size_t DEF1, size_t DEF2> T*
-make_new_T_2len(const typename Algo_Registry<T>::Spec& spec)
-   {
-   return new T(spec.arg_as_integer(0, DEF1), spec.arg_as_integer(1, DEF2));
-   }
-
-template<typename T> T*
-make_new_T_1str(const typename Algo_Registry<T>::Spec& spec, const std::string& def)
-   {
-   return new T(spec.arg(0, def));
-   }
-
-template<typename T> T*
-make_new_T_1str_req(const typename Algo_Registry<T>::Spec& spec)
-   {
-   return new T(spec.arg(0));
-   }
-
-template<typename T, typename X> T*
-make_new_T_1X(const typename Algo_Registry<T>::Spec& spec)
-   {
-   std::unique_ptr<X> x(Algo_Registry<X>::global_registry().make(Botan::SCAN_Name(spec.arg(0))));
-   if(!x)
-      throw Exception(spec.arg(0));
-   return new T(x.release());
-   }
-
-#define BOTAN_REGISTER_TYPE(T, type, name, maker, provider, pref)        \
-   namespace { Algo_Registry<T>::Add g_ ## type ## _reg(name, maker, provider, pref); } \
-   BOTAN_FORCE_SEMICOLON
-
-#define BOTAN_REGISTER_TYPE_COND(cond, T, type, name, maker, provider, pref) \
-   namespace { Algo_Registry<T>::Add g_ ## type ## _reg(cond, name, maker, provider, pref); } \
-   BOTAN_FORCE_SEMICOLON
-
-#define BOTAN_DEFAULT_ALGORITHM_PRIO 100
-#define BOTAN_SIMD_ALGORITHM_PRIO    110
-
-#define BOTAN_REGISTER_NAMED_T(T, name, type, maker)                 \
-   BOTAN_REGISTER_TYPE(T, type, name, maker, "base", BOTAN_DEFAULT_ALGORITHM_PRIO)
-
-#define BOTAN_REGISTER_T(T, type, maker)                                \
-   BOTAN_REGISTER_TYPE(T, type, #type, maker, "base", BOTAN_DEFAULT_ALGORITHM_PRIO)
-
-#define BOTAN_REGISTER_T_NOARGS(T, type) \
-   BOTAN_REGISTER_TYPE(T, type, #type, make_new_T<type>, "base", BOTAN_DEFAULT_ALGORITHM_PRIO)
-#define BOTAN_REGISTER_T_1LEN(T, type, def) \
-   BOTAN_REGISTER_TYPE(T, type, #type, (make_new_T_1len<type,def>), "base", BOTAN_DEFAULT_ALGORITHM_PRIO)
-
-#define BOTAN_REGISTER_NAMED_T_NOARGS(T, type, name, provider) \
-   BOTAN_REGISTER_TYPE(T, type, name, make_new_T<type>, provider, BOTAN_DEFAULT_ALGORITHM_PRIO)
-#define BOTAN_COND_REGISTER_NAMED_T_NOARGS(cond, T, type, name, provider, pref) \
-   BOTAN_REGISTER_TYPE_COND(cond, T, type, name, make_new_T<type>, provider, pref)
-
-#define BOTAN_REGISTER_NAMED_T_2LEN(T, type, name, provider, len1, len2) \
-   BOTAN_REGISTER_TYPE(T, type, name, (make_new_T_2len<type,len1,len2>), provider, BOTAN_DEFAULT_ALGORITHM_PRIO)
-
-}
 
 
 namespace Botan {
@@ -709,10 +429,6 @@ class Zlib_Style_Stream : public Compression_Stream
       std::unique_ptr<Compression_Alloc_Info> m_allocs;
    };
 
-#define BOTAN_REGISTER_COMPRESSION(C, D) \
-   BOTAN_REGISTER_T_NOARGS(Compression_Algorithm, C); \
-   BOTAN_REGISTER_T_NOARGS(Decompression_Algorithm, D)
-
 }
 
 
@@ -917,7 +633,7 @@ class Darwin_SecRandom final : public Entropy_Source
    public:
       std::string name() const override { return "darwin_secrandom"; }
 
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
    };
 
 }
@@ -982,13 +698,14 @@ class Device_EntropySource final : public Entropy_Source
    public:
       std::string name() const override { return "dev_random"; }
 
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
 
       Device_EntropySource(const std::vector<std::string>& fsnames);
+
       ~Device_EntropySource();
    private:
-      typedef int fd_type;
-      std::vector<fd_type> m_devices;
+      std::vector<int> m_dev_fds;
+      int m_max_fd;
    };
 
 }
@@ -1007,18 +724,24 @@ class donna128
       friend donna128 operator>>(const donna128& x, size_t shift)
          {
          donna128 z = x;
-         const u64bit carry = z.h << (64 - shift);
-         z.h = (z.h >> shift);
-         z.l = (z.l >> shift) | carry;
+         if(shift > 0)
+            {
+            const u64bit carry = z.h << (64 - shift);
+            z.h = (z.h >> shift);
+            z.l = (z.l >> shift) | carry;
+            }
          return z;
          }
 
       friend donna128 operator<<(const donna128& x, size_t shift)
          {
          donna128 z = x;
-         const u64bit carry = z.l >> (64 - shift);
-         z.l = (z.l << shift);
-         z.h = (z.h << shift) | carry;
+         if(shift > 0)
+            {
+            const u64bit carry = z.l >> (64 - shift);
+            z.l = (z.l << shift);
+            z.h = (z.h << shift) | carry;
+            }
          return z;
          }
 
@@ -1121,7 +844,7 @@ class EGD_EntropySource final : public Entropy_Source
    public:
       std::string name() const override { return "egd"; }
 
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
 
       EGD_EntropySource(const std::vector<std::string>&);
       ~EGD_EntropySource();
@@ -1140,8 +863,9 @@ class EGD_EntropySource final : public Entropy_Source
             int m_fd; // cached fd
          };
 
-      std::mutex m_mutex;
+      mutex_type m_mutex;
       std::vector<EGD_Socket> m_sockets;
+      secure_vector<uint8_t> m_io_buf;
    };
 
 }
@@ -1156,18 +880,193 @@ BOTAN_DLL std::vector<std::string> get_files_recursive(const std::string& dir);
 
 namespace Botan {
 
-/**
-* Entropy source using high resolution timers
-*
-* @note Any results from timers are marked as not contributing entropy
-* to the poll, as a local attacker could observe them directly.
-*/
-class High_Resolution_Timestamp final : public Entropy_Source
+class EME;
+class KDF;
+class EMSA;
+
+namespace PK_Ops {
+
+template<typename Key>
+class PK_Spec
    {
    public:
-      std::string name() const override { return "timestamp"; }
-      void poll(Entropy_Accumulator& accum) override;
+      PK_Spec(const Key& key, const std::string& pad) :
+         m_key(key), m_pad(pad) {}
+
+      std::string algo_name() const { return m_key.algo_name(); }
+
+      std::string as_string() const { return algo_name() + "/" + padding(); }
+
+      const Key& key() const { return m_key; }
+      const std::string& padding() const { return m_pad; }
+   private:
+      const Key& m_key;
+      const std::string m_pad;
    };
+
+typedef PK_Spec<Public_Key> PK_Spec_Public_Key;
+typedef PK_Spec<Private_Key> PK_Spec_Private_Key;
+
+/**
+* Public key encryption interface
+*/
+class BOTAN_DLL Encryption
+   {
+   public:
+      typedef PK_Spec_Public_Key Spec;
+
+      virtual size_t max_input_bits() const = 0;
+
+      virtual secure_vector<byte> encrypt(const byte msg[],
+                                          size_t msg_len,
+                                          RandomNumberGenerator& rng) = 0;
+
+      virtual ~Encryption() {}
+   };
+
+/**
+* Public key decryption interface
+*/
+class BOTAN_DLL Decryption
+   {
+   public:
+      typedef PK_Spec_Private_Key Spec;
+
+      virtual size_t max_input_bits() const = 0;
+
+      virtual secure_vector<byte> decrypt(byte& valid_mask,
+                                          const byte ciphertext[],
+                                          size_t ciphertext_len) = 0;
+
+      virtual ~Decryption() {}
+   };
+
+/**
+* Public key signature verification interface
+*/
+class BOTAN_DLL Verification
+   {
+   public:
+      typedef PK_Spec_Public_Key Spec;
+
+      /*
+      * Add more data to the message currently being signed
+      * @param msg the message
+      * @param msg_len the length of msg in bytes
+      */
+      virtual void update(const byte msg[], size_t msg_len) = 0;
+
+      /*
+      * Perform a signature operation
+      * @param rng a random number generator
+      */
+      virtual bool is_valid_signature(const byte sig[], size_t sig_len) = 0;
+
+      /**
+      * Get the maximum message size in bits supported by this public key.
+      * @return maximum message in bits
+      */
+      virtual size_t max_input_bits() const = 0;
+
+      /**
+      * Find out the number of message parts supported by this scheme.
+      * @return number of message parts
+      */
+      virtual size_t message_parts() const { return 1; }
+
+      /**
+      * Find out the message part size supported by this scheme/key.
+      * @return size of the message parts
+      */
+      virtual size_t message_part_size() const { return 0; }
+
+      virtual ~Verification() {}
+   };
+
+/**
+* Public key signature creation interface
+*/
+class BOTAN_DLL Signature
+   {
+   public:
+      typedef PK_Spec_Private_Key Spec;
+
+      /**
+      * Find out the number of message parts supported by this scheme.
+      * @return number of message parts
+      */
+      virtual size_t message_parts() const { return 1; }
+
+      /**
+      * Find out the message part size supported by this scheme/key.
+      * @return size of the message parts
+      */
+      virtual size_t message_part_size() const { return 0; }
+
+      /*
+      * Add more data to the message currently being signed
+      * @param msg the message
+      * @param msg_len the length of msg in bytes
+      */
+      virtual void update(const byte msg[], size_t msg_len) = 0;
+
+      /*
+      * Perform a signature operation
+      * @param rng a random number generator
+      */
+      virtual secure_vector<byte> sign(RandomNumberGenerator& rng) = 0;
+
+      virtual ~Signature() {}
+   };
+
+/**
+* A generic key agreement operation (eg DH or ECDH)
+*/
+class BOTAN_DLL Key_Agreement
+   {
+   public:
+      typedef PK_Spec_Private_Key Spec;
+
+      virtual secure_vector<byte> agree(size_t key_len,
+                                        const byte other_key[], size_t other_key_len,
+                                        const byte salt[], size_t salt_len) = 0;
+
+      virtual ~Key_Agreement() {}
+   };
+
+/**
+* KEM (key encapsulation)
+*/
+class BOTAN_DLL KEM_Encryption
+   {
+   public:
+      typedef PK_Spec_Public_Key Spec;
+
+      virtual void kem_encrypt(secure_vector<byte>& out_encapsulated_key,
+                               secure_vector<byte>& out_shared_key,
+                               size_t desired_shared_key_len,
+                               Botan::RandomNumberGenerator& rng,
+                               const uint8_t salt[],
+                               size_t salt_len) = 0;
+
+      virtual ~KEM_Encryption() {}
+   };
+
+class BOTAN_DLL KEM_Decryption
+   {
+   public:
+      typedef PK_Spec_Private_Key Spec;
+
+      virtual secure_vector<byte> kem_decrypt(const byte encap_key[],
+                                              size_t len,
+                                              size_t desired_shared_key_len,
+                                              const uint8_t salt[],
+                                              size_t salt_len) = 0;
+
+      virtual ~KEM_Decryption() {}
+   };
+
+}
 
 }
 
@@ -1207,118 +1106,63 @@ McEliece_PrivateKey generate_mceliece_key(RandomNumberGenerator &rng,
 
 namespace Botan {
 
-/**
-* Round up
-* @param n a non-negative integer
-* @param align_to the alignment boundary
-* @return n rounded up to a multiple of align_to
-*/
-inline size_t round_up(size_t n, size_t align_to)
-   {
-   BOTAN_ASSERT(align_to != 0, "align_to must not be 0");
+#if (BOTAN_MP_WORD_BITS == 8)
+  typedef u16bit dword;
+  #define BOTAN_HAS_MP_DWORD
+#elif (BOTAN_MP_WORD_BITS == 16)
+  typedef u32bit dword;
+  #define BOTAN_HAS_MP_DWORD
+#elif (BOTAN_MP_WORD_BITS == 32)
+  typedef u64bit dword;
+  #define BOTAN_HAS_MP_DWORD
+#elif (BOTAN_MP_WORD_BITS == 64)
+  #if defined(BOTAN_TARGET_HAS_NATIVE_UINT128)
+    typedef uint128_t dword;
+    #define BOTAN_HAS_MP_DWORD
+  #else
+    // No native 128 bit integer type; use mul64x64_128 instead
+  #endif
 
-   if(n % align_to)
-      n += align_to - (n % align_to);
-   return n;
-   }
-
-/**
-* Round down
-* @param n an integer
-* @param align_to the alignment boundary
-* @return n rounded down to a multiple of align_to
-*/
-template<typename T>
-inline T round_down(T n, T align_to)
-   {
-   if(align_to == 0)
-      return n;
-
-   return (n - (n % align_to));
-   }
-
-/**
-* Clamp
-*/
-inline size_t clamp(size_t n, size_t lower_bound, size_t upper_bound)
-   {
-   if(n < lower_bound)
-      return lower_bound;
-   if(n > upper_bound)
-      return upper_bound;
-   return n;
-   }
-
-}
-
-
-namespace Botan {
-
-template<typename T>
-T* make_block_cipher_mode(const Cipher_Mode::Spec& spec)
-   {
-   if(std::unique_ptr<BlockCipher> bc = BlockCipher::create(spec.arg(0)))
-      return new T(bc.release());
-   return nullptr;
-   }
-
-template<typename T, size_t LEN1>
-T* make_block_cipher_mode_len(const Cipher_Mode::Spec& spec)
-   {
-   if(std::unique_ptr<BlockCipher> bc = BlockCipher::create(spec.arg(0)))
-      {
-      const size_t len1 = spec.arg_as_integer(1, LEN1);
-      return new T(bc.release(), len1);
-      }
-
-   return nullptr;
-   }
-
-template<typename T, size_t LEN1, size_t LEN2>
-T* make_block_cipher_mode_len2(const Cipher_Mode::Spec& spec)
-   {
-   if(std::unique_ptr<BlockCipher> bc = BlockCipher::create(spec.arg(0)))
-      {
-      const size_t len1 = spec.arg_as_integer(1, LEN1);
-      const size_t len2 = spec.arg_as_integer(2, LEN2);
-      return new T(bc.release(), len1, len2);
-      }
-
-   return nullptr;
-   }
-
-#define BOTAN_REGISTER_BLOCK_CIPHER_MODE(E, D)                          \
-   BOTAN_REGISTER_NAMED_T(Cipher_Mode, #E, E, make_block_cipher_mode<E>); \
-   BOTAN_REGISTER_NAMED_T(Cipher_Mode, #D, D, make_block_cipher_mode<D>)
-
-#define BOTAN_REGISTER_BLOCK_CIPHER_MODE_LEN(E, D, LEN)                          \
-   BOTAN_REGISTER_NAMED_T(Cipher_Mode, #E, E, (make_block_cipher_mode_len<E, LEN>)); \
-   BOTAN_REGISTER_NAMED_T(Cipher_Mode, #D, D, (make_block_cipher_mode_len<D, LEN>))
-
-#define BOTAN_REGISTER_BLOCK_CIPHER_MODE_LEN2(E, D, LEN1, LEN2)                          \
-   BOTAN_REGISTER_NAMED_T(Cipher_Mode, #E, E, (make_block_cipher_mode_len2<E, LEN1, LEN2>)); \
-   BOTAN_REGISTER_NAMED_T(Cipher_Mode, #D, D, (make_block_cipher_mode_len2<D, LEN1, LEN2>))
-
-}
-
-
-#if (BOTAN_MP_WORD_BITS != 64)
-   #error The mp_x86_64 module requires that BOTAN_MP_WORD_BITS == 64
+#else
+  #error BOTAN_MP_WORD_BITS must be 8, 16, 32, or 64
 #endif
 
-namespace Botan {
+#if defined(BOTAN_TARGET_ARCH_IS_X86_32) && (BOTAN_MP_WORD_BITS == 32)
+
+  #if defined(BOTAN_USE_GCC_INLINE_ASM)
+    #define BOTAN_MP_USE_X86_32_ASM
+    #define ASM(x) x "\n\t"
+  #elif defined(BOTAN_TARGET_COMPILER_IS_MSVC)
+    #define BOTAN_MP_USE_X86_32_MSVC_ASM
+  #endif
+
+#elif defined(BOTAN_TARGET_ARCH_IS_X86_64) && (BOTAN_MP_WORD_BITS == 64) && (BOTAN_USE_GCC_INLINE_ASM)
+  #define BOTAN_MP_USE_X86_64_ASM
+  #define ASM(x) x "\n\t"
+#endif
+
+#if defined(BOTAN_MP_USE_X86_32_ASM) || defined(BOTAN_MP_USE_X86_64_ASM)
+  #define ASM(x) x "\n\t"
+#endif
 
 /*
-* Helper Macros for x86-64 Assembly
-*/
-#define ASM(x) x "\n\t"
-
-/*
-* Word Multiply
+* Word Multiply/Add
 */
 inline word word_madd2(word a, word b, word* c)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
    asm(
+      ASM("mull %[b]")
+      ASM("addl %[c],%[a]")
+      ASM("adcl $0,%[carry]")
+
+      : [a]"=a"(a), [b]"=rm"(b), [carry]"=&d"(*c)
+      : "0"(a), "1"(b), [c]"g"(*c) : "cc");
+
+   return a;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+      asm(
       ASM("mulq %[b]")
       ASM("addq %[c],%[a]")
       ASM("adcq $0,%[carry]")
@@ -1327,6 +1171,24 @@ inline word word_madd2(word a, word b, word* c)
       : "0"(a), "1"(b), [c]"g"(*c) : "cc");
 
    return a;
+
+#elif defined(BOTAN_HAS_MP_DWORD)
+   const dword s = static_cast<dword>(a) * b + *c;
+   *c = static_cast<word>(s >> BOTAN_MP_WORD_BITS);
+   return static_cast<word>(s);
+#else
+   static_assert(BOTAN_MP_WORD_BITS == 64, "Unexpected word size");
+
+   word hi = 0, lo = 0;
+
+   mul64x64_128(a, b, &lo, &hi);
+
+   lo += *c;
+   hi += (lo < *c); // carry?
+
+   *c = hi;
+   return lo;
+#endif
    }
 
 /*
@@ -1334,6 +1196,22 @@ inline word word_madd2(word a, word b, word* c)
 */
 inline word word_madd3(word a, word b, word c, word* d)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ASM("mull %[b]")
+
+      ASM("addl %[c],%[a]")
+      ASM("adcl $0,%[carry]")
+
+      ASM("addl %[d],%[a]")
+      ASM("adcl $0,%[carry]")
+
+      : [a]"=a"(a), [b]"=rm"(b), [carry]"=&d"(*d)
+      : "0"(a), "1"(b), [c]"g"(c), [d]"g"(*d) : "cc");
+
+   return a;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
    asm(
       ASM("mulq %[b]")
 
@@ -1347,21 +1225,74 @@ inline word word_madd3(word a, word b, word c, word* d)
       : "0"(a), "1"(b), [c]"g"(c), [d]"g"(*d) : "cc");
 
    return a;
+
+#elif defined(BOTAN_HAS_MP_DWORD)
+   const dword s = static_cast<dword>(a) * b + c + *d;
+   *d = static_cast<word>(s >> BOTAN_MP_WORD_BITS);
+   return static_cast<word>(s);
+#else
+   static_assert(BOTAN_MP_WORD_BITS == 64, "Unexpected word size");
+
+   word hi = 0, lo = 0;
+
+   mul64x64_128(a, b, &lo, &hi);
+
+   lo += c;
+   hi += (lo < c); // carry?
+
+   lo += *d;
+   hi += (lo < *d); // carry?
+
+   *d = hi;
+   return lo;
+#endif
    }
 
-#undef ASM
+#if defined(ASM)
+  #undef ASM
+#endif
 
 }
 
 
 namespace Botan {
 
-/*
-* Helper Macros for x86-64 Assembly
-*/
-#ifndef ASM
-  #define ASM(x) x "\n\t"
-#endif
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+
+#define ADDSUB2_OP(OPERATION, INDEX)                     \
+        ASM("movl 4*" #INDEX "(%[y]), %[carry]")         \
+        ASM(OPERATION " %[carry], 4*" #INDEX "(%[x])")   \
+
+#define ADDSUB3_OP(OPERATION, INDEX)                     \
+        ASM("movl 4*" #INDEX "(%[x]), %[carry]")         \
+        ASM(OPERATION " 4*" #INDEX "(%[y]), %[carry]")   \
+        ASM("movl %[carry], 4*" #INDEX "(%[z])")         \
+
+#define LINMUL_OP(WRITE_TO, INDEX)                       \
+        ASM("movl 4*" #INDEX "(%[x]),%%eax")             \
+        ASM("mull %[y]")                                 \
+        ASM("addl %[carry],%%eax")                       \
+        ASM("adcl $0,%%edx")                             \
+        ASM("movl %%edx,%[carry]")                       \
+        ASM("movl %%eax, 4*" #INDEX "(%[" WRITE_TO "])")
+
+#define MULADD_OP(IGNORED, INDEX)                        \
+        ASM("movl 4*" #INDEX "(%[x]),%%eax")             \
+        ASM("mull %[y]")                                 \
+        ASM("addl %[carry],%%eax")                       \
+        ASM("adcl $0,%%edx")                             \
+        ASM("addl 4*" #INDEX "(%[z]),%%eax")             \
+        ASM("adcl $0,%%edx")                             \
+        ASM("movl %%edx,%[carry]")                       \
+        ASM("movl %%eax, 4*" #INDEX " (%[z])")
+
+#define ADD_OR_SUBTRACT(CORE_CODE)     \
+        ASM("rorl %[carry]")           \
+        CORE_CODE                      \
+        ASM("sbbl %[carry],%[carry]")  \
+        ASM("negl %[carry]")
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
 
 #define ADDSUB2_OP(OPERATION, INDEX)                     \
         ASM("movq 8*" #INDEX "(%[y]), %[carry]")         \
@@ -1390,6 +1321,18 @@ namespace Botan {
         ASM("movq %%rdx,%[carry]")                       \
         ASM("movq %%rax, 8*" #INDEX " (%[z])")
 
+#define ADD_OR_SUBTRACT(CORE_CODE)     \
+        ASM("rorq %[carry]")           \
+        CORE_CODE                      \
+        ASM("sbbq %[carry],%[carry]")  \
+        ASM("negq %[carry]")
+
+#endif
+
+#if defined(ADD_OR_SUBTRACT)
+
+#define ASM(x) x "\n\t"
+
 #define DO_8_TIMES(MACRO, ARG) \
         MACRO(ARG, 0) \
         MACRO(ARG, 1) \
@@ -1400,23 +1343,37 @@ namespace Botan {
         MACRO(ARG, 6) \
         MACRO(ARG, 7)
 
-#define ADD_OR_SUBTRACT(CORE_CODE)     \
-        ASM("rorq %[carry]")           \
-        CORE_CODE                      \
-        ASM("sbbq %[carry],%[carry]")  \
-        ASM("negq %[carry]")
+#endif
 
 /*
 * Word Addition
 */
 inline word word_add(word x, word y, word* carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ADD_OR_SUBTRACT(ASM("adcl %[y],%[x]"))
+      : [x]"=r"(x), [carry]"=r"(*carry)
+      : "0"(x), [y]"rm"(y), "1"(*carry)
+      : "cc");
+   return x;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ADD_OR_SUBTRACT(ASM("adcq %[y],%[x]"))
       : [x]"=r"(x), [carry]"=r"(*carry)
       : "0"(x), [y]"rm"(y), "1"(*carry)
       : "cc");
    return x;
+
+#else
+   word z = x + y;
+   word c1 = (z < x);
+   z += *carry;
+   *carry = c1 | (z < *carry);
+   return z;
+#endif
    }
 
 /*
@@ -1424,25 +1381,141 @@ inline word word_add(word x, word y, word* carry)
 */
 inline word word8_add2(word x[8], const word y[8], word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB2_OP, "adcl"))
+      : [carry]"=r"(carry)
+      : [x]"r"(x), [y]"r"(y), "0"(carry)
+      : "cc", "memory");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB2_OP, "adcq"))
       : [carry]"=r"(carry)
       : [x]"r"(x), [y]"r"(y), "0"(carry)
       : "cc", "memory");
    return carry;
+
+#elif defined(BOTAN_MP_USE_X86_32_MSVC_ASM)
+
+   __asm {
+      mov edx,[x]
+      mov esi,[y]
+      xor eax,eax
+      sub eax,[carry] //force CF=1 iff *carry==1
+      mov eax,[esi]
+      adc [edx],eax
+      mov eax,[esi+4]
+      adc [edx+4],eax
+      mov eax,[esi+8]
+      adc [edx+8],eax
+      mov eax,[esi+12]
+      adc [edx+12],eax
+      mov eax,[esi+16]
+      adc [edx+16],eax
+      mov eax,[esi+20]
+      adc [edx+20],eax
+      mov eax,[esi+24]
+      adc [edx+24],eax
+      mov eax,[esi+28]
+      adc [edx+28],eax
+      sbb eax,eax
+      neg eax
+      }
+
+#else
+   x[0] = word_add(x[0], y[0], &carry);
+   x[1] = word_add(x[1], y[1], &carry);
+   x[2] = word_add(x[2], y[2], &carry);
+   x[3] = word_add(x[3], y[3], &carry);
+   x[4] = word_add(x[4], y[4], &carry);
+   x[5] = word_add(x[5], y[5], &carry);
+   x[6] = word_add(x[6], y[6], &carry);
+   x[7] = word_add(x[7], y[7], &carry);
+   return carry;
+#endif
    }
 
 /*
 * Eight Word Block Addition, Three Argument
 */
-inline word word8_add3(word z[8], const word x[8], const word y[8], word carry)
+inline word word8_add3(word z[8], const word x[8],
+                       const word y[8], word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB3_OP, "adcl"))
+      : [carry]"=r"(carry)
+      : [x]"r"(x), [y]"r"(y), [z]"r"(z), "0"(carry)
+      : "cc", "memory");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB3_OP, "adcq"))
       : [carry]"=r"(carry)
       : [x]"r"(x), [y]"r"(y), [z]"r"(z), "0"(carry)
       : "cc", "memory");
    return carry;
+
+#elif defined(BOTAN_MP_USE_X86_32_MSVC_ASM)
+
+    __asm {
+      mov edi,[x]
+      mov esi,[y]
+      mov ebx,[z]
+      xor eax,eax
+      sub eax,[carry] //force CF=1 iff *carry==1
+      mov eax,[edi]
+      adc eax,[esi]
+      mov [ebx],eax
+
+      mov eax,[edi+4]
+      adc eax,[esi+4]
+      mov [ebx+4],eax
+
+      mov eax,[edi+8]
+      adc eax,[esi+8]
+      mov [ebx+8],eax
+
+      mov eax,[edi+12]
+      adc eax,[esi+12]
+      mov [ebx+12],eax
+
+      mov eax,[edi+16]
+      adc eax,[esi+16]
+      mov [ebx+16],eax
+
+      mov eax,[edi+20]
+      adc eax,[esi+20]
+      mov [ebx+20],eax
+
+      mov eax,[edi+24]
+      adc eax,[esi+24]
+      mov [ebx+24],eax
+
+      mov eax,[edi+28]
+      adc eax,[esi+28]
+      mov [ebx+28],eax
+
+      sbb eax,eax
+      neg eax
+      }
+
+#else
+   z[0] = word_add(x[0], y[0], &carry);
+   z[1] = word_add(x[1], y[1], &carry);
+   z[2] = word_add(x[2], y[2], &carry);
+   z[3] = word_add(x[3], y[3], &carry);
+   z[4] = word_add(x[4], y[4], &carry);
+   z[5] = word_add(x[5], y[5], &carry);
+   z[6] = word_add(x[6], y[6], &carry);
+   z[7] = word_add(x[7], y[7], &carry);
+   return carry;
+#endif
    }
 
 /*
@@ -1450,12 +1523,30 @@ inline word word8_add3(word z[8], const word x[8], const word y[8], word carry)
 */
 inline word word_sub(word x, word y, word* carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ADD_OR_SUBTRACT(ASM("sbbl %[y],%[x]"))
+      : [x]"=r"(x), [carry]"=r"(*carry)
+      : "0"(x), [y]"rm"(y), "1"(*carry)
+      : "cc");
+   return x;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ADD_OR_SUBTRACT(ASM("sbbq %[y],%[x]"))
       : [x]"=r"(x), [carry]"=r"(*carry)
       : "0"(x), [y]"rm"(y), "1"(*carry)
       : "cc");
    return x;
+
+#else
+   word t0 = x - y;
+   word c1 = (t0 > x);
+   word z = t0 - *carry;
+   *carry = c1 | (z > t0);
+   return z;
+#endif
    }
 
 /*
@@ -1463,12 +1554,69 @@ inline word word_sub(word x, word y, word* carry)
 */
 inline word word8_sub2(word x[8], const word y[8], word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB2_OP, "sbbl"))
+      : [carry]"=r"(carry)
+      : [x]"r"(x), [y]"r"(y), "0"(carry)
+      : "cc", "memory");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB2_OP, "sbbq"))
       : [carry]"=r"(carry)
       : [x]"r"(x), [y]"r"(y), "0"(carry)
       : "cc", "memory");
    return carry;
+
+#elif defined(BOTAN_MP_USE_X86_32_MSVC_ASM)
+
+    __asm {
+      mov edi,[x]
+      mov esi,[y]
+      xor eax,eax
+      sub eax,[carry] //force CF=1 iff *carry==1
+      mov eax,[edi]
+      sbb eax,[esi]
+      mov [edi],eax
+      mov eax,[edi+4]
+      sbb eax,[esi+4]
+      mov [edi+4],eax
+      mov eax,[edi+8]
+      sbb eax,[esi+8]
+      mov [edi+8],eax
+      mov eax,[edi+12]
+      sbb eax,[esi+12]
+      mov [edi+12],eax
+      mov eax,[edi+16]
+      sbb eax,[esi+16]
+      mov [edi+16],eax
+      mov eax,[edi+20]
+      sbb eax,[esi+20]
+      mov [edi+20],eax
+      mov eax,[edi+24]
+      sbb eax,[esi+24]
+      mov [edi+24],eax
+      mov eax,[edi+28]
+      sbb eax,[esi+28]
+      mov [edi+28],eax
+      sbb eax,eax
+      neg eax
+      }
+
+#else
+   x[0] = word_sub(x[0], y[0], &carry);
+   x[1] = word_sub(x[1], y[1], &carry);
+   x[2] = word_sub(x[2], y[2], &carry);
+   x[3] = word_sub(x[3], y[3], &carry);
+   x[4] = word_sub(x[4], y[4], &carry);
+   x[5] = word_sub(x[5], y[5], &carry);
+   x[6] = word_sub(x[6], y[6], &carry);
+   x[7] = word_sub(x[7], y[7], &carry);
+   return carry;
+#endif
    }
 
 /*
@@ -1476,25 +1624,106 @@ inline word word8_sub2(word x[8], const word y[8], word carry)
 */
 inline word word8_sub2_rev(word x[8], const word y[8], word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB3_OP, "sbbl"))
+      : [carry]"=r"(carry)
+      : [x]"r"(y), [y]"r"(x), [z]"r"(x), "0"(carry)
+      : "cc", "memory");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB3_OP, "sbbq"))
       : [carry]"=r"(carry)
       : [x]"r"(y), [y]"r"(x), [z]"r"(x), "0"(carry)
       : "cc", "memory");
    return carry;
+
+#else
+   x[0] = word_sub(y[0], x[0], &carry);
+   x[1] = word_sub(y[1], x[1], &carry);
+   x[2] = word_sub(y[2], x[2], &carry);
+   x[3] = word_sub(y[3], x[3], &carry);
+   x[4] = word_sub(y[4], x[4], &carry);
+   x[5] = word_sub(y[5], x[5], &carry);
+   x[6] = word_sub(y[6], x[6], &carry);
+   x[7] = word_sub(y[7], x[7], &carry);
+   return carry;
+#endif
    }
 
 /*
 * Eight Word Block Subtraction, Three Argument
 */
-inline word word8_sub3(word z[8], const word x[8], const word y[8], word carry)
+inline word word8_sub3(word z[8], const word x[8],
+                       const word y[8], word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB3_OP, "sbbl"))
+      : [carry]"=r"(carry)
+      : [x]"r"(x), [y]"r"(y), [z]"r"(z), "0"(carry)
+      : "cc", "memory");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ADD_OR_SUBTRACT(DO_8_TIMES(ADDSUB3_OP, "sbbq"))
       : [carry]"=r"(carry)
       : [x]"r"(x), [y]"r"(y), [z]"r"(z), "0"(carry)
       : "cc", "memory");
    return carry;
+
+#elif defined(BOTAN_MP_USE_X86_32_MSVC_ASM)
+
+   __asm {
+      mov edi,[x]
+      mov esi,[y]
+      xor eax,eax
+      sub eax,[carry] //force CF=1 iff *carry==1
+      mov ebx,[z]
+      mov eax,[edi]
+      sbb eax,[esi]
+      mov [ebx],eax
+      mov eax,[edi+4]
+      sbb eax,[esi+4]
+      mov [ebx+4],eax
+      mov eax,[edi+8]
+      sbb eax,[esi+8]
+      mov [ebx+8],eax
+      mov eax,[edi+12]
+      sbb eax,[esi+12]
+      mov [ebx+12],eax
+      mov eax,[edi+16]
+      sbb eax,[esi+16]
+      mov [ebx+16],eax
+      mov eax,[edi+20]
+      sbb eax,[esi+20]
+      mov [ebx+20],eax
+      mov eax,[edi+24]
+      sbb eax,[esi+24]
+      mov [ebx+24],eax
+      mov eax,[edi+28]
+      sbb eax,[esi+28]
+      mov [ebx+28],eax
+      sbb eax,eax
+      neg eax
+      }
+
+#else
+   z[0] = word_sub(x[0], y[0], &carry);
+   z[1] = word_sub(x[1], y[1], &carry);
+   z[2] = word_sub(x[2], y[2], &carry);
+   z[3] = word_sub(x[3], y[3], &carry);
+   z[4] = word_sub(x[4], y[4], &carry);
+   z[5] = word_sub(x[5], y[5], &carry);
+   z[6] = word_sub(x[6], y[6], &carry);
+   z[7] = word_sub(x[7], y[7], &carry);
+   return carry;
+#endif
    }
 
 /*
@@ -1502,12 +1731,96 @@ inline word word8_sub3(word z[8], const word x[8], const word y[8], word carry)
 */
 inline word word8_linmul2(word x[8], word y, word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      DO_8_TIMES(LINMUL_OP, "x")
+      : [carry]"=r"(carry)
+      : [x]"r"(x), [y]"rm"(y), "0"(carry)
+      : "cc", "%eax", "%edx");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       DO_8_TIMES(LINMUL_OP, "x")
       : [carry]"=r"(carry)
       : [x]"r"(x), [y]"rm"(y), "0"(carry)
       : "cc", "%rax", "%rdx");
    return carry;
+
+#elif defined(BOTAN_MP_USE_X86_32_MSVC_ASM)
+
+   __asm {
+      mov esi,[x]
+      mov eax,[esi]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,[carry]      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [esi],eax        //load a
+
+      mov eax,[esi+4]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [esi+4],eax        //load a
+
+      mov eax,[esi+8]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [esi+8],eax        //load a
+
+      mov eax,[esi+12]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [esi+12],eax        //load a
+
+      mov eax,[esi+16]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [esi+16],eax        //load a
+
+      mov eax,[esi+20]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [esi+20],eax        //load a
+
+      mov eax,[esi+24]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [esi+24],eax        //load a
+
+      mov eax,[esi+28]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov [esi+28],eax        //load a
+
+      mov eax,edx      //store carry
+      }
+
+#else
+   x[0] = word_madd2(x[0], y, &carry);
+   x[1] = word_madd2(x[1], y, &carry);
+   x[2] = word_madd2(x[2], y, &carry);
+   x[3] = word_madd2(x[3], y, &carry);
+   x[4] = word_madd2(x[4], y, &carry);
+   x[5] = word_madd2(x[5], y, &carry);
+   x[6] = word_madd2(x[6], y, &carry);
+   x[7] = word_madd2(x[7], y, &carry);
+   return carry;
+#endif
    }
 
 /*
@@ -1515,12 +1828,95 @@ inline word word8_linmul2(word x[8], word y, word carry)
 */
 inline word word8_linmul3(word z[8], const word x[8], word y, word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      DO_8_TIMES(LINMUL_OP, "z")
+      : [carry]"=r"(carry)
+      : [z]"r"(z), [x]"r"(x), [y]"rm"(y), "0"(carry)
+      : "cc", "%eax", "%edx");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
    asm(
       DO_8_TIMES(LINMUL_OP, "z")
       : [carry]"=r"(carry)
       : [z]"r"(z), [x]"r"(x), [y]"rm"(y), "0"(carry)
       : "cc", "%rax", "%rdx");
    return carry;
+
+#elif defined(BOTAN_MP_USE_X86_32_MSVC_ASM)
+
+   __asm {
+      mov edi,[z]
+      mov esi,[x]
+      mov eax,[esi]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,[carry]    //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [edi],eax        //load a
+
+      mov eax,[esi+4]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [edi+4],eax        //load a
+
+      mov eax,[esi+8]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [edi+8],eax        //load a
+
+      mov eax,[esi+12]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [edi+12],eax        //load a
+
+      mov eax,[esi+16]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [edi+16],eax        //load a
+
+      mov eax,[esi+20]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [edi+20],eax        //load a
+
+      mov eax,[esi+24]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov ecx,edx      //store carry
+      mov [edi+24],eax        //load a
+
+      mov eax,[esi+28]        //load a
+      mul [y]           //edx(hi):eax(lo)=a*b
+      add eax,ecx      //sum lo carry
+      adc edx,0          //sum hi carry
+      mov [edi+28],eax        //load a
+      mov eax,edx      //store carry
+      }
+
+#else
+   z[0] = word_madd2(x[0], y, &carry);
+   z[1] = word_madd2(x[1], y, &carry);
+   z[2] = word_madd2(x[2], y, &carry);
+   z[3] = word_madd2(x[3], y, &carry);
+   z[4] = word_madd2(x[4], y, &carry);
+   z[5] = word_madd2(x[5], y, &carry);
+   z[6] = word_madd2(x[6], y, &carry);
+   z[7] = word_madd2(x[7], y, &carry);
+   return carry;
+#endif
    }
 
 /*
@@ -1528,19 +1924,56 @@ inline word word8_linmul3(word z[8], const word x[8], word y, word carry)
 */
 inline word word8_madd3(word z[8], const word x[8], word y, word carry)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      DO_8_TIMES(MULADD_OP, "")
+      : [carry]"=r"(carry)
+      : [z]"r"(z), [x]"r"(x), [y]"rm"(y), "0"(carry)
+      : "cc", "%eax", "%edx");
+   return carry;
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       DO_8_TIMES(MULADD_OP, "")
       : [carry]"=r"(carry)
       : [z]"r"(z), [x]"r"(x), [y]"rm"(y), "0"(carry)
       : "cc", "%rax", "%rdx");
    return carry;
+
+#else
+   z[0] = word_madd3(x[0], y, z[0], &carry);
+   z[1] = word_madd3(x[1], y, z[1], &carry);
+   z[2] = word_madd3(x[2], y, z[2], &carry);
+   z[3] = word_madd3(x[3], y, z[3], &carry);
+   z[4] = word_madd3(x[4], y, z[4], &carry);
+   z[5] = word_madd3(x[5], y, z[5], &carry);
+   z[6] = word_madd3(x[6], y, z[6], &carry);
+   z[7] = word_madd3(x[7], y, z[7], &carry);
+   return carry;
+#endif
    }
 
 /*
 * Multiply-Add Accumulator
+* (w2,w1,w0) += x * y
 */
 inline void word3_muladd(word* w2, word* w1, word* w0, word x, word y)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ASM("mull %[y]")
+
+      ASM("addl %[x],%[w0]")
+      ASM("adcl %[y],%[w1]")
+      ASM("adcl $0,%[w2]")
+
+      : [w0]"=r"(*w0), [w1]"=r"(*w1), [w2]"=r"(*w2)
+      : [x]"a"(x), [y]"d"(y), "0"(*w0), "1"(*w1), "2"(*w2)
+      : "cc");
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ASM("mulq %[y]")
 
@@ -1551,13 +1984,39 @@ inline void word3_muladd(word* w2, word* w1, word* w0, word x, word y)
       : [w0]"=r"(*w0), [w1]"=r"(*w1), [w2]"=r"(*w2)
       : [x]"a"(x), [y]"d"(y), "0"(*w0), "1"(*w1), "2"(*w2)
       : "cc");
+
+#else
+   word carry = *w0;
+   *w0 = word_madd2(x, y, &carry);
+   *w1 += carry;
+   *w2 += (*w1 < carry) ? 1 : 0;
+#endif
    }
 
 /*
 * Multiply-Add Accumulator
+* (w2,w1,w0) += 2 * x * y
 */
 inline void word3_muladd_2(word* w2, word* w1, word* w0, word x, word y)
    {
+#if defined(BOTAN_MP_USE_X86_32_ASM)
+   asm(
+      ASM("mull %[y]")
+
+      ASM("addl %[x],%[w0]")
+      ASM("adcl %[y],%[w1]")
+      ASM("adcl $0,%[w2]")
+
+      ASM("addl %[x],%[w0]")
+      ASM("adcl %[y],%[w1]")
+      ASM("adcl $0,%[w2]")
+
+      : [w0]"=r"(*w0), [w1]"=r"(*w1), [w2]"=r"(*w2)
+      : [x]"a"(x), [y]"d"(y), "0"(*w0), "1"(*w1), "2"(*w2)
+      : "cc");
+
+#elif defined(BOTAN_MP_USE_X86_64_ASM)
+
    asm(
       ASM("mulq %[y]")
 
@@ -1572,15 +2031,33 @@ inline void word3_muladd_2(word* w2, word* w1, word* w0, word x, word y)
       : [w0]"=r"(*w0), [w1]"=r"(*w1), [w2]"=r"(*w2)
       : [x]"a"(x), [y]"d"(y), "0"(*w0), "1"(*w1), "2"(*w2)
       : "cc");
+
+#else
+   word carry = 0;
+   x = word_madd2(x, y, &carry);
+   y = carry;
+
+   word top = (y >> (BOTAN_MP_WORD_BITS-1));
+   y <<= 1;
+   y |= (x >> (BOTAN_MP_WORD_BITS-1));
+   x <<= 1;
+
+   carry = 0;
+   *w0 = word_add(*w0, x, &carry);
+   *w1 = word_add(*w1, y, &carry);
+   *w2 = word_add(*w2, top, &carry);
+#endif
    }
 
-#undef ASM
-#undef DO_8_TIMES
-#undef ADD_OR_SUBTRACT
-#undef ADDSUB2_OP
-#undef ADDSUB3_OP
-#undef LINMUL_OP
-#undef MULADD_OP
+#if defined(ASM)
+  #undef ASM
+  #undef DO_8_TIMES
+  #undef ADD_OR_SUBTRACT
+  #undef ADDSUB2_OP
+  #undef ADDSUB3_OP
+  #undef LINMUL_OP
+  #undef MULADD_OP
+#endif
 
 }
 
@@ -1708,17 +2185,14 @@ void bigint_monty_redc(word z[],
 /*
 * Montgomery Multiplication
 */
-void bigint_monty_mul(word z[], size_t z_size,
-                      const word x[], size_t x_size, size_t x_sw,
-                      const word y[], size_t y_size, size_t y_sw,
+void bigint_monty_mul(BigInt& z, const BigInt& x, const BigInt& y,
                       const word p[], size_t p_size, word p_dash,
                       word workspace[]);
 
 /*
 * Montgomery Squaring
 */
-void bigint_monty_sqr(word z[], size_t z_size,
-                      const word x[], size_t x_size, size_t x_sw,
+void bigint_monty_sqr(BigInt& z, const BigInt& x,
                       const word p[], size_t p_size, word p_dash,
                       word workspace[]);
 
@@ -1756,9 +2230,7 @@ void bigint_comba_sqr16(word out[32], const word in[16]);
 /*
 * High Level Multiplication/Squaring Interfaces
 */
-void bigint_mul(word z[], size_t z_size, word workspace[],
-                const word x[], size_t x_size, size_t x_sw,
-                const word y[], size_t y_size, size_t y_sw);
+void bigint_mul(BigInt& z, const BigInt& x, const BigInt& y, word workspace[]);
 
 void bigint_sqr(word z[], size_t z_size, word workspace[],
                 const word x[], size_t x_size, size_t x_sw);
@@ -1771,7 +2243,7 @@ namespace Botan {
 namespace OS {
 
 /**
-* Returns the OS assigned process ID, if available. Otherwise returns 0.
+* Returns the OS assigned process ID, if available. Otherwise throws.
 */
 uint32_t get_process_id();
 
@@ -1846,18 +2318,6 @@ class Output_Buffers
 
 namespace Botan {
 
-Public_Key* make_public_key(const AlgorithmIdentifier& alg_id,
-                            const secure_vector<byte>& key_bits);
-
-Private_Key* make_private_key(const AlgorithmIdentifier& alg_id,
-                              const secure_vector<byte>& key_bits,
-                              RandomNumberGenerator& rng);
-
-}
-
-
-namespace Botan {
-
 namespace PK_Ops {
 
 class Encryption_with_EME : public Encryption
@@ -1905,10 +2365,23 @@ class Verification_with_EMSA : public Verification
       bool do_check(const secure_vector<byte>& msg,
                     const byte sig[], size_t sig_len);
 
+      std::string hash_for_signature() { return m_hash; }
    protected:
 
       explicit Verification_with_EMSA(const std::string& emsa);
       ~Verification_with_EMSA();
+
+      /**
+      * @return boolean specifying if this signature scheme uses
+      * a message prefix returned by message_prefix()
+      */
+      virtual bool has_prefix() { return false; }
+
+      /**
+      * @return the message prefix if this signature scheme uses
+      * a message prefix, signaled via has_prefix()
+      */
+      virtual secure_vector<byte> message_prefix() const { throw Exception( "No prefix" ); }
 
       /**
       * @return boolean specifying if this key type supports message
@@ -1942,8 +2415,11 @@ class Verification_with_EMSA : public Verification
          throw Invalid_State("Message recovery not supported");
          }
 
-   private:
       std::unique_ptr<EMSA> m_emsa;
+
+   private:
+      const std::string m_hash;
+      bool m_prefix_used;
    };
 
 class Signature_with_EMSA : public Signature
@@ -1955,6 +2431,22 @@ class Signature_with_EMSA : public Signature
    protected:
       explicit Signature_with_EMSA(const std::string& emsa);
       ~Signature_with_EMSA();
+
+      std::string hash_for_signature() { return m_hash; }
+
+      /**
+      * @return boolean specifying if this signature scheme uses
+      * a message prefix returned by message_prefix()
+      */
+      virtual bool has_prefix() { return false; }
+
+      /**
+      * @return the message prefix if this signature scheme uses
+      * a message prefix, signaled via has_prefix()
+      */
+      virtual secure_vector<byte> message_prefix() const { throw Exception( "No prefix" ); }
+
+      std::unique_ptr<EMSA> m_emsa;
    private:
 
       /**
@@ -1969,7 +2461,8 @@ class Signature_with_EMSA : public Signature
       virtual secure_vector<byte> raw_sign(const byte msg[], size_t msg_len,
                                            RandomNumberGenerator& rng) = 0;
 
-      std::unique_ptr<EMSA> m_emsa;
+      const std::string m_hash;
+      bool m_prefix_used;
    };
 
 class Key_Agreement_with_KDF : public Key_Agreement
@@ -2034,30 +2527,6 @@ class KEM_Decryption_with_KDF : public KEM_Decryption
 
 namespace Botan {
 
-template<typename OP, typename T>
-OP* make_pk_op(const typename T::Spec& spec)
-   {
-   if(auto* key = dynamic_cast<const typename T::Key_Type*>(&spec.key()))
-      return new T(*key, spec.padding());
-   return nullptr;
-   }
-
-#define BOTAN_REGISTER_PK_OP(T, NAME, TYPE) BOTAN_REGISTER_NAMED_T(T, NAME, TYPE, (make_pk_op<T, TYPE>))
-
-#define BOTAN_REGISTER_PK_ENCRYPTION_OP(NAME, TYPE) BOTAN_REGISTER_PK_OP(PK_Ops::Encryption, NAME, TYPE)
-#define BOTAN_REGISTER_PK_DECRYPTION_OP(NAME, TYPE) BOTAN_REGISTER_PK_OP(PK_Ops::Decryption, NAME, TYPE)
-#define BOTAN_REGISTER_PK_SIGNATURE_OP(NAME, TYPE) BOTAN_REGISTER_PK_OP(PK_Ops::Signature, NAME, TYPE)
-#define BOTAN_REGISTER_PK_VERIFY_OP(NAME, TYPE) BOTAN_REGISTER_PK_OP(PK_Ops::Verification, NAME, TYPE)
-#define BOTAN_REGISTER_PK_KEY_AGREE_OP(NAME, TYPE) BOTAN_REGISTER_PK_OP(PK_Ops::Key_Agreement, NAME, TYPE)
-
-#define BOTAN_REGISTER_PK_KEM_ENCRYPTION_OP(NAME, TYPE) BOTAN_REGISTER_PK_OP(PK_Ops::KEM_Encryption, NAME, TYPE)
-#define BOTAN_REGISTER_PK_KEM_DECRYPTION_OP(NAME, TYPE) BOTAN_REGISTER_PK_OP(PK_Ops::KEM_Decryption, NAME, TYPE)
-
-}
-
-
-namespace Botan {
-
 template<typename T>
 inline void prefetch_readonly(const T* addr, size_t length)
    {
@@ -2100,14 +2569,14 @@ class ProcWalking_EntropySource final : public Entropy_Source
    public:
       std::string name() const override { return "proc_walk"; }
 
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
 
       ProcWalking_EntropySource(const std::string& root_dir) :
          m_path(root_dir), m_dir(nullptr) {}
 
    private:
       const std::string m_path;
-      std::mutex m_mutex;
+      mutex_type m_mutex;
       std::unique_ptr<File_Descriptor_Source> m_dir;
       secure_vector<byte> m_buf;
    };
@@ -2125,7 +2594,7 @@ class Intel_Rdrand final : public Entropy_Source
    {
    public:
       std::string name() const override { return "rdrand"; }
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
    };
 
 }
@@ -2141,7 +2610,7 @@ class Intel_Rdseed final : public Entropy_Source
    {
    public:
       std::string name() const override { return "rdseed"; }
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
    };
 
 }
@@ -2149,6 +2618,57 @@ class Intel_Rdseed final : public Entropy_Source
 
 namespace Botan {
 
+/**
+* Round up
+* @param n a non-negative integer
+* @param align_to the alignment boundary
+* @return n rounded up to a multiple of align_to
+*/
+inline size_t round_up(size_t n, size_t align_to)
+   {
+   BOTAN_ASSERT(align_to != 0, "align_to must not be 0");
+
+   if(n % align_to)
+      n += align_to - (n % align_to);
+   return n;
+   }
+
+/**
+* Round down
+* @param n an integer
+* @param align_to the alignment boundary
+* @return n rounded down to a multiple of align_to
+*/
+template<typename T>
+inline T round_down(T n, T align_to)
+   {
+   if(align_to == 0)
+      return n;
+
+   return (n - (n % align_to));
+   }
+
+/**
+* Clamp
+*/
+inline size_t clamp(size_t n, size_t lower_bound, size_t upper_bound)
+   {
+   if(n < lower_bound)
+      return lower_bound;
+   if(n > upper_bound)
+      return upper_bound;
+   return n;
+   }
+
+}
+
+
+#if defined(BOTAN_TARGET_OS_HAS_THREADS)
+#endif
+
+namespace Botan {
+
+#if defined(BOTAN_TARGET_OS_HAS_THREADS)
 class Semaphore
    {
    public:
@@ -2161,9 +2681,10 @@ class Semaphore
    private:
       int m_value;
       int m_wakeups;
-      std::mutex m_mutex;
+      mutex_type m_mutex;
       std::condition_variable m_cond;
    };
+#endif
 
 }
 
@@ -2582,55 +3103,195 @@ class Semaphore
       } while(0);
 
 
-#if defined(BOTAN_HAS_SIMD_SSE2)
 #if defined(BOTAN_TARGET_SUPPORTS_SSE2)
+  #include <emmintrin.h>
+  #define BOTAN_SIMD_USE_SSE2
 
-#include <emmintrin.h>
+#elif defined(BOTAN_TARGET_SUPPORTS_ALTIVEC)
+  #include <altivec.h>
+  #undef vector
+  #undef bool
+  #define BOTAN_SIMD_USE_ALTIVEC
+#endif
+
+// TODO: NEON support
 
 namespace Botan {
 
-class SIMD_SSE2
+/**
+* This class is not a general purpose SIMD type, and only offers
+* instructions needed for evaluation of specific crypto primitives.
+* For example it does not currently have equality operators of any
+* kind.
+*/
+class SIMD_4x32
    {
    public:
-      explicit SIMD_SSE2(const u32bit B[4])
+
+      SIMD_4x32() // zero initialized
          {
+#if defined(BOTAN_SIMD_USE_SSE2) || defined(BOTAN_SIMD_USE_ALTIVEC)
+         ::memset(&m_reg, 0, sizeof(m_reg));
+#else
+         ::memset(m_reg, 0, sizeof(m_reg));
+#endif
+         }
+
+      explicit SIMD_4x32(const u32bit B[4])
+         {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_loadu_si128(reinterpret_cast<const __m128i*>(B));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = (__vector unsigned int){B[0], B[1], B[2], B[3]};
+#else
+         m_reg[0] = B[0];
+         m_reg[1] = B[1];
+         m_reg[2] = B[2];
+         m_reg[3] = B[3];
+#endif
          }
 
-      SIMD_SSE2(u32bit B0, u32bit B1, u32bit B2, u32bit B3)
+      SIMD_4x32(u32bit B0, u32bit B1, u32bit B2, u32bit B3)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_set_epi32(B0, B1, B2, B3);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = (__vector unsigned int){B0, B1, B2, B3};
+#else
+         m_reg[0] = B0;
+         m_reg[1] = B1;
+         m_reg[2] = B2;
+         m_reg[3] = B3;
+#endif
          }
 
-      explicit SIMD_SSE2(u32bit B)
+      explicit SIMD_4x32(u32bit B)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_set1_epi32(B);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = (__vector unsigned int){B, B, B, B};
+#else
+         m_reg[0] = B;
+         m_reg[1] = B;
+         m_reg[2] = B;
+         m_reg[3] = B;
+#endif
          }
 
-      static SIMD_SSE2 load_le(const void* in)
+      static SIMD_4x32 load_le(const void* in)
          {
-         return SIMD_SSE2(_mm_loadu_si128(reinterpret_cast<const __m128i*>(in)));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(in)));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const u32bit* in_32 = static_cast<const u32bit*>(in);
+
+         __vector unsigned int R0 = vec_ld(0, in_32);
+         __vector unsigned int R1 = vec_ld(12, in_32);
+
+         __vector unsigned char perm = vec_lvsl(0, in_32);
+
+#if defined(BOTAN_TARGET_CPU_IS_BIG_ENDIAN)
+         perm = vec_xor(perm, vec_splat_u8(3)); // bswap vector
+#endif
+
+         R0 = vec_perm(R0, R1, perm);
+
+         return SIMD_4x32(R0);
+#else
+         SIMD_4x32 out;
+         Botan::load_le(out.m_reg, static_cast<const uint8_t*>(in), 4);
+         return out;
+#endif
          }
 
-      static SIMD_SSE2 load_be(const void* in)
+      static SIMD_4x32 load_be(const void* in)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          return load_le(in).bswap();
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const u32bit* in_32 = static_cast<const u32bit*>(in);
+
+         __vector unsigned int R0 = vec_ld(0, in_32);
+         __vector unsigned int R1 = vec_ld(12, in_32);
+
+         __vector unsigned char perm = vec_lvsl(0, in_32);
+
+#if defined(BOTAN_TARGET_CPU_IS_LITTLE_ENDIAN)
+         perm = vec_xor(perm, vec_splat_u8(3)); // bswap vector
+#endif
+
+         R0 = vec_perm(R0, R1, perm);
+
+         return SIMD_4x32(R0);
+
+#else
+         SIMD_4x32 out;
+         Botan::load_be(out.m_reg, static_cast<const uint8_t*>(in), 4);
+         return out;
+#endif
          }
 
-      void store_le(byte out[]) const
+      void store_le(uint8_t out[]) const
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          _mm_storeu_si128(reinterpret_cast<__m128i*>(out), m_reg);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         __vector unsigned char perm = vec_lvsl(0, static_cast<u32bit*>(nullptr));
+
+#if defined(BOTAN_TARGET_CPU_IS_BIG_ENDIAN)
+         perm = vec_xor(perm, vec_splat_u8(3)); // bswap vector
+#endif
+
+         union {
+            __vector unsigned int V;
+            u32bit R[4];
+            } vec;
+
+         vec.V = vec_perm(m_reg, m_reg, perm);
+
+         Botan::store_be(out, vec.R[0], vec.R[1], vec.R[2], vec.R[3]);
+#else
+         Botan::store_le(out, m_reg[0], m_reg[1], m_reg[2], m_reg[3]);
+#endif
          }
 
-      void store_be(byte out[]) const
+      void store_be(uint8_t out[]) const
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          bswap().store_le(out);
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+
+         union {
+            __vector unsigned int V;
+            u32bit R[4];
+            } vec;
+
+         vec.V = m_reg;
+
+         Botan::store_be(out, vec.R[0], vec.R[1], vec.R[2], vec.R[3]);
+#else
+         Botan::store_be(out, m_reg[0], m_reg[1], m_reg[2], m_reg[3]);
+#endif
          }
 
       void rotate_left(size_t rot)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_or_si128(_mm_slli_epi32(m_reg, static_cast<int>(rot)),
-                            _mm_srli_epi32(m_reg, static_cast<int>(32-rot)));
+                              _mm_srli_epi32(m_reg, static_cast<int>(32-rot)));
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const unsigned int r = static_cast<unsigned int>(rot);
+         m_reg = vec_rl(m_reg, (__vector unsigned int){r, r, r, r});
+
+#else
+         m_reg[0] = Botan::rotate_left(m_reg[0], rot);
+         m_reg[1] = Botan::rotate_left(m_reg[1], rot);
+         m_reg[2] = Botan::rotate_left(m_reg[2], rot);
+         m_reg[3] = Botan::rotate_left(m_reg[3], rot);
+#endif
          }
 
       void rotate_right(size_t rot)
@@ -2638,86 +3299,230 @@ class SIMD_SSE2
          rotate_left(32 - rot);
          }
 
-      void operator+=(const SIMD_SSE2& other)
+      void operator+=(const SIMD_4x32& other)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_add_epi32(m_reg, other.m_reg);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = vec_add(m_reg, other.m_reg);
+#else
+         m_reg[0] += other.m_reg[0];
+         m_reg[1] += other.m_reg[1];
+         m_reg[2] += other.m_reg[2];
+         m_reg[3] += other.m_reg[3];
+#endif
          }
 
-      SIMD_SSE2 operator+(const SIMD_SSE2& other) const
+      SIMD_4x32 operator+(const SIMD_4x32& other) const
          {
-         return SIMD_SSE2(_mm_add_epi32(m_reg, other.m_reg));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_add_epi32(m_reg, other.m_reg));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(vec_add(m_reg, other.m_reg));
+#else
+         return SIMD_4x32(m_reg[0] + other.m_reg[0],
+                          m_reg[1] + other.m_reg[1],
+                          m_reg[2] + other.m_reg[2],
+                          m_reg[3] + other.m_reg[3]);
+#endif
          }
 
-      void operator-=(const SIMD_SSE2& other)
+      void operator-=(const SIMD_4x32& other)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_sub_epi32(m_reg, other.m_reg);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = vec_sub(m_reg, other.m_reg);
+#else
+         m_reg[0] -= other.m_reg[0];
+         m_reg[1] -= other.m_reg[1];
+         m_reg[2] -= other.m_reg[2];
+         m_reg[3] -= other.m_reg[3];
+#endif
          }
 
-      SIMD_SSE2 operator-(const SIMD_SSE2& other) const
+      SIMD_4x32 operator-(const SIMD_4x32& other) const
          {
-         return SIMD_SSE2(_mm_sub_epi32(m_reg, other.m_reg));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_sub_epi32(m_reg, other.m_reg));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(vec_sub(m_reg, other.m_reg));
+#else
+         return SIMD_4x32(m_reg[0] - other.m_reg[0],
+                          m_reg[1] - other.m_reg[1],
+                          m_reg[2] - other.m_reg[2],
+                          m_reg[3] - other.m_reg[3]);
+#endif
          }
 
-      void operator^=(const SIMD_SSE2& other)
+      void operator^=(const SIMD_4x32& other)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_xor_si128(m_reg, other.m_reg);
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = vec_xor(m_reg, other.m_reg);
+#else
+         m_reg[0] ^= other.m_reg[0];
+         m_reg[1] ^= other.m_reg[1];
+         m_reg[2] ^= other.m_reg[2];
+         m_reg[3] ^= other.m_reg[3];
+#endif
          }
 
-      SIMD_SSE2 operator^(const SIMD_SSE2& other) const
+      SIMD_4x32 operator^(const SIMD_4x32& other) const
          {
-         return SIMD_SSE2(_mm_xor_si128(m_reg, other.m_reg));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_xor_si128(m_reg, other.m_reg));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(vec_xor(m_reg, other.m_reg));
+#else
+         return SIMD_4x32(m_reg[0] ^ other.m_reg[0],
+                          m_reg[1] ^ other.m_reg[1],
+                          m_reg[2] ^ other.m_reg[2],
+                          m_reg[3] ^ other.m_reg[3]);
+#endif
          }
 
-      void operator|=(const SIMD_SSE2& other)
+      void operator|=(const SIMD_4x32& other)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_or_si128(m_reg, other.m_reg);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = vec_or(m_reg, other.m_reg);
+#else
+         m_reg[0] |= other.m_reg[0];
+         m_reg[1] |= other.m_reg[1];
+         m_reg[2] |= other.m_reg[2];
+         m_reg[3] |= other.m_reg[3];
+#endif
          }
 
-      SIMD_SSE2 operator&(const SIMD_SSE2& other)
+      SIMD_4x32 operator&(const SIMD_4x32& other)
          {
-         return SIMD_SSE2(_mm_and_si128(m_reg, other.m_reg));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_and_si128(m_reg, other.m_reg));
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(vec_and(m_reg, other.m_reg));
+#else
+         return SIMD_4x32(m_reg[0] & other.m_reg[0],
+                          m_reg[1] & other.m_reg[1],
+                          m_reg[2] & other.m_reg[2],
+                          m_reg[3] & other.m_reg[3]);
+#endif
          }
 
-      void operator&=(const SIMD_SSE2& other)
+      void operator&=(const SIMD_4x32& other)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          m_reg = _mm_and_si128(m_reg, other.m_reg);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_reg = vec_and(m_reg, other.m_reg);
+#else
+         m_reg[0] &= other.m_reg[0];
+         m_reg[1] &= other.m_reg[1];
+         m_reg[2] &= other.m_reg[2];
+         m_reg[3] &= other.m_reg[3];
+#endif
          }
 
-      SIMD_SSE2 operator<<(size_t shift) const
+      SIMD_4x32 operator<<(size_t shift) const
          {
-         return SIMD_SSE2(_mm_slli_epi32(m_reg, static_cast<int>(shift)));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_slli_epi32(m_reg, static_cast<int>(shift)));
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const unsigned int s = static_cast<unsigned int>(shift);
+         return SIMD_4x32(vec_sl(m_reg, (__vector unsigned int){s, s, s, s}));
+#else
+         return SIMD_4x32(m_reg[0] << shift,
+                          m_reg[1] << shift,
+                          m_reg[2] << shift,
+                          m_reg[3] << shift);
+#endif
          }
 
-      SIMD_SSE2 operator>>(size_t shift) const
+      SIMD_4x32 operator>>(size_t shift) const
          {
-         return SIMD_SSE2(_mm_srli_epi32(m_reg, static_cast<int>(shift)));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_srli_epi32(m_reg, static_cast<int>(shift)));
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const unsigned int s = static_cast<unsigned int>(shift);
+         return SIMD_4x32(vec_sr(m_reg, (__vector unsigned int){s, s, s, s}));
+#else
+         return SIMD_4x32(m_reg[0] >> shift,
+                          m_reg[1] >> shift,
+                          m_reg[2] >> shift,
+                          m_reg[3] >> shift);
+
+#endif
          }
 
-      SIMD_SSE2 operator~() const
+      SIMD_4x32 operator~() const
          {
-         return SIMD_SSE2(_mm_xor_si128(m_reg, _mm_set1_epi32(0xFFFFFFFF)));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_xor_si128(m_reg, _mm_set1_epi32(0xFFFFFFFF)));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(vec_nor(m_reg, m_reg));
+#else
+         return SIMD_4x32(~m_reg[0],
+                          ~m_reg[1],
+                          ~m_reg[2],
+                          ~m_reg[3]);
+#endif
          }
 
       // (~reg) & other
-      SIMD_SSE2 andc(const SIMD_SSE2& other)
+      SIMD_4x32 andc(const SIMD_4x32& other)
          {
-         return SIMD_SSE2(_mm_andnot_si128(m_reg, other.m_reg));
+#if defined(BOTAN_SIMD_USE_SSE2)
+         return SIMD_4x32(_mm_andnot_si128(m_reg, other.m_reg));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         /*
+         AltiVec does arg1 & ~arg2 rather than SSE's ~arg1 & arg2
+         so swap the arguments
+         */
+         return SIMD_4x32(vec_andc(other.m_reg, m_reg));
+#else
+         return SIMD_4x32((~m_reg[0]) & other.m_reg[0],
+                          (~m_reg[1]) & other.m_reg[1],
+                          (~m_reg[2]) & other.m_reg[2],
+                          (~m_reg[3]) & other.m_reg[3]);
+#endif
          }
 
-      SIMD_SSE2 bswap() const
+      SIMD_4x32 bswap() const
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          __m128i T = m_reg;
 
          T = _mm_shufflehi_epi16(T, _MM_SHUFFLE(2, 3, 0, 1));
          T = _mm_shufflelo_epi16(T, _MM_SHUFFLE(2, 3, 0, 1));
 
-         return SIMD_SSE2(_mm_or_si128(_mm_srli_epi16(T, 8),
-                             _mm_slli_epi16(T, 8)));
+         return SIMD_4x32(_mm_or_si128(_mm_srli_epi16(T, 8),
+                                       _mm_slli_epi16(T, 8)));
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+
+         __vector unsigned char perm = vec_lvsl(0, static_cast<u32bit*>(nullptr));
+
+         perm = vec_xor(perm, vec_splat_u8(3));
+
+         return SIMD_4x32(vec_perm(m_reg, m_reg, perm));
+#else
+         return SIMD_4x32(reverse_bytes(m_reg[0]),
+                          reverse_bytes(m_reg[1]),
+                          reverse_bytes(m_reg[2]),
+                          reverse_bytes(m_reg[3]));
+#endif
          }
 
-      static void transpose(SIMD_SSE2& B0, SIMD_SSE2& B1,
-                            SIMD_SSE2& B2, SIMD_SSE2& B3)
+      static void transpose(SIMD_4x32& B0, SIMD_4x32& B1,
+                            SIMD_4x32& B2, SIMD_4x32& B3)
          {
+#if defined(BOTAN_SIMD_USE_SSE2)
          __m128i T0 = _mm_unpacklo_epi32(B0.m_reg, B1.m_reg);
          __m128i T1 = _mm_unpacklo_epi32(B2.m_reg, B3.m_reg);
          __m128i T2 = _mm_unpackhi_epi32(B0.m_reg, B1.m_reg);
@@ -2726,30 +3531,48 @@ class SIMD_SSE2
          B1.m_reg = _mm_unpackhi_epi64(T0, T1);
          B2.m_reg = _mm_unpacklo_epi64(T2, T3);
          B3.m_reg = _mm_unpackhi_epi64(T2, T3);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         __vector unsigned int T0 = vec_mergeh(B0.m_reg, B2.m_reg);
+         __vector unsigned int T1 = vec_mergel(B0.m_reg, B2.m_reg);
+         __vector unsigned int T2 = vec_mergeh(B1.m_reg, B3.m_reg);
+         __vector unsigned int T3 = vec_mergel(B1.m_reg, B3.m_reg);
+
+         B0.m_reg = vec_mergeh(T0, T2);
+         B1.m_reg = vec_mergel(T0, T2);
+         B2.m_reg = vec_mergeh(T1, T3);
+         B3.m_reg = vec_mergel(T1, T3);
+#else
+         SIMD_4x32 T0(B0.m_reg[0], B1.m_reg[0], B2.m_reg[0], B3.m_reg[0]);
+         SIMD_4x32 T1(B0.m_reg[1], B1.m_reg[1], B2.m_reg[1], B3.m_reg[1]);
+         SIMD_4x32 T2(B0.m_reg[2], B1.m_reg[2], B2.m_reg[2], B3.m_reg[2]);
+         SIMD_4x32 T3(B0.m_reg[3], B1.m_reg[3], B2.m_reg[3], B3.m_reg[3]);
+
+         B0 = T0;
+         B1 = T1;
+         B2 = T2;
+         B3 = T3;
+#endif
          }
 
    private:
-      explicit SIMD_SSE2(__m128i in) { m_reg = in; }
+#if defined(BOTAN_SIMD_USE_SSE2)
+      explicit SIMD_4x32(__m128i in) { m_reg = in; }
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+      explicit SIMD_4x32(__vector unsigned int input) { m_reg = input; }
+#endif
 
+#if defined(BOTAN_SIMD_USE_SSE2)
       __m128i m_reg;
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+      __vector unsigned int m_reg;
+#else
+      uint32_t m_reg[4];
+#endif
    };
 
+typedef SIMD_4x32 SIMD_32;
+
 }
-
-#endif
-
-  namespace Botan { typedef SIMD_SSE2 SIMD_32; }
-
-#elif defined(BOTAN_HAS_SIMD_ALTIVEC)
-  namespace Botan { typedef SIMD_Altivec SIMD_32; }
-
-#elif defined(BOTAN_HAS_SIMD_SCALAR)
-  namespace Botan { typedef SIMD_Scalar<u32bit,4> SIMD_32; }
-
-#else
-  #error "No SIMD module defined"
-
-#endif
 
 
 namespace Botan {
@@ -2854,6 +3677,162 @@ namespace Botan {
 
 namespace TLS {
 
+/**
+* TLS CBC+HMAC AEAD base class (GenericBlockCipher in TLS spec)
+* This is the weird TLS-specific mode, not for general consumption.
+*/
+class TLS_CBC_HMAC_AEAD_Mode : public AEAD_Mode
+   {
+   public:
+      size_t process(uint8_t buf[], size_t sz) override final;
+
+      std::string name() const override final;
+
+      void set_associated_data(const byte ad[], size_t ad_len) override;
+
+      size_t update_granularity() const override final;
+
+      Key_Length_Specification key_spec() const override final;
+
+      bool valid_nonce_length(size_t nl) const override final;
+
+      size_t tag_size() const override final { return m_tag_size; }
+
+      size_t default_nonce_length() const override final { return m_iv_size; }
+
+      void clear() override final;
+
+ protected:
+      TLS_CBC_HMAC_AEAD_Mode(const std::string& cipher_name,
+                             size_t cipher_keylen,
+                             const std::string& mac_name,
+                             size_t mac_keylen,
+                             bool use_explicit_iv,
+                             bool use_encrypt_then_mac);
+
+      size_t cipher_keylen() const { return m_cipher_keylen; }
+      size_t mac_keylen() const { return m_mac_keylen; }
+      size_t iv_size() const { return m_iv_size; }
+      size_t block_size() const { return m_block_size; }
+
+      bool use_encrypt_then_mac() const { return m_use_encrypt_then_mac; }
+
+      BlockCipher& cipher() const
+         {
+         BOTAN_ASSERT_NONNULL(m_cipher);
+         return *m_cipher;
+         }
+
+      MessageAuthenticationCode& mac() const
+         {
+         BOTAN_ASSERT_NONNULL(m_mac);
+         return *m_mac;
+         }
+
+      secure_vector<byte>& cbc_state() { return m_cbc_state; }
+      std::vector<byte>& assoc_data() { return m_ad; }
+      secure_vector<byte>& msg() { return m_msg; }
+
+      std::vector<byte> assoc_data_with_len(uint16_t len);
+
+   private:
+      void start_msg(const byte nonce[], size_t nonce_len) override final;
+
+      void key_schedule(const byte key[], size_t length) override final;
+
+      const std::string m_cipher_name;
+      const std::string m_mac_name;
+      size_t m_cipher_keylen;
+      size_t m_mac_keylen;
+      size_t m_iv_size;
+      size_t m_tag_size;
+      size_t m_block_size;
+      bool m_use_encrypt_then_mac;
+
+      std::unique_ptr<BlockCipher> m_cipher;
+      std::unique_ptr<MessageAuthenticationCode> m_mac;
+
+      secure_vector<byte> m_cbc_state;
+      std::vector<byte> m_ad;
+      secure_vector<byte> m_msg;
+   };
+
+/**
+* TLS_CBC_HMAC_AEAD Encryption
+*/
+class BOTAN_DLL TLS_CBC_HMAC_AEAD_Encryption final : public TLS_CBC_HMAC_AEAD_Mode
+   {
+   public:
+      /**
+      */
+      TLS_CBC_HMAC_AEAD_Encryption(const std::string& cipher_algo,
+                                   const size_t cipher_keylen,
+                                   const std::string& mac_algo,
+                                   const size_t mac_keylen,
+                                   bool use_explicit_iv,
+                                   bool use_encrypt_then_mac) :
+         TLS_CBC_HMAC_AEAD_Mode(cipher_algo,
+                                cipher_keylen,
+                                mac_algo,
+                                mac_keylen,
+                                use_explicit_iv,
+                                use_encrypt_then_mac)
+         {}
+
+      void set_associated_data(const byte ad[], size_t ad_len) override;
+
+      size_t output_length(size_t input_length) const override;
+
+      size_t minimum_final_size() const override { return 0; }
+
+      void finish(secure_vector<byte>& final_block, size_t offset = 0) override;
+   private:
+      void cbc_encrypt_record(byte record_contents[], size_t record_len);
+   };
+
+/**
+* TLS_CBC_HMAC_AEAD Decryption
+*/
+class BOTAN_DLL TLS_CBC_HMAC_AEAD_Decryption final : public TLS_CBC_HMAC_AEAD_Mode
+   {
+   public:
+      /**
+      */
+      TLS_CBC_HMAC_AEAD_Decryption(const std::string& cipher_algo,
+                                   const size_t cipher_keylen,
+                                   const std::string& mac_algo,
+                                   const size_t mac_keylen,
+                                   bool use_explicit_iv,
+                                   bool use_encrypt_then_mac) :
+         TLS_CBC_HMAC_AEAD_Mode(cipher_algo,
+                                cipher_keylen,
+                                mac_algo,
+                                mac_keylen,
+                                use_explicit_iv,
+                                use_encrypt_then_mac)
+         {}
+
+      size_t output_length(size_t input_length) const override;
+
+      size_t minimum_final_size() const override { return tag_size(); }
+
+      void finish(secure_vector<byte>& final_block, size_t offset = 0) override;
+
+   private:
+      void cbc_decrypt_record(byte record_contents[], size_t record_len);
+      
+      void perform_additional_compressions(size_t plen, size_t padlen);
+   };
+
+}
+
+}
+
+
+namespace Botan {
+
+namespace TLS {
+
 class TLS_Data_Reader;
 
 enum Handshake_Extension_Type {
@@ -2869,9 +3848,9 @@ enum Handshake_Extension_Type {
    TLSEXT_SRP_IDENTIFIER         = 12,
    TLSEXT_SIGNATURE_ALGORITHMS   = 13,
    TLSEXT_USE_SRTP               = 14,
-   TLSEXT_HEARTBEAT_SUPPORT      = 15,
    TLSEXT_ALPN                   = 16,
 
+   TLSEXT_ENCRYPT_THEN_MAC       = 22,
    TLSEXT_EXTENDED_MASTER_SECRET = 23,
 
    TLSEXT_SESSION_TICKET         = 35,
@@ -3091,6 +4070,38 @@ class Supported_Elliptic_Curves final : public Extension
    };
 
 /**
+* Supported Point Formats Extension (RFC 4492)
+*/
+class Supported_Point_Formats final : public Extension
+   {
+   public:
+      enum ECPointFormat : byte {
+         UNCOMPRESSED = 0,
+         ANSIX962_COMPRESSED_PRIME = 1,
+         ANSIX962_COMPRESSED_CHAR2 = 2, // don't support these curves
+      };
+
+      static Handshake_Extension_Type static_type()
+         { return TLSEXT_EC_POINT_FORMATS; }
+
+      Handshake_Extension_Type type() const override { return static_type(); }
+
+      std::vector<byte> serialize() const override;
+
+      explicit Supported_Point_Formats() : m_prefers_compressed(true) {}
+
+      Supported_Point_Formats(TLS_Data_Reader& reader,
+                              u16bit extension_size);
+
+      bool empty() const override { return false; }
+
+      bool prefers_compressed() { return m_prefers_compressed; }
+
+   private:
+      bool m_prefers_compressed = false;
+   };
+
+/**
 * Signature Algorithms Extension for TLS 1.2 (RFC 5246)
 */
 class Signature_Algorithms final : public Extension
@@ -3107,8 +4118,9 @@ class Signature_Algorithms final : public Extension
       static std::string sig_algo_name(byte code);
       static byte sig_algo_code(const std::string& name);
 
-      std::vector<std::pair<std::string, std::string> >
-         supported_signature_algorthms() const
+      // [(hash,sig),(hash,sig),...]
+      const std::vector<std::pair<std::string, std::string>>&
+      supported_signature_algorthms() const
          {
          return m_supported_algos;
          }
@@ -3120,13 +4132,13 @@ class Signature_Algorithms final : public Extension
       Signature_Algorithms(const std::vector<std::string>& hashes,
                            const std::vector<std::string>& sig_algos);
 
-      explicit Signature_Algorithms(const std::vector<std::pair<std::string, std::string> >& algos) :
+      explicit Signature_Algorithms(const std::vector<std::pair<std::string, std::string>>& algos) :
          m_supported_algos(algos) {}
 
       Signature_Algorithms(TLS_Data_Reader& reader,
                            u16bit extension_size);
    private:
-      std::vector<std::pair<std::string, std::string> > m_supported_algos;
+      std::vector<std::pair<std::string, std::string>> m_supported_algos;
    };
 
 /**
@@ -3176,9 +4188,29 @@ class Extended_Master_Secret final : public Extension
    };
 
 /**
+* Encrypt-then-MAC Extension (RFC 7366)
+*/
+class Encrypt_then_MAC final : public Extension
+   {
+   public:
+      static Handshake_Extension_Type static_type()
+         { return TLSEXT_ENCRYPT_THEN_MAC; }
+
+      Handshake_Extension_Type type() const override { return static_type(); }
+
+      std::vector<byte> serialize() const override;
+
+      bool empty() const override { return false; }
+
+      Encrypt_then_MAC() {}
+
+      Encrypt_then_MAC(TLS_Data_Reader& reader, u16bit extension_size);
+   };
+
+/**
 * Represents a block of extensions in a hello message
 */
-class Extensions
+class BOTAN_DLL Extensions
    {
    public:
       std::set<Handshake_Extension_Type> extension_types() const;
@@ -3453,27 +4485,58 @@ namespace Botan {
 
 namespace TLS {
 
+class Handshake_State;
+
 /**
 * TLS Session Keys
 */
 class Session_Keys
    {
    public:
-      SymmetricKey client_cipher_key() const { return m_c_cipher; }
-      SymmetricKey server_cipher_key() const { return m_s_cipher; }
+      /**
+      * @return client encipherment key
+      */
+      const SymmetricKey& client_cipher_key() const { return m_c_cipher; }
 
-      SymmetricKey client_mac_key() const { return m_c_mac; }
-      SymmetricKey server_mac_key() const { return m_s_mac; }
+      /**
+      * @return client encipherment key
+      */
+      const SymmetricKey& server_cipher_key() const { return m_s_cipher; }
 
-      InitializationVector client_iv() const { return m_c_iv; }
-      InitializationVector server_iv() const { return m_s_iv; }
+      /**
+      * @return client MAC key
+      */
+      const SymmetricKey& client_mac_key() const { return m_c_mac; }
 
+      /**
+      * @return server MAC key
+      */
+      const SymmetricKey& server_mac_key() const { return m_s_mac; }
+
+      /**
+      * @return client IV
+      */
+      const InitializationVector& client_iv() const { return m_c_iv; }
+
+      /**
+      * @return server IV
+      */
+      const InitializationVector& server_iv() const { return m_s_iv; }
+
+      /**
+      * @return TLS master secret
+      */
       const secure_vector<byte>& master_secret() const { return m_master_sec; }
 
       Session_Keys() {}
 
-      Session_Keys(const class Handshake_State* state,
-                   const secure_vector<byte>& pre_master,
+      /**
+      * @param state state the handshake state
+      * @param pre_master_secret the pre-master secret
+      * @param resuming whether this TLS session is resumed
+      */
+      Session_Keys(const Handshake_State* state,
+                   const secure_vector<byte>& pre_master_secret,
                    bool resuming);
 
    private:
@@ -3493,6 +4556,7 @@ class KDF;
 
 namespace TLS {
 
+class Callbacks;
 class Policy;
 
 class Hello_Verify_Request;
@@ -3514,9 +4578,7 @@ class Finished;
 class Handshake_State
    {
    public:
-      typedef std::function<void (const Handshake_Message&)> handshake_msg_cb;
-
-      Handshake_State(Handshake_IO* io, handshake_msg_cb cb);
+      Handshake_State(Handshake_IO* io, Callbacks& callbacks);
 
       virtual ~Handshake_State();
 
@@ -3633,15 +4695,10 @@ class Handshake_State
 
       const Handshake_Hash& hash() const { return m_handshake_hash; }
 
-      void note_message(const Handshake_Message& msg)
-         {
-         if(m_msg_callback)
-            m_msg_callback(msg);
-         }
-
+      void note_message(const Handshake_Message& msg);
    private:
 
-      handshake_msg_cb m_msg_callback;
+      Callbacks& m_callbacks;
 
       std::unique_ptr<Handshake_IO> m_handshake_io;
 
@@ -3690,7 +4747,7 @@ std::vector<byte> make_hello_random(RandomNumberGenerator& rng,
 /**
 * DTLS Hello Verify Request
 */
-class Hello_Verify_Request final : public Handshake_Message
+class BOTAN_DLL Hello_Verify_Request final : public Handshake_Message
    {
    public:
       std::vector<byte> serialize() const override;
@@ -3710,9 +4767,29 @@ class Hello_Verify_Request final : public Handshake_Message
 /**
 * Client Hello Message
 */
-class Client_Hello final : public Handshake_Message
+class BOTAN_DLL Client_Hello final : public Handshake_Message
    {
    public:
+      class Settings
+      {
+          public:
+              Settings(const Protocol_Version version,
+                       const std::string& hostname = "",
+                       const std::string& srp_identifier = "")
+                  : m_new_session_version(version),
+                    m_hostname(hostname),
+                    m_srp_identifier(srp_identifier) {};
+
+              const Protocol_Version protocol_version() const { return m_new_session_version; };
+              const std::string& hostname() const { return m_hostname; };
+              const std::string& srp_identifier() const { return m_srp_identifier; }
+
+          private:
+              const Protocol_Version m_new_session_version;
+              const std::string m_hostname;
+              const std::string m_srp_identifier;
+      };
+
       Handshake_Type type() const override { return CLIENT_HELLO; }
 
       Protocol_Version version() const { return m_version; }
@@ -3736,11 +4813,28 @@ class Client_Hello final : public Handshake_Message
          return std::vector<std::pair<std::string, std::string>>();
          }
 
+      std::set<std::string> supported_sig_algos() const
+         {
+         std::set<std::string> sig;
+         for(auto&& hash_and_sig : supported_algos())
+            sig.insert(hash_and_sig.second);
+         return sig;
+         }
+
       std::vector<std::string> supported_ecc_curves() const
          {
          if(Supported_Elliptic_Curves* ecc = m_extensions.get<Supported_Elliptic_Curves>())
             return ecc->curves();
          return std::vector<std::string>();
+         }
+
+      bool prefers_compressed_ec_points() const
+         {
+         if(Supported_Point_Formats* ecc_formats = m_extensions.get<Supported_Point_Formats>())
+            {
+            return ecc_formats->prefers_compressed();
+            }
+         return false;
          }
 
       std::string sni_hostname() const
@@ -3793,6 +4887,16 @@ class Client_Hello final : public Handshake_Message
          return m_extensions.has<Extended_Master_Secret>();
          }
 
+      bool supports_encrypt_then_mac() const
+         {
+         return m_extensions.has<Encrypt_then_MAC>();
+         }
+
+      bool sent_signature_algorithms() const
+         {
+         return m_extensions.has<Signature_Algorithms>();
+         }
+
       std::vector<std::string> next_protocols() const
          {
          if(auto alpn = m_extensions.get<Application_Layer_Protocol_Notification>())
@@ -3814,13 +4918,11 @@ class Client_Hello final : public Handshake_Message
 
       Client_Hello(Handshake_IO& io,
                    Handshake_Hash& hash,
-                   Protocol_Version version,
                    const Policy& policy,
                    RandomNumberGenerator& rng,
                    const std::vector<byte>& reneg_info,
-                   const std::vector<std::string>& next_protocols,
-                   const std::string& hostname = "",
-                   const std::string& srp_identifier = "");
+                   const Client_Hello::Settings& client_settings,
+                   const std::vector<std::string>& next_protocols);
 
       Client_Hello(Handshake_IO& io,
                    Handshake_Hash& hash,
@@ -3848,9 +4950,38 @@ class Client_Hello final : public Handshake_Message
 /**
 * Server Hello Message
 */
-class Server_Hello final : public Handshake_Message
+class BOTAN_DLL Server_Hello final : public Handshake_Message
    {
    public:
+      class Settings
+      {
+          public:
+              Settings(const std::vector<byte> new_session_id,
+                       Protocol_Version new_session_version,
+                       u16bit ciphersuite,
+                       byte compression,
+                       bool offer_session_ticket)
+                  : m_new_session_id(new_session_id),
+                    m_new_session_version(new_session_version),
+                    m_ciphersuite(ciphersuite),
+                    m_compression(compression),
+                    m_offer_session_ticket(offer_session_ticket) {};
+
+              const std::vector<byte>& session_id() const { return m_new_session_id; };
+              Protocol_Version protocol_version() const { return m_new_session_version; };
+              u16bit ciphersuite() const { return m_ciphersuite; };
+              byte compression() const { return m_compression; }
+              bool offer_session_ticket() const { return m_offer_session_ticket; }
+
+          private:
+              const std::vector<byte> m_new_session_id;
+              Protocol_Version m_new_session_version;
+              u16bit m_ciphersuite;
+              byte m_compression;
+              bool m_offer_session_ticket;
+      };
+
+
       Handshake_Type type() const override { return SERVER_HELLO; }
 
       Protocol_Version version() const { return m_version; }
@@ -3878,6 +5009,11 @@ class Server_Hello final : public Handshake_Message
       bool supports_extended_master_secret() const
          {
          return m_extensions.has<Extended_Master_Secret>();
+         }
+
+      bool supports_encrypt_then_mac() const
+         {
+         return m_extensions.has<Encrypt_then_MAC>();
          }
 
       bool supports_session_ticket() const
@@ -3908,18 +5044,23 @@ class Server_Hello final : public Handshake_Message
       std::set<Handshake_Extension_Type> extension_types() const
          { return m_extensions.extension_types(); }
 
+      bool prefers_compressed_ec_points() const
+         {
+         if(auto ecc_formats = m_extensions.get<Supported_Point_Formats>())
+            {
+            return ecc_formats->prefers_compressed();
+            }
+         return false;
+         }
+
       Server_Hello(Handshake_IO& io,
                    Handshake_Hash& hash,
                    const Policy& policy,
                    RandomNumberGenerator& rng,
                    const std::vector<byte>& secure_reneg_info,
                    const Client_Hello& client_hello,
-                   const std::vector<byte>& new_session_id,
-                   Protocol_Version new_session_version,
-                   u16bit ciphersuite,
-                   byte compression,
-                   bool offer_session_ticket,
-                   const std::string& next_protocol);
+                   const Server_Hello::Settings& settings,
+                   const std::string next_protocol);
 
       Server_Hello(Handshake_IO& io,
                    Handshake_Hash& hash,
@@ -3993,7 +5134,7 @@ class Certificate final : public Handshake_Message
                   Handshake_Hash& hash,
                   const std::vector<X509_Certificate>& certs);
 
-      explicit Certificate(const std::vector<byte>& buf);
+      explicit Certificate(const std::vector<byte>& buf, const Policy &policy);
    private:
       std::vector<byte> serialize() const override;
 
@@ -4036,7 +5177,7 @@ class Certificate_Req final : public Handshake_Message
 /**
 * Certificate Verify Message
 */
-class Certificate_Verify final : public Handshake_Message
+class BOTAN_DLL Certificate_Verify final : public Handshake_Message
    {
    public:
       Handshake_Type type() const override { return CERTIFICATE_VERIFY; }
@@ -4045,6 +5186,7 @@ class Certificate_Verify final : public Handshake_Message
       * Check the signature on a certificate verify message
       * @param cert the purported certificate
       * @param state the handshake state
+      * @param policy the TLS policy
       */
       bool verify(const X509_Certificate& cert,
                   const Handshake_State& state,
@@ -4094,7 +5236,7 @@ class Finished final : public Handshake_Message
 /**
 * Hello Request Message
 */
-class Hello_Request final : public Handshake_Message
+class BOTAN_DLL Hello_Request final : public Handshake_Message
    {
    public:
       Handshake_Type type() const override { return HELLO_REQUEST; }
@@ -4176,7 +5318,7 @@ class Server_Hello_Done final : public Handshake_Message
 /**
 * New Session Ticket Message
 */
-class New_Session_Ticket final : public Handshake_Message
+class BOTAN_DLL New_Session_Ticket final : public Handshake_Message
    {
    public:
       Handshake_Type type() const override { return NEW_SESSION_TICKET; }
@@ -4454,11 +5596,12 @@ class Connection_Cipher_State
                               Connection_Side which_side,
                               bool is_our_side,
                               const Ciphersuite& suite,
-                              const Session_Keys& keys);
+                              const Session_Keys& keys,
+                              bool uses_encrypt_then_mac);
 
       AEAD_Mode* aead() { return m_aead.get(); }
 
-      std::vector<byte> aead_nonce(u64bit seq);
+      std::vector<byte> aead_nonce(u64bit seq, RandomNumberGenerator& rng);
 
       std::vector<byte> aead_nonce(const byte record[], size_t record_len, u64bit seq);
 
@@ -4466,24 +5609,9 @@ class Connection_Cipher_State
                                   Protocol_Version version,
                                   u16bit ptext_length);
 
-      BlockCipher* block_cipher() { return m_block_cipher.get(); }
-
-      MessageAuthenticationCode* mac() { return m_mac.get(); }
-
-      secure_vector<byte>& cbc_state() { return m_block_cipher_cbc_state; }
-
-      size_t block_size() const { return m_block_size; }
-
-      size_t mac_size() const { return m_mac->output_length(); }
-
-      size_t iv_size() const { return m_iv_size; }
-
-      size_t nonce_bytes_from_record() const { return m_nonce_bytes_from_record; }
-
       size_t nonce_bytes_from_handshake() const { return m_nonce_bytes_from_handshake; }
-
-      bool cbc_without_explicit_iv() const
-         { return (m_block_size > 0) && (m_iv_size == 0); }
+      size_t nonce_bytes_from_record() const { return m_nonce_bytes_from_record; }
+      bool cbc_nonce() const { return m_cbc_nonce; }
 
       std::chrono::seconds age() const
          {
@@ -4493,33 +5621,99 @@ class Connection_Cipher_State
 
    private:
       std::chrono::system_clock::time_point m_start_time;
-      std::unique_ptr<BlockCipher> m_block_cipher;
-      secure_vector<byte> m_block_cipher_cbc_state;
-      std::unique_ptr<MessageAuthenticationCode> m_mac;
-
       std::unique_ptr<AEAD_Mode> m_aead;
-      std::vector<byte> m_nonce;
 
-      size_t m_block_size = 0;
+      std::vector<byte> m_nonce;
       size_t m_nonce_bytes_from_handshake;
       size_t m_nonce_bytes_from_record;
-      size_t m_iv_size = 0;
+      bool m_cbc_nonce;
    };
+
+class Record
+   {
+   public:
+      Record(secure_vector<byte>& data,
+             u64bit* sequence,
+             Protocol_Version* protocol_version,
+             Record_Type* type)
+         : m_data(data), m_sequence(sequence), m_protocol_version(protocol_version),
+           m_type(type), m_size(data.size()) {};
+
+      secure_vector<byte>& get_data() { return m_data; }
+
+      Protocol_Version* get_protocol_version() { return m_protocol_version; }
+
+      u64bit* get_sequence() { return m_sequence; }
+
+      Record_Type* get_type() { return m_type; }
+
+      size_t& get_size() { return m_size; }
+
+   private:
+      secure_vector<byte>& m_data;
+      u64bit* m_sequence;
+      Protocol_Version* m_protocol_version;
+      Record_Type* m_type;
+      size_t m_size;
+   };
+
+class Record_Message
+   {
+   public:
+      Record_Message(const byte* data, size_t size)
+         : m_type(0), m_sequence(0), m_data(data), m_size(size) {};
+      Record_Message(byte type, u64bit sequence, const byte* data, size_t size)
+         : m_type(type), m_sequence(sequence), m_data(data),
+           m_size(size) {};
+
+      byte& get_type() { return m_type; };
+      u64bit& get_sequence() { return m_sequence; };
+      const byte* get_data() { return m_data; };
+      size_t& get_size() { return m_size; };
+
+   private:
+      byte m_type;
+      u64bit m_sequence;
+      const byte* m_data;
+      size_t m_size;
+};
+
+class Record_Raw_Input
+   {
+   public:
+      Record_Raw_Input(const byte* data, size_t size, size_t& consumed,
+                       bool is_datagram)
+         : m_data(data), m_size(size), m_consumed(consumed),
+           m_is_datagram(is_datagram) {};
+
+      const byte*& get_data() { return m_data; };
+
+      size_t& get_size() { return m_size; };
+
+      size_t& get_consumed() { return m_consumed; };
+      void set_consumed(size_t consumed) { m_consumed = consumed; }
+
+      bool is_datagram() { return m_is_datagram; };
+
+   private:
+      const byte* m_data;
+      size_t m_size;
+      size_t& m_consumed;
+      bool m_is_datagram;
+   };
+
 
 /**
 * Create a TLS record
 * @param write_buffer the output record is placed here
-* @param msg_type is the type of the message (handshake, alert, ...)
-* @param msg is the plaintext message
-* @param msg_length is the length of msg
-* @param msg_sequence is the sequence number
+* @param rec_msg is the plaintext message
 * @param version is the protocol version
+* @param msg_sequence is the sequence number
 * @param cipherstate is the writing cipher state
 * @param rng is a random number generator
-* @return number of bytes written to write_buffer
 */
 void write_record(secure_vector<byte>& write_buffer,
-                  byte msg_type, const byte msg[], size_t msg_length,
+                  Record_Message rec_msg,
                   Protocol_Version version,
                   u64bit msg_sequence,
                   Connection_Cipher_State* cipherstate,
@@ -4533,14 +5727,8 @@ typedef std::function<std::shared_ptr<Connection_Cipher_State> (u16bit)> get_cip
 * @return zero if full message, else number of bytes still needed
 */
 size_t read_record(secure_vector<byte>& read_buffer,
-                   const byte input[],
-                   size_t input_length,
-                   bool is_datagram,
-                   size_t& input_consumed,
-                   secure_vector<byte>& record,
-                   u64bit* record_sequence,
-                   Protocol_Version* record_version,
-                   Record_Type* record_type,
+                   Record_Raw_Input& raw_input,
+                   Record& rec,
                    Connection_Sequence_Numbers* sequence_numbers,
                    get_cipherstate_fn get_cipherstate);
 
@@ -4684,16 +5872,18 @@ class Unix_EntropySource final : public Entropy_Source
    public:
       std::string name() const override { return "unix_procs"; }
 
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
 
       /**
       * @param trusted_paths is a list of directories that are assumed
       *        to contain only 'safe' binaries. If an attacker can write
       *        an executable to one of these directories then we will
       *        run arbitrary code.
+      * @param proc_count number of concurrent processes executing,
+      * when set to zero, number of processors is used
       */
       Unix_EntropySource(const std::vector<std::string>& trusted_paths,
-                         size_t concurrent_processes = 0);
+                         size_t proc_count = 0);
    private:
       static std::vector<std::vector<std::string>> get_default_sources();
 
@@ -4726,7 +5916,7 @@ class Unix_EntropySource final : public Entropy_Source
 
       const std::vector<std::string>& next_source();
 
-      std::mutex m_mutex;
+      mutex_type m_mutex;
       const std::vector<std::string> m_trusted_paths;
       const size_t m_concurrent;
 
@@ -4742,7 +5932,7 @@ class UnixProcessInfo_EntropySource final : public Entropy_Source
    public:
       std::string name() const override { return "proc_info"; }
 
-      void poll(Entropy_Accumulator& accum) override;
+      size_t poll(RandomNumberGenerator& rng) override;
    };
 
 }

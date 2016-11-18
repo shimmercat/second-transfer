@@ -1,4 +1,4 @@
-{-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ExistentialQuantification, TemplateHaskell, DeriveDataTypeable, GeneralizedNewtypeDeriving, GADTs #-}
 module SecondTransfer.IOCallbacks.Types (
                -- | Functions for passing data to external parties
                --   The callbacks here should have a blocking behavior and not
@@ -10,7 +10,7 @@ module SecondTransfer.IOCallbacks.Types (
                , BestEffortPullAction
                , Attendant
                , CloseAction
-               , IOCallbacks        (..)
+               , IOCallbacks          (..)
 
                , pushAction_IOC
                , pullAction_IOC
@@ -20,18 +20,22 @@ module SecondTransfer.IOCallbacks.Types (
 
                  -- * Classifying IO callbacks
                  -- $ classifiers
-               , IOChannels         (..)
+               , IOChannels           (..)
                , PlainTextIO
+               , PlainText
                , TLSEncryptedIO
                , TLSServerIO
                , TLSClientIO
                , SOCKS5Preface
-               , ConnectionData     (..)
+               , ConnectionData       (..)
                , addr_CnD
                , connId_CnD
                , nullConnectionData
 
-               , ConnectionId       (..)
+               , ConnectionId         (..)
+
+               , AcceptErrorCondition (..)
+               , AcceptOutcome        (..)
 
                -- * Utility functions
                , PullActionWrapping
@@ -218,6 +222,28 @@ instance IOChannels TLSServer where
     handshake (TLSServer io) = return io
 instance TLSEncryptedIO TLSServer
 instance TLSServerIO TLSServer
+
+
+
+
+-- | Error conditions that may happen sometimes upon
+--   trying to accept a new connection
+data AcceptErrorCondition =
+     ResourceExhausted_AEC
+  |  Signal_AEC Int
+  |  Misc_AEC  String
+    deriving (Show, Eq)
+
+
+
+-- | Let's be flexible: the outcome of accepting a connection in a given
+--   channel (either SOCKS5 or flat port) can be either something that will
+--   be handled by a TLS or by a plain stack, or an error condition
+data AcceptOutcome plain encrypted where
+    ErrorCondition_AOu :: AcceptErrorCondition -> AcceptOutcome plain encrypted
+    ForTLS_AOu :: TLSServerIO encrypted => encrypted -> AcceptOutcome plain encrypted
+    Plain_AOu  :: PlainTextIO plain => plain -> AcceptOutcome plain encrypted
+
 
 
 

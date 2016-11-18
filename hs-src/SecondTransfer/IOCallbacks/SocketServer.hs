@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving, ForeignFunctionInterface  #-}
+{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving, ForeignFunctionInterface, Rank2Types  #-}
 module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
               , TLSServerSocketIOCallbacks                          (..)
@@ -11,6 +11,7 @@ module SecondTransfer.IOCallbacks.SocketServer(
               , tcpServe
               , tcpServeWithSockAddr
               , tlsServe
+              , tlsServe'
 
               -- ** Socket server with iterators
               , tcpItcli
@@ -230,6 +231,22 @@ tlsServe closing listen_socket tls_action =
               socket_io_callbacks <- socketIOCallbacks active_socket
               tls_action $
                   Right (TLSServerSocketIOCallbacks socket_io_callbacks)
+
+
+tlsServe' :: forall a . PlainTextIO a => (IO Bool) -> NS.Socket -> ( AcceptOutcome a TLSServerSocketIOCallbacks  -> IO () ) -> IO ()
+tlsServe' closing listen_socket tls_action =
+    tcpServe listen_socket closing tcp_action
+  where
+    tcp_action either_active_socket =
+      case either_active_socket of
+          Left condition ->
+              tls_action $ ErrorCondition_AOu condition
+
+          Right active_socket ->
+            do
+              socket_io_callbacks <- socketIOCallbacks active_socket
+              tls_action $
+                  ForTLS_AOu (TLSServerSocketIOCallbacks socket_io_callbacks)
 
 
 -- tlsItcli :: NS.Socket -> Source IO (TLSServerSocketIOCallbacks, NS.SockAddr)
