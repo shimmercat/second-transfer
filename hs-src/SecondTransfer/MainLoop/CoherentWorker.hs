@@ -58,6 +58,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , protocol_Pr
     , pushIsEnabled_Pr
     , sessionLatencyRegister_Pr
+    , sessionStore_Pr
 
     , fragmentDeliveryCallback_Ef
     , priorityEffect_Ef
@@ -241,9 +242,9 @@ makeLenses ''PushedStream
 -- | First argument is an approximation of when
 --   the frame was delivered, according to the monotonic clock.
 --   The tuple coming afterwards contains (ordinal, first_byte, after_last_byte),
---   where `first_byte` says which is the index of the first byte just delivered, and
---   `after_last_byte` is the index of the first byte to be delivered in the next packet,
---   if there is one.
+--   where `first_byte` says which is the index of the first byte in the packet
+--   just delivered, and   `after_last_byte` is the index of the first byte
+--   to be delivered in the next packet,  if there is one.
 --   Do not linger in this call,  it may delay some important thread
 type FragmentDeliveryCallback =  TimeSpec -> (Int, Int, Int) -> IO ()
 
@@ -302,9 +303,9 @@ makeLenses ''Effect
 
 defaultEffects :: Effect
 defaultEffects = Effect {
-  _fragmentDeliveryCallback_Ef = Nothing,
-  _priorityEffect_Ef = NoEffect_PrEf,
-  _interrupt_Ef = Nothing
+    _fragmentDeliveryCallback_Ef = Nothing,
+    _priorityEffect_Ef = NoEffect_PrEf,
+    _interrupt_Ef = Nothing
    }
 
 
@@ -312,12 +313,12 @@ defaultEffects = Effect {
 --   headers and they should contain the :status pseudo-header. The `PushedStreams`
 --   is a list of pushed streams... they will be pushed to the client.
 data PrincipalStream = PrincipalStream {
-  _headers_PS              :: HqHeaders,
-  _pushedStreams_PS        :: PushedStreams,
-  _dataAndConclusion_PS    :: DataAndConclusion,
-  _effect_PS               :: Effect,
-  _processingReport_PS     :: Maybe ProcessingReport,
-  _label_PS                :: Maybe B.ByteString
+    _headers_PS              :: HqHeaders,
+    _pushedStreams_PS        :: PushedStreams,
+    _dataAndConclusion_PS    :: DataAndConclusion,
+    _effect_PS               :: Effect,
+    _processingReport_PS     :: Maybe ProcessingReport,
+    _label_PS                :: Maybe B.ByteString
   }
 
 makeLenses ''PrincipalStream
