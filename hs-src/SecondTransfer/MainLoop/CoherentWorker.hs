@@ -49,6 +49,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , responseHeaders_Psh
     , priority_Psh
     , label_Psh
+    , fragmentDeliveryCallback_Psh
 
     , startedTime_Pr
     , streamId_Pr
@@ -222,23 +223,6 @@ data PriorityEffect =
   deriving Show
 
 
--- | A pushed stream, represented by a list of request headers,
---   a list of response headers, and the usual response body  (which
---   may include final footers (not implemented yet)).
-data PushedStream = PushedStream {
-  _requestHeaders_Psh    :: HqHeaders,
-  _responseHeaders_Psh   :: HqHeaders,
-  _dataAndConclusion_Psh :: DataAndConclusion,
-  _label_Psh             :: Maybe B.ByteString,
-  _priority_Psh          :: PriorityEffect
-  -- TODO:
-  -- _fragmentDeliveryCallback_Psh :: FragmentDeliveryCallback
-  }
-
-
-makeLenses ''PushedStream
-
-
 -- | First argument is an approximation of when
 --   the frame was delivered, according to the monotonic clock.
 --   The tuple coming afterwards contains (ordinal, first_byte, after_last_byte),
@@ -247,6 +231,23 @@ makeLenses ''PushedStream
 --   to be delivered in the next packet,  if there is one.
 --   Do not linger in this call,  it may delay some important thread
 type FragmentDeliveryCallback =  TimeSpec -> (Int, Int, Int) -> IO ()
+
+
+-- | A pushed stream, represented by a list of request headers,
+--   a list of response headers, and the usual response body  (which
+--   may include final footers (not implemented yet)).
+data PushedStream = PushedStream {
+  _requestHeaders_Psh           :: HqHeaders,
+  _responseHeaders_Psh          :: HqHeaders,
+  _dataAndConclusion_Psh        :: DataAndConclusion,
+  _label_Psh                    :: Maybe B.ByteString,
+  _priority_Psh                 :: PriorityEffect,
+  _fragmentDeliveryCallback_Psh :: Maybe FragmentDeliveryCallback
+  }
+
+
+makeLenses ''PushedStream
+
 
 
 -- | Types of interrupt effects that can be signaled by aware workers. These include whole

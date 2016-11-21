@@ -527,6 +527,7 @@ http2Session
         ,_latencyReports             = latency_reports
         ,_emittedPings               = emitted_pings
         ,_streamStateTable           = stream_state_table
+        ,_sessionStore               = session_store
         }
 
     let
@@ -1836,6 +1837,7 @@ normallyHandleStream principal_stream = do
                 pushed_data_and_conclusion = pushed_stream ^. dataAndConclusion_Psh
                 maybe_label_of_pushed      = pushed_stream ^. label_Psh
                 push_prio_effect           = pushed_stream ^. priority_Psh
+                frag_deliv_callback        = pushed_stream ^. fragmentDeliveryCallback_Psh
             child_stream_id <- liftIO $ modifyMVar next_push_stream_mvar
                                      $ (\ x -> return (x+2,x) )
 
@@ -1846,7 +1848,7 @@ normallyHandleStream principal_stream = do
                 writeChan headers_output . PushPromise_HM $
                     (stream_id, child_stream_id, request_headers, effects)
 
-            return (child_stream_id, response_headers, pushed_data_and_conclusion, push_prio_effect)
+            return (child_stream_id, response_headers, pushed_data_and_conclusion, push_prio_effect, frag_deliv_callback)
       else
         return []
 
@@ -1888,13 +1890,12 @@ normallyHandleStream principal_stream = do
         -- Now, time to fork threads for the pusher streams
         -- we send those pushers even if the main stream is cancelled...
         forM_ data_promises
-            $ \ (child_stream_id, response_headers, pushed_data_and_conclusion, push_prio_effect) -> do
+            $ \ (child_stream_id, response_headers, pushed_data_and_conclusion, push_prio_effect, frag_deliv_callback) -> do
                   environment <- ask
                   let
-                      fr_delivery_callback          = effects ^. fragmentDeliveryCallback_Ef
                       pushed_stream_effect =
                          (set priorityEffect_Ef push_prio_effect) .
-                         (set fragmentDeliveryCallback_Ef fr_delivery_callback ) $
+                         (set fragmentDeliveryCallback_Ef frag_deliv_callback ) $
                          defaultEffects
 
                       action = pusherThread

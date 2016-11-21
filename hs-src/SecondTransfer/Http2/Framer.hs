@@ -745,7 +745,16 @@ startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify  = do
     _ <- liftIO $ forkIOExc "streamOutputQueue"
            $ ignoreException blockedIndefinitelyOnMVar  ()
            $ close_on_error session_id' sessions_context
-           $ runReaderT (flowControlOutput stream_id initial_cap 0 calm_0 "" command_chan stream_bytes_mvar delivery_notify effect)
+           $ runReaderT (
+                 flowControlOutput
+                     stream_id
+                     initial_cap
+                     0
+                     calm_0
+                     ""
+                     command_chan
+                     stream_bytes_mvar
+                     delivery_notify effect)
              read_state
 
     return ()
