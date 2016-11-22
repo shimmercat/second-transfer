@@ -15,9 +15,10 @@ import qualified  Control.Concurrent.BoundedChan                as A
 
 import qualified Data.ByteString.Lazy                           as LB
 import qualified Data.ByteString.Builder                        as Bu
--- import           Data.IORef
 
 import qualified Data.Map.Strict                                as DM
+
+import qualified SecondTransfer.Http2.Constants                 as CONSTANT
 
 import           Debug.Trace
 
@@ -85,8 +86,17 @@ putInPriorityChannel state system_priority priority stream_id packet_ordinal dat
 --
 --   Notice that for this to work, the calm of the packets in a stream should be non-
 --  decreasing.
-putInPriorityChannel_AtM :: Int -> Int -> Int -> Int -> LB.ByteString -> PriorityChannelM ()
-putInPriorityChannel_AtM system_priority priority stream_id packet_ordinal datum =
+putInPriorityChannel_AtM ::
+    Int ->
+    Int ->
+    Int ->
+    Int ->
+    LB.ByteString -> PriorityChannelM ()
+putInPriorityChannel_AtM
+    system_priority
+    priority
+    stream_id
+    packet_ordinal datum =
   do
     gateways_mvar <- view gateways_PCS
 
@@ -120,97 +130,141 @@ putInPriorityChannel_AtM system_priority priority stream_id packet_ordinal datum
     return ()
 
 
--- | Gets the data with higher priority...
-getHigherPriorityData_AtM :: PriorityChannelM LB.ByteString
-getHigherPriorityData_AtM =
+-- | Gets the data with higher priority..., return the data and a bool indicating
+--   if the data is a data packet (True for data packet)
+getHigherPriorityData_AtM :: Bool -> PriorityChannelM (Bool, LB.ByteString)
+getHigherPriorityData_AtM can_take_data =
   do
     gateways_mvar <- view gateways_PCS
     data_ready <- view dataReady_PCS
     maybe_token <- liftIO . withMVar gateways_mvar $ \ gateways ->
-        gowy gateways
+        gowy can_take_data gateways
 
     case maybe_token of
 
         Nothing -> do
-            -- Wait for more data
+            -- Wait for more data, no matter what.
             _ <- liftIO $ takeMVar data_ready
-            getHigherPriorityData_AtM
+            getHigherPriorityData_AtM can_take_data
 
-        Just token ->
-            return $ token ^. payload_ChT
+        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio)), token) ->
+            return $ ( (sys_prio == 0) , token ^. payload_ChT)
 
 
-maybeGetHigherPriorityData_AtM :: PriorityChannelM (Maybe LB.ByteString)
-maybeGetHigherPriorityData_AtM =
+-- | Same signature as before.
+maybeGetHigherPriorityData_AtM :: Bool ->  PriorityChannelM (Maybe  (Bool,  LB.ByteString))
+maybeGetHigherPriorityData_AtM can_take_data =
   do
     gateways_mvar <- view gateways_PCS
     maybe_token <- liftIO . withMVar gateways_mvar $ \ gateways ->
-        gowy gateways
+        gowy can_take_data gateways
 
     case maybe_token of
-
         Nothing -> do
             return Nothing
 
+        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio)), token) ->
+            return . Just $ ( (sys_prio == 0) , token ^. payload_ChT)
 
-        Just token ->
-            return . Just $ token ^. payload_ChT
 
-
-getDataUpTo :: PriorityChannelsState ->  Int -> IO Bu.Builder
-getDataUpTo state return_at_trigger = runPriorityChannel state (getDataUpTo_AtM True return_at_trigger)
+-- | Gets data from the priority tree. There are two boundaries:
+--
+--   `return_at_trigger` is the trigger to stop, and it is related
+--    to the available buffer size.
+--
+--   `max_data` is the max amount of data with system priority zero,
+--   corresponding to DATA HTTP/2 frames. This is given here to enforce
+--   flow control.
+--
+--   We return the data plus a value to adjust the data credits downward
+--   for flow control on the connection.
+getDataUpTo ::
+    PriorityChannelsState ->
+    Int ->
+    Int -> IO (Bu.Builder, Int)
+getDataUpTo state return_at_trigger max_data =
+    runPriorityChannel
+       state
+       (getDataUpTo_AtM True return_at_trigger max_data)
 
 
 -- | Gets  the available data or up to the number of bytes that
 --   falls in a frame boundary immediately after "return_at_trigger"
-getDataUpTo_AtM :: Bool ->  Int -> PriorityChannelM Bu.Builder
-getDataUpTo_AtM is_first return_at_trigger
+getDataUpTo_AtM :: Bool ->  Int -> Int  -> PriorityChannelM (Bu.Builder, Int)
+getDataUpTo_AtM is_first return_at_trigger max_data
   | is_first =
       do
-        datum <- getHigherPriorityData_AtM
+        let
+            can_take_data = max_data >= CONSTANT.sessionFlowControlHighTide
+        (is_data, datum) <- getHigherPriorityData_AtM can_take_data
         let
             datum_length = fromIntegral $  LB.length datum
             datum_as_bu = Bu.lazyByteString datum
+            data_credits_down = if is_data
+              then datum_length - 9
+              else 0
         if datum_length > return_at_trigger
           then do
-            return datum_as_bu
+            return (datum_as_bu, data_credits_down)
           else do
             let
                 new_trigger = return_at_trigger - datum_length
-            more_data <- getDataUpTo_AtM False new_trigger
-            return $ datum_as_bu `mappend` more_data
+                new_max_data = max_data - data_credits_down
+
+            (more_data, more_data_credits_down) <-
+               getDataUpTo_AtM False new_trigger new_max_data
+            return $
+               (
+                  (datum_as_bu `mappend` more_data),
+                  (data_credits_down + more_data_credits_down)
+               )
   | otherwise =
       do
-        maybe_datum <- maybeGetHigherPriorityData_AtM
-
+        let
+            can_take_data = max_data >= CONSTANT.sessionFlowControlHighTide
+        maybe_datum <- maybeGetHigherPriorityData_AtM can_take_data
         case maybe_datum of
-            Just datum -> do
+            Just (is_data, datum) -> do
                 let
                     datum_length = fromIntegral $  LB.length datum
                     datum_as_bu = Bu.lazyByteString datum
+                    data_credits_down = if is_data
+                      then datum_length - 9
+                      else 0
                 if datum_length > return_at_trigger
                   then
-                    return datum_as_bu
+                    return (datum_as_bu, data_credits_down)
                   else do
                     let
                         new_trigger = return_at_trigger - datum_length
-                    more_data <- getDataUpTo_AtM False new_trigger
-                    return $ datum_as_bu `mappend` more_data
+                        new_max_data = max_data - data_credits_down
+                    (more_data, more_credits_down) <-
+                        getDataUpTo_AtM False new_trigger new_max_data
+                    return $
+                        (
+                            datum_as_bu `mappend` more_data,
+                            (
+                              more_credits_down + data_credits_down
+                            )
+                        )
 
-            Nothing -> return mempty
+            Nothing -> return (mempty, 0)
 
 
-gowy :: Gateways -> IO (Maybe ChannelToken)
-gowy  gw =
-    case DM.minView gw of
+gowy :: Bool ->  Gateways -> IO (Maybe (ChannelKey, ChannelToken))
+gowy can_take_data  gw =
+    case DM.minViewWithKey gw of
         Nothing ->  return Nothing
 
-        Just (a_channel, gw1) -> do
+        Just ((ck@(ChannelKey (system_prio, _normal_prio)), a_channel), gw1)
+          | system_prio < 0 || can_take_data -> do
             maybe_token <- A.tryReadChan a_channel
             case maybe_token of
                 Nothing ->
                     -- Try to take the datum from the next
                     -- one
-                    gowy gw1
+                    gowy can_take_data gw1
 
-                Just token -> return $ Just token
+                Just token -> return $ Just (ck, token)
+
+          | otherwise  -> return Nothing

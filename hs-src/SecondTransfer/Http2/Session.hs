@@ -101,6 +101,7 @@ import           SecondTransfer.Exception
 import qualified SecondTransfer.Utils.HTTPHeaders       as He
 import qualified SecondTransfer.Http2.TransferTypes     as TT
 import           SecondTransfer.Http2.StreamState
+import qualified SecondTransfer.Http2.Constants         as CONSTANT
 
 
 #ifdef SECONDTRANSFER_MONITORING
@@ -483,7 +484,7 @@ http2Session
     emitted_pings             <- newMVar []
     session_store             <- newMVar Dm.empty
 
-    stream_state_table        <- H.newSized 100
+    stream_state_table        <- H.newSized CONSTANT.maxAllowedStreams
 
     let
         for_worker_thread = WorkerThreadEnvironment {
@@ -1383,9 +1384,9 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAbou
             -- CAn we open the stream?
             num_active_streams <- liftIO $ countActiveStreams stream_state_table
             -- XXXXXX TODO: Make this limit configurable. At the moment, we are saying in the
-            -- setting that we won't accept more than 100 simultaneous streams.
+            -- setting that we won't accept more than XX simultaneous streams.
             -- Check code in Framer .
-            if (num_active_streams + 1) > 100
+            if (num_active_streams + 1) > CONSTANT.maxAllowedStreams
               then do
                 reportSituation (PeerErrored_SWC "TryingToOpenTooManyStreams")
                 closeConnectionBecauseIsInvalid NH2.RefusedStream

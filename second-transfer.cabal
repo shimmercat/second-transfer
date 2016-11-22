@@ -141,6 +141,7 @@ library
                   , SecondTransfer.Http2.PriorityChannels
                   , SecondTransfer.Http2.CalmState
                   , SecondTransfer.Http2.StreamState
+                  , SecondTransfer.Http2.Constants
 
                   , SecondTransfer.Http1.Session
                   , SecondTransfer.IOCallbacks.Botcher

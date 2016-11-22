@@ -2,7 +2,7 @@
 -- The framer has two functions: to convert bytes to Frames and the other way around,
 -- and two keep track of flow-control quotas.
 {-# LANGUAGE OverloadedStrings, StandaloneDeriving, FlexibleInstances,
-             DeriveDataTypeable, TemplateHaskell #-}
+             DeriveDataTypeable, TemplateHaskell, BangPatterns #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http2.Framer (
     BadPrefaceException,
@@ -73,6 +73,7 @@ import           SecondTransfer.Exception
 import           SecondTransfer.Http2.TransferTypes
 import           SecondTransfer.Http2.PriorityChannels
 import           SecondTransfer.Http2.CalmState
+import qualified SecondTransfer.Http2.Constants         as CONSTANT
 
 #ifdef SECONDTRANSFER_MONITORING
 import           SecondTransfer.MainLoop.Logging        (logit)
@@ -116,14 +117,19 @@ L.makeLenses ''TrayMeter
 data FramerSessionData = FramerSessionData {
 
     -- A dictionary (protected by a lock) from stream id to flow control command.
-    _stream2flow           :: MVar Stream2AvailSpace
+    -- This is used for independent streams, session flow control is taken care of
+    -- below.
+    _stream2flow              :: MVar Stream2AvailSpace
+
+    -- Flow control for the entire session
+    , _sessionAvailFlowCredit :: MVar Int
 
     -- The default flow-control window advertised by the peer (e.g., the browser)
-    , _defaultStreamWindow   :: MVar Int
+    , _defaultStreamWindow    :: MVar Int
 
     -- The max frame size that I'm willing to receive, (including frame header). This size can't be less
     -- than 16384 nor greater than 16777215. But it is decided here in the server
-    , _maxRecvSize           :: Int
+    , _maxRecvSize            :: Int
 
     -- Flag that says if the session has been unwound... if such,
     -- threads are adviced to exit as early as possible
@@ -227,7 +233,10 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
     -- TODO : Add type annotations....
     s2f                       <- H.new
     stream2flow_mvar          <- newMVar s2f
-    default_stream_size_mvar  <- newMVar 65536
+
+    -- The two numbers below are protocol contants
+    default_stream_size_mvar       <- newMVar CONSTANT.streamInitialFlowControlCredit
+    session_avail_flow_credit_mvar <- newMVar CONSTANT.connectionInitialFlowControlCredit
     last_stream_id            <- newMVar 0
     -- last_output_stream_id     <- newMVar 0
     output_is_forbidden       <- newMVar False
@@ -241,6 +250,7 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
     -- We need some shared state
     let framer_session_data = FramerSessionData {
         _stream2flow          = stream2flow_mvar
+        , _sessionAvailFlowCredit = session_avail_flow_credit_mvar
         ,_defaultStreamWindow = default_stream_size_mvar
         ,_maxRecvSize         = max_recv_frame_size
         ,_pushAction          = push_action
@@ -333,14 +343,24 @@ addCapacity ::
         GlobalStreamId ->
         Int           ->
         FramerSession Bool
-addCapacity _         0         =
-    -- By the specs, a WINDOW_UPDATE with 0 of credit should be considered a protocol
+addCapacity _         delta_cap | delta_cap <= 0     =
+    -- By the specs, a WINDOW_UPDATE with 0 or less of credit should be considered a protocol
     -- error
     return False
-addCapacity 0         _delta_cap =
-    -- TODO: Implement session flow control
+addCapacity 0         !delta_cap = do
+    --liftIO $ putStrLn "CAPACITY RECEIVED FOR CONNECTION!!"
+    session_avail_flow_credit_mvar <- view sessionAvailFlowCredit
+    liftIO $ modifyMVar_ session_avail_flow_credit_mvar $ \ old_value -> do
+        let
+            old_value_big_int = fromIntegral old_value :: Integer
+            new_value_big = old_value_big_int + fromIntegral delta_cap
+        if new_value_big > 2147483647 -- We allow for long values, but don't overflow
+            then
+                return 2147483647
+            else
+                return (fromIntegral new_value_big)
     return True
-addCapacity stream_id delta_cap =
+addCapacity stream_id !delta_cap =
   do
     table_mvar <- view stream2flow
     val <- liftIO $ withMVar table_mvar $ \ table ->
@@ -525,6 +545,7 @@ inputGatherer pull_action session_input = do
                         -- Increase all the stuff....
                         case find (\(i,_) -> i == NH2.SettingsInitialWindowSize) settings_list of
                             Just (_, new_default_stream_size) -> do
+                                liftIO $ putStrLn "** New settings with frame size"
                                 old_default_stream_size_mvar <- view defaultStreamWindow
                                 old_default_stream_size <- liftIO $ takeMVar old_default_stream_size_mvar
                                 let general_delta = new_default_stream_size - old_default_stream_size
@@ -825,8 +846,9 @@ flowControlOutput ::    Int  -- Stream id
                      -> DeliveryNotifyCallback
                      -> Effect
                      -> FramerSession ()
-flowControlOutput stream_id capacity ordinal calm leftovers commands_chan bytes_chan delivery_notify last_effect =
-    ordinal `seq` if leftovers == ""
+flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan bytes_chan delivery_notify !last_effect = do
+    --liftIO $ putStrLn ("Capacity " ++ show stream_id ++ "  is " ++ show capacity)
+    if leftovers == ""
       then {-# SCC fcOBranch1  #-} do
         -- Get more data (possibly block waiting for it)... there will be an
         -- exception here from time to time...
@@ -1053,11 +1075,7 @@ sizeSequence = DVec.fromList [500,
                               8448,
                               8448,
                               8448,
-                              8448,
-                              15448,
-                              15448,
-                              15448,
-                              15448
+                              8448
                              ]
 
 
@@ -1074,11 +1092,15 @@ sendReordering :: SessionInput -> TrayMeter -> FramerSession ()
 sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
     pss <- view prioritySendState
     close_action <- view closeAction
+    session_avail_flow_credit_mvar <- view sessionAvailFlowCredit
     now <- liftIO . getTime $ Monotonic
 
     -- Get a set of packets (that is, their reprs) to send
     let
-        (sequence_number, new_meter ) = if
+        -- If we have been waiting too long since the last packet we sent,
+        -- reset the sizeSequence so that we send again small packets.
+        -- This is to play nice with Slow start and such.
+        (!sequence_number, !new_meter ) = if
             (
               (fromIntegral $
                    toNanoSecs (  now - tray_meter ^. lastSentPacket_TrM  )
@@ -1107,27 +1129,39 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
     -- let
     --   should_report_latency = False
 
+    avail_data_credits <- liftIO  $ readMVar session_avail_flow_credit_mvar
+
     -- If latency should be reported, send out a Ping frame.
     -- Also, send it alone.
-    builder <- if  should_report_latency
+    (builder, credits_used) <- if  should_report_latency
       then  do
-        b0 <- liftIO $ getDataUpTo pss $ fromIntegral use_size
+        (b0, cr) <- liftIO $
+            getDataUpTo pss  (fromIntegral use_size) avail_data_credits
         let
             bf = pingFrameOut ping_id
         liftIO $
             sendCommandToSession
                 session_input
                 (PingFrameEmitted_SIC (fromIntegral sequence_number, now))
-        return $  bf `mappend` b0
+        return $  (bf `mappend` b0, cr)
       else do
-        liftIO $ getDataUpTo pss $ fromIntegral use_size
+        liftIO $ getDataUpTo pss (fromIntegral use_size) avail_data_credits
 
     let
         entries_data = Bu.toLazyByteString builder
 
+    -- liftIO $ putStrLn (
+    --    "Credits available before: " ++ show avail_data_credits ++
+    --    " credits used " ++ show credits_used
+    --                   )
+
     goaway_signaled_ioref <- view goAwaySignaled
     goaway_signaled <- liftIO $ readIORef goaway_signaled_ioref
 
+
+
+    liftIO $ modifyMVar_ session_avail_flow_credit_mvar $
+        \ session_avail_flow_credit -> return (session_avail_flow_credit - credits_used)
     if goaway_signaled
       then do
         sendBytesN entries_data
@@ -1135,6 +1169,7 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
       else do
         sendBytesN entries_data
         sendReordering session_input new_meter
+
 
 
 -- | Checks the local environment and the configuration to decide if this is a good
