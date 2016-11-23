@@ -545,7 +545,7 @@ inputGatherer pull_action session_input = do
                         -- Increase all the stuff....
                         case find (\(i,_) -> i == NH2.SettingsInitialWindowSize) settings_list of
                             Just (_, new_default_stream_size) -> do
-                                liftIO $ putStrLn "** New settings with frame size"
+
                                 old_default_stream_size_mvar <- view defaultStreamWindow
                                 old_default_stream_size <- liftIO $ takeMVar old_default_stream_size_mvar
                                 let general_delta = new_default_stream_size - old_default_stream_size
