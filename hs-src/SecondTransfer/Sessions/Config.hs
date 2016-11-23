@@ -58,6 +58,7 @@ import           System.Clock                             (TimeSpec)
 
 import           SecondTransfer.IOCallbacks.Types         (IOCallbacks)
 import           SecondTransfer.Sessions.HashableSockAddr (HashableSockAddr (..))
+import           SecondTransfer.MainLoop.CoherentWorker   (Http2PerceivedPriority)
 
 -- | Information used to identify a particular session.
 newtype SessionCoordinates = SessionCoordinates  Int
@@ -107,11 +108,13 @@ type GlobalStreamId = Int
 -- | When something happens in a client...
 data SituationWithClient =
     PeerReportsProtocolError_SWC
-   |PeerErrored_SWC String    -- Second argument gives an idea of the location
+   |PeerErrored_SWC String    -- ^ Second argument gives an idea of the location
    |ConnectionCloseReceived_SWC
    |StreamResetReceived_SWC (GlobalStreamId, Maybe B.ByteString)
-   |Http2DynamicHeaderTableChanged_SWC Int   -- Argument is the new size
-   |StreamLimitSurpassed_SWC Int -- Client is trying to create too many streams, connection was closed
+   |Http2DynamicHeaderTableChanged_SWC Int   -- ^ Argument is the new size
+   |StreamLimitSurpassed_SWC Int -- ^ Client is trying to create too many streams, connection was closed
+   |PriorityFrameReceived_SWC (GlobalStreamId, Http2PerceivedPriority) -- ^ A PRIORITY frame was received. First argument is the
+                                                                       --   stream id of the receiving frame
    |PauseDueToHTTP2FlowControl_SWC
    |UnknownFrame_SWC -- Not an error
     deriving (Show, Eq)

@@ -14,6 +14,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , FinalizationHeaders
     , Request(..)
     , Footers
+    , Http2PerceivedPriority(..)
     , Perception(..)
     , Effect(..)
     , AwareWorker
@@ -44,6 +45,10 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , label_PS
     , processingReport_PS
 
+    , exclusive_H2PP
+    , dependsOn_H2PP
+    , weight_H2PP
+
     , dataAndConclusion_Psh
     , requestHeaders_Psh
     , responseHeaders_Psh
@@ -60,6 +65,7 @@ module SecondTransfer.MainLoop.CoherentWorker(
     , pushIsEnabled_Pr
     , sessionLatencyRegister_Pr
     , sessionStore_Pr
+    , perceivedPriority_Pr
 
     , fragmentDeliveryCallback_Ef
     , priorityEffect_Ef
@@ -90,7 +96,7 @@ import qualified Data.Dynamic                          as DD
 import           SimpleHttpHeadersHq
 
 import           SecondTransfer.MainLoop.Protocol      (HttpProtocolVersion (..))
-import           SecondTransfer.Sessions.Config        (HashableSockAddr (..))
+import           SecondTransfer.Sessions.HashableSockAddr (HashableSockAddr (..))
 
 
 
@@ -123,31 +129,48 @@ type SessionLatencyRegister = [(Int, Double)]
 type SessionStore = Dm.Map Int DD.Dynamic
 
 
+-- | HTTP/2 has the concept of tree priorities. We will forward that information
+--   to the request processor, so that it can bark about it
+data Http2PerceivedPriority = Http2PerceivedPriority {
+    -- | If this stream is exclusive.
+    _exclusive_H2PP        :: !Bool,
+    -- | Same Int space than _streamId_Pr down below
+    _dependsOn_H2PP        :: !Int,
+    -- | Weight, how much hurry
+    _weight_H2PP           :: !Int
+   }
+   deriving (Show, Eq)
+
+makeLenses ''Http2PerceivedPriority
+
+
 -- | Data related to the request
 data Perception = Perception {
     -- | The HTTP/2 stream id. Or the serial number of the request in an
     -- HTTP/1.1 session.
-    _streamId_Pr :: Int,
+    _streamId_Pr :: !Int,
     -- | A number uniquely identifying the session. This number is unique and
     --   the same for each TCP connection that a client opens using a given protocol.
-    _sessionId_Pr :: Int,
+    _sessionId_Pr :: !Int,
     -- | Monotonic time close to when the request was first seen in
     -- the processing pipeline.
-    _startedTime_Pr       :: TimeSpec,
+    _startedTime_Pr       :: !TimeSpec,
     -- | Which protocol is serving the request
-    _protocol_Pr          :: HttpProtocolVersion,
+    _protocol_Pr          :: !HttpProtocolVersion,
     -- | For new connections, probably a list of announced protocols
-    _anouncedProtocols_Pr :: Maybe [B.ByteString],
+    _anouncedProtocols_Pr :: !(Maybe [B.ByteString]),
     -- | tuple with something like the IPv4 number for the requesting host
-    _peerAddress_Pr       :: Maybe HashableSockAddr,
+    _peerAddress_Pr       :: !(Maybe HashableSockAddr),
     -- | Say if this connection enables Push
-    _pushIsEnabled_Pr    :: Bool,
+    _pushIsEnabled_Pr    :: !Bool,
     -- | Records any values of latencies reported for this session
-    _sessionLatencyRegister_Pr :: SessionLatencyRegister,
+    _sessionLatencyRegister_Pr :: !(SessionLatencyRegister),
     -- | Gives access to the user-accessible session store. You can use the mvar
     --   to lock and modify the session, but don't linger on that, as it may break
     --   other streams.
-    _sessionStore_Pr     :: MVar SessionStore
+    _sessionStore_Pr      :: !(MVar SessionStore),
+    -- | HTTP2 priority information present on a header
+    _perceivedPriority_Pr :: !(Maybe Http2PerceivedPriority)
   }
 
 makeLenses ''Perception
@@ -164,6 +187,7 @@ defaultPerception = Perception {
   , _pushIsEnabled_Pr = False
   , _sessionLatencyRegister_Pr = []
   , _sessionStore_Pr = error "NoSessionStore"
+  , _perceivedPriority_Pr = Nothing
   }
 
 

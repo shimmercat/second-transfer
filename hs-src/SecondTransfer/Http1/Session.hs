@@ -105,7 +105,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     close_action_called_mvar = attendant_callbacks ^. closeActionCalled_IOC
 
     new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
-    new_session address generic_handle weakable_key = case maybe_callback of
+    new_session address generic_handle _weakable_key = case maybe_callback of
         Just (NewSessionCallback callback) ->
             callback
                 address
@@ -200,7 +200,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _peerAddress_Pr            = maybe_hashable_addr,
                           _pushIsEnabled_Pr          = False,
                           _sessionLatencyRegister_Pr = [],
-                          _sessionStore_Pr           = the_session_store
+                          _sessionStore_Pr           = the_session_store,
+                          _perceivedPriority_Pr      = Nothing
                         }
                     }
                 ReT.runResourceT $ answer_by_principal_stream principal_stream
@@ -240,7 +241,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                           _peerAddress_Pr            = maybe_hashable_addr,
                           _pushIsEnabled_Pr          = False,
                           _sessionLatencyRegister_Pr = [],
-                          _sessionStore_Pr           = the_session_store
+                          _sessionStore_Pr           = the_session_store,
+                          _perceivedPriority_Pr      = Nothing
                         }
                     }
                 ReT.runResourceT $ answer_by_principal_stream principal_stream

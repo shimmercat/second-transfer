@@ -725,16 +725,18 @@ sessionInputThread  = do
         TT.MiddleFrame_SIC (NH2.Frame
                (NH2.FrameHeader _ _ stream_id)
                (NH2.HeadersFrame (Just (NH2.Priority _ dep_id _ ) )  _)
-           )  | stream_id == dep_id -> do
+           )
+            | stream_id == dep_id -> do
 
-            reportSituation $ (PeerErrored_SWC "StreamDependsOnItself")
-            closeConnectionBecauseIsInvalid NH2.ProtocolError
+                reportSituation $ (PeerErrored_SWC "StreamDependsOnItself")
+                closeConnectionBecauseIsInvalid NH2.ProtocolError
+
 
         -- The block below will process both HEADERS and CONTINUATION frames.
         -- TODO: As it stands now, the server will happily start a new stream with
         -- a CONTINUATION frame instead of a HEADERS frame. That's against the
         -- protocol.
-        TT.MiddleFrame_SIC frame | Just (_stream_id, _bytes, _is_cont) <- isAboutHeaders frame ->
+        TT.MiddleFrame_SIC frame | Just (_stream_id, _bytes, _is_cont, _) <- isAboutHeaders frame ->
             case session_role of
                 Server_SR -> do
                     -- Just append the frames to streamRequestHeaders
@@ -936,7 +938,7 @@ sessionInputThread  = do
                 _ <- closeConnectionForClient NH2.NoError
                 return ()
 
-        TT.MiddleFrame_SIC (NH2.Frame  (NH2.FrameHeader _ _ nh2_stream_id) (NH2.PriorityFrame NH2.Priority {NH2.exclusive=_e, NH2.streamDependency=dep_id, NH2.weight=_w}  ) )
+        TT.MiddleFrame_SIC (NH2.Frame  (NH2.FrameHeader _ _ nh2_stream_id) (NH2.PriorityFrame NH2.Priority {NH2.exclusive=e, NH2.streamDependency=dep_id, NH2.weight=w}  ) )
             | nh2_stream_id == dep_id -> do
                 reportSituation (PeerErrored_SWC "InvalidPriorityFrame")
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
@@ -947,7 +949,14 @@ sessionInputThread  = do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
-            | otherwise ->
+            | otherwise -> do
+                let
+                    http2_perce_prio = Http2PerceivedPriority {
+                            _exclusive_H2PP = e,
+                            _dependsOn_H2PP = dep_id,
+                            _weight_H2PP = w
+                           }
+                reportSituation $ (PriorityFrameReceived_SWC (nh2_stream_id, http2_perce_prio))
                 continue
 
         TT.MiddleFrame_SIC _somethingelse ->  unlessReceivingHeaders $ do
@@ -1072,7 +1081,7 @@ streamIsIdle stream_id =
 
 
 serverProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
-serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAboutHeaders frame = do
+serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2_priority) <- isAboutHeaders frame = do
 
     -- Just append the frames to streamRequestHeaders
     opens_stream              <- appendHeaderFragmentBlock stream_id bytes
@@ -1214,6 +1223,11 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                     -- THIS IS PROBABLY THE BEST PLACE FOR DOING IT.
                     let
                         (headers_editor, _parse_error_list)  =  parseFromTupleList header_list
+                        maybe_perceived_priority = (\ nh2prio -> Http2PerceivedPriority {
+                            _exclusive_H2PP = NH2.exclusive nh2prio,
+                            _dependsOn_H2PP = NH2.streamDependency nh2prio,
+                            _weight_H2PP = NH2.weight nh2prio
+                           }) <$> maybe_nh2_priority
 
                     maybe_good_headers_editor <- validateIncomingHeadersServer headers_editor
 
@@ -1225,6 +1239,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont) <- isAbou
                                 stream_id
                                 frame
                                 good_headers
+                                maybe_perceived_priority
 
                         Left _bad_headers -> do
                             let
@@ -1252,8 +1267,9 @@ doOpenStream :: WorkerThreadEnvironment
                 -> GlobalStreamId
                 -> TT.InputFrame
                 -> HqHeaders
+                -> Maybe Http2PerceivedPriority
                 -> ReaderT SessionData IO ()
-doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers = do
+doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers maybe_perc_prio = do
     stream_state_table        <- view streamStateTable
     session_settings          <- view sessionSettings
     current_session_id        <- view sessionIdAtSession
@@ -1303,7 +1319,8 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
             _peerAddress_Pr = maybe_hashable_addr,
             _pushIsEnabled_Pr = push_enabled,
             _sessionLatencyRegister_Pr = latency_report,
-            _sessionStore_Pr = the_session_store
+            _sessionStore_Pr = the_session_store,
+            _perceivedPriority_Pr = maybe_perc_prio
             }
         request' = Request {
             _headers_RQ = header_list_after,
@@ -1361,7 +1378,7 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
 
 
 clientProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
-clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont) <- isAboutHeaders frame = do
+clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont, _) <- isAboutHeaders frame = do
 
     opens_stream              <- appendHeaderFragmentBlock stream_id bytes
     receiving_headers_mvar    <- view receivingHeaders
@@ -2014,11 +2031,11 @@ getHeaderBytes _global_stream_id = do
 
 
 -- | Thirs parameter is for continuation frames
-isAboutHeaders :: TT.InputFrame -> Maybe (GlobalStreamId, B.ByteString, Bool)
-isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame _ block_fragment   ) )
-    = Just (stream_id, block_fragment, False)
+isAboutHeaders :: TT.InputFrame -> Maybe (GlobalStreamId, B.ByteString, Bool, Maybe NH2.Priority)
+isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.HeadersFrame p block_fragment   ) )
+    = Just (stream_id, block_fragment, False, p)
 isAboutHeaders (NH2.Frame (NH2.FrameHeader _ _ stream_id) ( NH2.ContinuationFrame block_fragment) )
-    = Just (stream_id, block_fragment, True)
+    = Just (stream_id, block_fragment, True, Nothing)
 isAboutHeaders _
     = Nothing
 
