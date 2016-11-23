@@ -22,8 +22,8 @@ import qualified SecondTransfer.Http2.Constants                 as CONSTANT
 
 import           Debug.Trace
 
--- | A channel key (SystemPriority, OrdinaryPriority)
-newtype ChannelKey = ChannelKey (Int, Int)
+-- | A channel key (SystemPriority, OrdinaryPriority, StreamId)
+newtype ChannelKey = ChannelKey (Int, Int, Int)
     deriving (Eq, Ord, Show)
 
 -- | This is the information coming in each channel
@@ -101,7 +101,7 @@ putInPriorityChannel_AtM
     gateways_mvar <- view gateways_PCS
 
     let
-        channel_key = ChannelKey (system_priority, priority)
+        channel_key = ChannelKey (system_priority, priority, stream_id)
         token = ChannelToken datum stream_id packet_ordinal
 
     channel <- liftIO . modifyMVar gateways_mvar $ \ gateways -> do
@@ -147,7 +147,7 @@ getHigherPriorityData_AtM can_take_data =
             _ <- liftIO $ takeMVar data_ready
             getHigherPriorityData_AtM can_take_data
 
-        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio)), token) ->
+        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio, _stream_id)), token) ->
             return $ ( (sys_prio == 0) , token ^. payload_ChT)
 
 
@@ -163,7 +163,7 @@ maybeGetHigherPriorityData_AtM can_take_data =
         Nothing -> do
             return Nothing
 
-        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio)), token) ->
+        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio, _stream_id)), token) ->
             return . Just $ ( (sys_prio == 0) , token ^. payload_ChT)
 
 
@@ -256,7 +256,7 @@ gowy can_take_data  gw =
     case DM.minViewWithKey gw of
         Nothing ->  return Nothing
 
-        Just ((ck@(ChannelKey (system_prio, _normal_prio)), a_channel), gw1)
+        Just ((ck@(ChannelKey (system_prio, _normal_prio, _stream_id)), a_channel), gw1)
           | system_prio < 0 || can_take_data -> do
             maybe_token <- A.tryReadChan a_channel
             case maybe_token of
