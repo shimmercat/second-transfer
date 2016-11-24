@@ -658,6 +658,10 @@ outputGatherer session_output = do
                    sendSpecificTerminateGoAway last_stream_id error_code
                    releaseFramer
 
+               -- The two branches below uses a standard priority for all the packets,
+               -- and this means that response HEADERS, PUSH_PROMISE, and HEADERS of a pushed
+               -- stream always go out in the same relative order they are sent this way,
+               -- WITHOUT any interference from the data prioritization mechanism.
                HeadersTrain_StFB (stream_id, frames, effect , stream_bytes_mvar)  -> do
                    let
                        bs = serializeMany frames
