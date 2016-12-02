@@ -5,6 +5,7 @@ module SecondTransfer.Http2.PriorityChannels (
                 , getDataUpTo
                 , PriorityChannelsState
                 , newPriorityChannelState
+                , putInPriorityChannelWithCallback
     ) where
 
 import            Control.Lens
@@ -31,13 +32,18 @@ data ChannelToken = ChannelToken {
     _payload_ChT         :: ! LB.ByteString
   , _streamId_ChT        :: ! Int
   , _streamOrdinal_ChT   :: ! Int
+  -- | Delivery callback
+  , _notifyDelivery_ChT  :: ! (Maybe (IO ()))
     }
 
 makeLenses ''ChannelToken
 
 
+-- | The larger this number be the lower the chance of having packets
+--   delivered in an order which is against the set priorities.
+--   And the more memory we will use buffering contents.
 boundedChanSize :: Int
-boundedChanSize = 4
+boundedChanSize = 5
 
 
 -- | Ok, here is where the data will come...
@@ -76,7 +82,13 @@ runPriorityChannel state comp = runReaderT comp state
 
 putInPriorityChannel :: PriorityChannelsState -> Int -> Int -> Int -> Int -> LB.ByteString -> IO ()
 putInPriorityChannel state system_priority priority stream_id packet_ordinal datum = runPriorityChannel
-    state (putInPriorityChannel_AtM system_priority priority stream_id packet_ordinal datum)
+    state (putInPriorityChannel_AtM system_priority priority stream_id packet_ordinal datum Nothing)
+
+
+putInPriorityChannelWithCallback :: PriorityChannelsState -> IO () -> Int -> Int -> Int -> Int -> LB.ByteString -> IO ()
+putInPriorityChannelWithCallback state callback system_priority priority stream_id packet_ordinal datum = runPriorityChannel
+    state (putInPriorityChannel_AtM system_priority priority stream_id packet_ordinal datum (Just callback))
+
 
 
 -- | If necessary, builds a channel at the given priority level, and puts a token
@@ -91,18 +103,23 @@ putInPriorityChannel_AtM ::
     Int ->
     Int ->
     Int ->
-    LB.ByteString -> PriorityChannelM ()
+    LB.ByteString ->
+    Maybe (IO () ) ->
+    PriorityChannelM ()
 putInPriorityChannel_AtM
     system_priority
     priority
     stream_id
-    packet_ordinal datum =
+    packet_ordinal
+    datum
+    maybe_callback
+  =
   do
     gateways_mvar <- view gateways_PCS
 
     let
         channel_key = ChannelKey (system_priority, priority, stream_id)
-        token = ChannelToken datum stream_id packet_ordinal
+        token = ChannelToken datum stream_id packet_ordinal maybe_callback
 
     channel <- liftIO . modifyMVar gateways_mvar $ \ gateways -> do
         let
@@ -147,7 +164,10 @@ getHigherPriorityData_AtM can_take_data =
             _ <- liftIO $ takeMVar data_ready
             getHigherPriorityData_AtM can_take_data
 
-        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio, _stream_id)), token) ->
+        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio, _stream_id)), token) -> do
+            case token ^. notifyDelivery_ChT of
+                Nothing -> return ()
+                Just clbk -> liftIO $ clbk
             return $ ( (sys_prio == 0) , token ^. payload_ChT)
 
 
@@ -163,7 +183,10 @@ maybeGetHigherPriorityData_AtM can_take_data =
         Nothing -> do
             return Nothing
 
-        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio, _stream_id)), token) ->
+        Just (_channel_key@(ChannelKey (sys_prio, _ord_prio, _stream_id)), token) -> do
+            case token ^. notifyDelivery_ChT of
+                Nothing -> return ()
+                Just clbk -> liftIO $ clbk
             return . Just $ ( (sys_prio == 0) , token ^. payload_ChT)
 
 

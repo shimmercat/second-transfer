@@ -851,6 +851,7 @@ flowControlOutput ::    Int  -- Stream id
                      -> Effect
                      -> FramerSession ()
 flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan bytes_chan delivery_notify !last_effect = do
+    read_state <- ask
     --liftIO $ putStrLn ("Capacity " ++ show stream_id ++ "  is " ++ show capacity)
     if leftovers == ""
       then {-# SCC fcOBranch1  #-} do
@@ -876,8 +877,11 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                       (NH2.DataFrame "")
 
                   priority = getCurrentCalm calm
+                  callback = runReaderT
+                      (delivery_notify (ordinal, 0))
+                      read_state
               -- liftIO $ putStrLn $ "calm = " ++ show priority ++ " for stream " ++ show stream_id
-              withNormalPrioritySend priority stream_id ordinal formatted
+              withNormalPrioritySend callback priority stream_id ordinal formatted
               delivery_notify (ordinal, 0)
               -- And just before returning, be sure to release the structures related to this
               -- stream
@@ -931,11 +935,13 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                       }
                     )
                     (NH2.DataFrame $ LB.toStrict to_send)
+                callback = runReaderT
+                    (delivery_notify (ordinal, use_bytes))
+                    read_state
             -- liftIO $ putStrLn $ "b prio = " ++ show priority ++ " for stream " ++ show stream_id
-            withNormalPrioritySend priority stream_id ordinal formatted
-            -- Notify any interested party about the frame being "delivered" (but it may still be at
-            -- the latest queue)
-            delivery_notify (ordinal, use_bytes)
+
+            withNormalPrioritySend callback priority stream_id ordinal formatted
+
             flowControlOutput
                 stream_id
                 (capacity - use_bytes)
@@ -1000,8 +1006,21 @@ withPrioritySend_ system_priority priority stream_id packet_ordinal datum = do
 
 
 -- | Blocks if there is not enough space in the tray
-withNormalPrioritySend ::  Int -> Int -> Int -> LB.ByteString -> FramerSession ()
-withNormalPrioritySend = withPrioritySend_ 0
+withNormalPrioritySend :: IO () -> Int -> Int -> Int -> LB.ByteString -> FramerSession ()
+withNormalPrioritySend callback   priority stream_id packet_ordinal datum = do
+    pss <- view prioritySendState
+    -- The strict conversions below is to ensure that we store this in the send
+    -- queues properly evaluated.
+    -- datum' <- liftIO . evaluate . LB.fromStrict . LB.toStrict $ datum
+    datum' <- liftIO . evaluate  $ datum
+    liftIO $ putInPriorityChannelWithCallback
+        pss
+        callback
+        0
+        priority
+        stream_id
+        packet_ordinal
+        datum'
 
 
 -- | Blocks if there is not enough space in the tray.
