@@ -807,6 +807,8 @@ sessionInputThread  = do
                   then do
                     -- Good place to close the source ...
                     closePostDataSource stream_id
+                    liftIO . withMVar stream_state_table_mvar $
+                        \ stream_state_table -> closeStreamRemote stream_state_table stream_id
                     when (B.length somebytes > 0) $ do
                         sendOutPriorityTrainMany [
                           (
@@ -1193,6 +1195,11 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2
             -- This is where the bytes of the stream will end up .
             stream_bytes <- liftIO newEmptyMVar
 
+            -- Signal close-remote
+            when (frameEndsStream frame) . liftIO .  withMVar stream_state_table_mvar $
+                \ stream_state_table -> closeStreamRemote stream_state_table stream_id
+
+
             let
                 reset_button  = writeChan session_input (TT.InternalAbortStream_SIC stream_id)
                 -- Will even take care of signaling the stream as closed.
@@ -1310,7 +1317,7 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
         return $ Just source
       else do
         liftIO . withMVar stream_state_table_mvar $
-            \ stream_state_table -> closeStreamLocal stream_state_table stream_id
+            \ stream_state_table -> closeStreamRemote stream_state_table stream_id
         return Nothing
 
     -- We are going to read this here because we want to
@@ -1653,10 +1660,6 @@ requestTermination stream_id error_code =
         message = TT.Command_StFB (TT.SpecificTerminate_SOC stream_id error_code)
     liftIO . withMVar session_output_mvar $ \ session_output -> do
         sendOutputToFramer session_output message
-
-
-frameEndsStream :: TT.InputFrame -> Bool
-frameEndsStream (NH2.Frame (NH2.FrameHeader _ flags _) _)  = NH2.testEndStream flags
 
 
 -- Executes its argument, unless receiving
@@ -2089,6 +2092,10 @@ isAboutHeaders _
 
 frameEndsHeaders  :: TT.InputFrame -> Bool
 frameEndsHeaders (NH2.Frame (NH2.FrameHeader _ flags _) _) = NH2.testEndHeader flags
+
+
+frameEndsStream  :: TT.InputFrame -> Bool
+frameEndsStream (NH2.Frame (NH2.FrameHeader _ flags _) _) = NH2.testEndStream flags
 
 
 streamIdFromFrame :: TT.InputFrame -> GlobalStreamId
