@@ -280,6 +280,9 @@ makeLenses ''PushedStream
 data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway /after/ this stream finishes delivery
                        |InterruptConnectionNow_IEf    -- ^ Close and send GoAway /without/ delivering this stream.  This implies that
                                                       --   other fields of the PrincipalStream record will be ignored.
+                       |NoResponseBody_IEf            -- ^ Close the stream after the HEADER/CONTINUATION frames, no data frames
+                                                      --   are coming here. This implies that dataAndConclusion at the
+                                                      --   PrincipalStream will be ignored.
 
 
 -- TODO:  another kind of priority effect would be one here the priorities are

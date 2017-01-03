@@ -303,7 +303,6 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
 
         io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
         io_exc_handler _x _y _e = do
-            -- putStrLn $ show _e
             modifyMVar_ output_is_forbidden (\ _ -> return True)
 
     now <- getTime Monotonic
@@ -348,7 +347,6 @@ addCapacity _         delta_cap | delta_cap <= 0     =
     -- error
     return False
 addCapacity 0         !delta_cap = do
-    --liftIO $ putStrLn "CAPACITY RECEIVED FOR CONNECTION!!"
     session_avail_flow_credit_mvar <- view sessionAvailFlowCredit
     liftIO $ modifyMVar_ session_avail_flow_credit_mvar $ \ old_value -> do
         let
@@ -668,7 +666,11 @@ outputGatherer session_output = do
                    -- Send the headers first
                    withHighPrioritySend bs
                    dn_instance <- liftIO $ delivery_notify stream_id effect
-                   startStreamOutputQueue effect stream_bytes_mvar stream_id dn_instance
+                   if not (headersEndStream effect)
+                     then
+                       startStreamOutputQueue effect stream_bytes_mvar stream_id dn_instance
+                     else
+                       return ()
                    cont
 
                PriorityTrain_StFB frames -> do
@@ -852,7 +854,6 @@ flowControlOutput ::    Int  -- Stream id
                      -> FramerSession ()
 flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan bytes_chan delivery_notify !last_effect = do
     read_state <- ask
-    --liftIO $ putStrLn ("Capacity " ++ show stream_id ++ "  is " ++ show capacity)
     if leftovers == ""
       then {-# SCC fcOBranch1  #-} do
         -- Get more data (possibly block waiting for it)... there will be an
@@ -880,7 +881,7 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                   callback = runReaderT
                       (delivery_notify (ordinal, 0))
                       read_state
-              -- liftIO $ putStrLn $ "calm = " ++ show priority ++ " for stream " ++ show stream_id
+
               withNormalPrioritySend callback priority stream_id ordinal formatted
               delivery_notify (ordinal, 0)
               -- And just before returning, be sure to release the structures related to this
@@ -938,7 +939,6 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                 callback = runReaderT
                     (delivery_notify (ordinal, use_bytes))
                     read_state
-            -- liftIO $ putStrLn $ "b prio = " ++ show priority ++ " for stream " ++ show stream_id
 
             withNormalPrioritySend callback priority stream_id ordinal formatted
 
@@ -1173,15 +1173,8 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
     let
         entries_data = Bu.toLazyByteString builder
 
-    -- liftIO $ putStrLn (
-    --    "Credits available before: " ++ show avail_data_credits ++
-    --    " credits used " ++ show credits_used
-    --                   )
-
     goaway_signaled_ioref <- view goAwaySignaled
     goaway_signaled <- liftIO $ readIORef goaway_signaled_ioref
-
-
 
     liftIO $ modifyMVar_ session_avail_flow_credit_mvar $
         \ session_avail_flow_credit -> return (session_avail_flow_credit - credits_used)

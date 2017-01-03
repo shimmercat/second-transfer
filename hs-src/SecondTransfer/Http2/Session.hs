@@ -12,6 +12,7 @@ module SecondTransfer.Http2.Session(
     ,sendCommandToSession
     ,sendPingFrameToSession
     ,makeClientState
+    ,headersEndStream
     ,pendingRequests_ClS
 
     ,CoherentSession
@@ -1807,6 +1808,11 @@ workerThread req aware_worker =
                 let use_stream_id = stream_id - 1
                 liftIO . writeChan headers_output $ GoAway_HM (use_stream_id, effects)
 
+            Just (NoResponseBody_IEf) -> do
+                -- This effect will be analyzed way down the call stack, here we just
+                -- be sure to forward the thing to the rest of the machinery.
+                {-# SCC nHS #-} normallyHandleStream principal_stream
+
         -- And mark the stream as closed locally
         liftIO $ closeStreamLocal stream_state_table stream_id
   where
@@ -1830,12 +1836,16 @@ normallyHandleStream principal_stream = do
        effects              = principal_stream ^. effect_PS
        pushed_streams       = principal_stream ^. pushedStreams_PS
        label_of_main        = principal_stream ^. label_PS
-
        can_push_ioref       = session_settings ^. pushEnabled_SeS
+       headers_close_stream = headersEndStream effects
 
     liftIO $ relabelStream stream_state_table stream_id label_of_main
 
-    can_push <- liftIO . DIO.readIORef $ can_push_ioref
+    -- ATTENTION: If a stream does not include a body, we won't push anything on it.
+    -- There is no good reason for this behavior, but so far we don't have the need, so
+    -- we are making it so for sanity's sake. In the future, if it turns out adventageous
+    -- to PUSH In 304 answers or HEAD requests, disable the && below.
+    can_push <- (not headers_close_stream &&)  <$> (liftIO . DIO.readIORef $ can_push_ioref)
       -- This gets executed in normal conditions, when no interruption is required.
 
     -- There are several possible moments where the PUSH_PROMISEs can be sent,
@@ -1878,7 +1888,8 @@ normallyHandleStream principal_stream = do
     -- commiting to the work of sending addtitional data... this is important for pushed
     -- streams
     is_stream_cancelled <- isStreamCancelled stream_id
-    unless  is_stream_cancelled $ do
+
+    unless  (is_stream_cancelled || headers_close_stream) $ do
         -- I have a beautiful source that I can de-construct...
         -- TODO: Optionally pulling data out from a Conduit ....
         -- liftIO ( data_and_conclussion $$ (_sendDataOfStream stream_id) )
@@ -2085,8 +2096,10 @@ headersOutputThread input_chan session_output_mvar = forever $ do
            -- This is in charge of sending an interrupt message to the framer
            requestTermination stream_id NH2.NoError
 
-        PushPromise_HM (parent_stream_id, child_stream_id, promise_headers, effect) -> do
 
+        PushPromise_HM (parent_stream_id, child_stream_id, promise_headers, effect) -> do
+            -- ATTENTION: `effect` here refers to the parent `effect` value, not to anything on the
+            -- child.
             encode_dyn_table_mvar <- view toEncodeHeaders
 
             -- encode_dyn_table <- liftIO $ takeMVar encode_dyn_table_mvar
@@ -2113,37 +2126,50 @@ headersOutputThread input_chan session_output_mvar = forever $ do
           ( NH2.FrameFlags -> B.ByteString -> TT.OutputFrame)
        -> ( NH2.FrameFlags -> B.ByteString -> TT.OutputFrame)
        -> [B.ByteString]
-       -> Bool
+       -> Bool -- True if this invocation refers to the first chunk
+       -> Bool -- True if last chunk should signal end of stream
        -> [TT.OutputFrame]
     chunksToSequence
         transform_first
         _transform_middle
         (last_chunk:[])
         True    -- If it is first, and last
+        end_of_stream
         =
-        [transform_first (NH2.setEndHeader NH2.defaultFlags) last_chunk]
+        if end_of_stream
+          then
+            [transform_first (NH2.setEndHeader . NH2.setEndStream $ NH2.defaultFlags) last_chunk]
+          else
+            [transform_first (NH2.setEndHeader NH2.defaultFlags) last_chunk]
     chunksToSequence
         _transform_first
         transform_middle
         (last_chunk:[])
         False    -- It is not first, but last
+        end_of_stream
         =
-        [transform_middle (NH2.setEndHeader NH2.defaultFlags) last_chunk]
+        if end_of_stream
+          then
+            [transform_middle (NH2.setEndHeader . NH2.setEndStream $ NH2.defaultFlags) last_chunk]
+          else
+            [transform_middle (NH2.setEndHeader NH2.defaultFlags) last_chunk]
     chunksToSequence
         transform_first
         transform_middle
         (chunk:rest)
         True    -- If it is first, but not last
+        end_of_stream
         =
-        (transform_first NH2.defaultFlags chunk):(chunksToSequence transform_first transform_middle rest False)
+        (transform_first NH2.defaultFlags chunk):(chunksToSequence transform_first transform_middle rest False end_of_stream)
     chunksToSequence
         transform_first
         transform_middle
         (chunk:rest)
         False    -- It is not first, and not last
+        end_of_stream
         =
-        (transform_middle NH2.defaultFlags chunk):(chunksToSequence transform_first transform_middle rest False)
-    chunksToSequence _ _ [] _ = error "ChunkingEmptySetOfHeaders!!"
+        (transform_middle NH2.defaultFlags chunk):(chunksToSequence transform_first transform_middle rest False end_of_stream)
+    chunksToSequence _ _ [] _ _ = error "ChunkingEmptySetOfHeaders!!"
 
     headerFrames :: GlobalStreamId -> [B.ByteString] -> Effect -> [TT.OutputFrame]
     headerFrames stream_id chunks effect =
@@ -2168,6 +2194,7 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             )
             chunks
             True
+            (headersEndStream effect)
 
     pushPromiseFrames  :: GlobalStreamId -> GlobalStreamId -> [B.ByteString] -> Effect -> [TT.OutputFrame]
     pushPromiseFrames parent_stream_id child_stream_id chunks effect =
@@ -2192,6 +2219,13 @@ headersOutputThread input_chan session_output_mvar = forever $ do
             )
             chunks
             True
+            False -- For now, all PushPromised streams have a response body.
+
+
+-- | Does this effect precludes the ending of this stream?
+headersEndStream :: Effect -> Bool
+headersEndStream effect | Just NoResponseBody_IEf <- effect ^. interrupt_Ef = True
+                          | otherwise = False
 
 
 bytestringChunk :: Int -> B.ByteString -> [B.ByteString]
