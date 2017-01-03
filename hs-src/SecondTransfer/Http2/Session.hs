@@ -157,7 +157,7 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
 
     ,_childResetStreamButton_WTE  :: GlobalStreamId -> IO ()
 
-    ,_streamStateTable_WTE        :: StreamStateTable
+    ,_streamStateTable_WTE        :: MVar StreamStateTable
     }
 
 makeLenses ''WorkerThreadEnvironment
@@ -383,7 +383,7 @@ data SessionData = SessionData {
     ,_emittedPings               :: MVar [(Int, TimeSpec)]
 
     -- | Bookeep the state of the streams
-    , _streamStateTable          :: StreamStateTable
+    , _streamStateTable          :: MVar StreamStateTable
 
     -- | Passed up to the worker
     , _sessionStore              :: MVar SessionStore
@@ -486,6 +486,7 @@ http2Session
     session_store             <- newMVar Dm.empty
 
     stream_state_table        <- H.newSized CONSTANT.maxAllowedStreams
+    stream_state_table_mvar   <- newMVar stream_state_table
 
     let
         for_worker_thread = WorkerThreadEnvironment {
@@ -528,7 +529,7 @@ http2Session
         ,_sessionIsEnding            = session_is_ending_ioref
         ,_latencyReports             = latency_reports
         ,_emittedPings               = emitted_pings
-        ,_streamStateTable           = stream_state_table
+        ,_streamStateTable           = stream_state_table_mvar
         ,_sessionStore               = session_store
         }
 
@@ -655,7 +656,7 @@ sessionInputThread  = do
     -- last_good_stream_mvar     <- view lastGoodStream
     -- current_session_id        <- view sessionIdAtSession
 
-    stream_state_table        <- view streamStateTable
+    stream_state_table_mvar   <- view streamStateTable
 
     input                     <- {-# SCC session_input #-} liftIO $ readChan session_input
     session_role              <- view sessionRole
@@ -720,7 +721,8 @@ sessionInputThread  = do
                 )
                 (NH2.RSTStreamFrame NH2.InternalError
                 )
-            liftIO $ closeStreamLocal stream_state_table stream_id
+            liftIO . withMVar stream_state_table_mvar $
+                \ stream_state_table -> closeStreamLocal stream_state_table stream_id
             continue
 
         TT.MiddleFrame_SIC (NH2.Frame
@@ -757,17 +759,20 @@ sessionInputThread  = do
         TT.MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             is_iddle <- streamIsIdle stream_id
+            liftIO $ putStrLn "STREAM-RESET -- "
             if ( stream_id == 0 || (is_iddle && odd stream_id ) )
               then do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
               else do
-                maybe_label <- liftIO $ getStreamLabel stream_state_table stream_id
-                reportSituation (StreamResetReceived_SWC (stream_id,maybe_label))
+                maybe_label <- liftIO . withMVar stream_state_table_mvar  $
+                   \ stream_state_table -> getStreamLabel stream_state_table stream_id
                 liftIO $ do
                     cancelled_streams <- takeMVar cancelled_streams_mvar
                     putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
                 closePostDataSource stream_id
+                -- liftIO $ closeStreamLocalAndRemote stream_state_table stream_id
+                reportSituation (StreamResetReceived_SWC (stream_id,maybe_label))
                 continue
 
         TT.MiddleFrame_SIC _frame@(NH2.Frame frame_header (NH2.WindowUpdateFrame _credit) ) -> do
@@ -1092,7 +1097,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2
     decode_headers_table_mvar <- view toDecodeHeaders
     stream_request_headers    <- view stream2HeaderBlockFragment
     session_input             <- view sessionInput
-    stream_state_table        <- view streamStateTable
+    stream_state_table_mvar   <- view streamStateTable
     max_concurrent_streams    <- view $
         sessionsContext .
         sessionsConfig .
@@ -1127,18 +1132,25 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2
                 return False
               else do
                 --
-                num_active_streams <- liftIO $
+                num_active_streams <- liftIO . withMVar stream_state_table_mvar $ \ stream_state_table ->
                     countActiveStreams stream_state_table
-                -- TODO: Make the number of concurrent streems configurable !!!
+                -- TODO: Make the number of concurrent streams configurable !!!
                 if (num_active_streams + 1) <= max_concurrent_streams
                   then do
                     -- Report the stream as opened
-                    liftIO $ openStream stream_state_table stream_id Nothing
+                    liftIO . withMVar stream_state_table_mvar $ \
+                        stream_state_table -> openStream stream_state_table stream_id Nothing
                     return True
                   else do
                     reportSituation .
                         StreamLimitSurpassed_SWC $
                         max_concurrent_streams
+
+                    -- DEBUG HACK
+                    liftIO $ putStrLn $  "Limit used: " ++ show max_concurrent_streams
+                    liftIO . withMVar stream_state_table_mvar $
+                        \ stream_state_table -> reportActiveStreams stream_state_table
+                    --
                     closeConnectionBecauseIsInvalid NH2.EnhanceYourCalm
                     return False
           else do
@@ -1195,7 +1207,7 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2
                     .
                     (set childResetStreamButton_WTE child_reset_button)
                     .
-                    (set streamStateTable_WTE stream_state_table)
+                    (set streamStateTable_WTE stream_state_table_mvar)
                     $
                     for_worker_thread_uns
 
@@ -1271,7 +1283,7 @@ doOpenStream :: WorkerThreadEnvironment
                 -> Maybe Http2PerceivedPriority
                 -> ReaderT SessionData IO ()
 doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers maybe_perc_prio = do
-    stream_state_table        <- view streamStateTable
+    stream_state_table_mvar   <- view streamStateTable
     session_settings          <- view sessionSettings
     current_session_id        <- view sessionIdAtSession
     maybe_hashable_addr       <- view peerAddress
@@ -1287,7 +1299,8 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
         maybe_path =  header_list_after ^. path_Hi
 
     -- Label the stream as soon as possible
-    liftIO $ relabelStream stream_state_table stream_id maybe_path
+    liftIO . withMVar stream_state_table_mvar  $
+        \ stream_state_table -> relabelStream stream_state_table stream_id maybe_path
 
     -- If the headers end the request....
     post_data_source <- if not (frameEndsStream frame)
@@ -1296,7 +1309,8 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
         let source = postDataSourceFromMechanism mechanism
         return $ Just source
       else do
-        liftIO $ closeStreamRemote stream_state_table stream_id
+        liftIO . withMVar stream_state_table_mvar $
+            \ stream_state_table -> closeStreamLocal stream_state_table stream_id
         return Nothing
 
     -- We are going to read this here because we want to
@@ -1386,7 +1400,7 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont, _) <- isA
     last_good_stream_mvar     <- view lastGoodStream
     decode_headers_table_mvar <- view toDecodeHeaders
     response2waiter           <- view (simpleClient . response2Waiter_ClS)
-    stream_state_table        <- view streamStateTable
+    stream_state_table_mvar   <- view streamStateTable
 
     if opens_stream
       then do
@@ -1400,7 +1414,8 @@ clientProcessIncomingHeaders frame | Just (stream_id, bytes, _is_cont, _) <- isA
             -- control flow here too much.
           Nothing -> do
             -- CAn we open the stream?
-            num_active_streams <- liftIO $ countActiveStreams stream_state_table
+            num_active_streams <- liftIO . withMVar stream_state_table_mvar
+                $ \ stream_state_table -> countActiveStreams stream_state_table
             -- XXXXXX TODO: Make this limit configurable. At the moment, we are saying in the
             -- setting that we won't accept more than XX simultaneous streams.
             -- Check code in Framer .
@@ -1775,7 +1790,7 @@ workerThread req aware_worker =
         -- (headers, _, data_and_conclussion)
         --
         -- TODO: Can we add debug information in a header here?
-        stream_state_table <- view streamStateTable_WTE
+        stream_state_table_mvar <- view streamStateTable_WTE
         principal_stream <-
             liftIO $ {-# SCC wTer1  #-} E.catch
                 (
@@ -1814,7 +1829,8 @@ workerThread req aware_worker =
                 {-# SCC nHS #-} normallyHandleStream principal_stream
 
         -- And mark the stream as closed locally
-        liftIO $ closeStreamLocal stream_state_table stream_id
+        liftIO . withMVar stream_state_table_mvar $
+            \ stream_state_table -> closeStreamLocal stream_state_table stream_id
   where
     ignoreCancels = CMC.handle ((\_ -> return () ):: StreamCancelledException -> WorkerMonad ())
 
@@ -1827,7 +1843,7 @@ normallyHandleStream principal_stream = do
     next_push_stream_mvar <-  view nextPushStream_WTE
     reset_button <- view resetStreamButton_WTE
     this_environment <- ask
-    stream_state_table <- view streamStateTable_WTE
+    stream_state_table_mvar <- view streamStateTable_WTE
 
     -- Pieces of the header
     let
@@ -1839,7 +1855,8 @@ normallyHandleStream principal_stream = do
        can_push_ioref       = session_settings ^. pushEnabled_SeS
        headers_close_stream = headersEndStream effects
 
-    liftIO $ relabelStream stream_state_table stream_id label_of_main
+    liftIO . withMVar stream_state_table_mvar $
+        \ stream_state_table -> relabelStream stream_state_table stream_id label_of_main
 
     -- ATTENTION: If a stream does not include a body, we won't push anything on it.
     -- There is no good reason for this behavior, but so far we don't have the need, so
@@ -1870,7 +1887,12 @@ normallyHandleStream principal_stream = do
                                      $ (\ x -> return (x+2,x) )
 
             liftIO $ do
-                reserveStream stream_state_table child_stream_id maybe_label_of_pushed
+                withMVar stream_state_table_mvar $
+                    \ stream_state_table ->
+                        reserveStream
+                            stream_state_table
+                            child_stream_id
+                            maybe_label_of_pushed
                 -- The push promise goes with the same priority of the parent stream, therefore
                 -- effects is for the most part left unchanged.
                 writeChan headers_output . PushPromise_HM $
@@ -1902,12 +1924,15 @@ normallyHandleStream principal_stream = do
                 runReaderT
                     (isStreamCancelled stream_id)
                     this_environment
+            closer =
+                withMVar stream_state_table_mvar $
+                    \ stream_state_table -> closeStreamLocal stream_state_table stream_id
         _ <- liftIO . ReT.runResourceT $ do
             resource_key <- ReT.register reset_button
             _ <- runConduit $
                (data_and_conclusion)
                `fuseBothMaybe`
-               (sendDataOfStream check_if_cancelled data_output)
+               (sendDataOfStream check_if_cancelled data_output closer)
             ReT.unprotect resource_key
 
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
@@ -1949,7 +1974,7 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
   do
     headers_output <- view headersOutput_WTE
     pushed_reset_button <- view childResetStreamButton_WTE
-    stream_state_table <- view streamStateTable_WTE
+    stream_state_table_mvar <- view streamStateTable_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
     --       throws an exception signaling that the request is ill-formed
@@ -1963,7 +1988,8 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
 
     -- Now I send the headers, if that's possible at all. These are classed as "Normal response"
     unless (is_stream_cancelled_0) . liftIO $ do
-        openStream stream_state_table child_stream_id Nothing
+        withMVar stream_state_table_mvar $
+            \ stream_state_table -> openStream stream_state_table child_stream_id Nothing
         writeChan headers_output
             $ NormalResponse_HM (child_stream_id,  response_headers, effects, pusher_data_output)
 
@@ -1973,6 +1999,9 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
             runReaderT
                 (isStreamCancelled child_stream_id)
                 this_environment
+        closer =
+            withMVar stream_state_table_mvar $
+                \ stream_state_table -> closeStreamLocal stream_state_table child_stream_id
 
     -- At this moment I should ask if the stream hasn't been cancelled by the browser before
     -- commiting to the work of sending addtitional data... this is important for pushed
@@ -1984,18 +2013,20 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
             _ <- runConduit $
                  pushed_data_and_conclusion
                 `fuseBothMaybe`
-                sendDataOfStream check_if_cancelled pusher_data_output
+                sendDataOfStream check_if_cancelled pusher_data_output closer
             ReT.unprotect k
 
         -- Pushed streams are opened and closed by the server
-        liftIO $ closeStreamLocalAndRemote stream_state_table child_stream_id
+        liftIO . withMVar stream_state_table_mvar $
+            \ stream_state_table ->
+                closeStreamLocalAndRemote stream_state_table child_stream_id
 
         return ()
 
 
 --                                                       v-- comp. monad.
-sendDataOfStream :: MonadIO m => (IO Bool) -> MVar TT.OutputDataFeed  -> Sink B.ByteString m ()
-sendDataOfStream  check_if_cancelled data_output  =
+sendDataOfStream :: MonadIO m => (IO Bool) -> MVar TT.OutputDataFeed -> IO ()  -> Sink B.ByteString m ()
+sendDataOfStream  check_if_cancelled data_output closer =
   do
     consumer
   where
@@ -2007,7 +2038,10 @@ sendDataOfStream  check_if_cancelled data_output  =
 
                 Nothing -> do
                     -- This is how we finish sending data
-                    liftIO $ putMVar data_output  ""
+
+                    liftIO $ do
+                        closer
+                        putMVar data_output  ""
 
                 Just bytes
                     | lng <- B.length bytes, lng > 0   -> do
@@ -2018,7 +2052,9 @@ sendDataOfStream  check_if_cancelled data_output  =
 
                     | otherwise -> do
                         -- Finish sending data, finish in general
-                        liftIO $ putMVar data_output ""
+                        liftIO $ do
+                            closer
+                            putMVar data_output ""
 
 
 -- Returns if the frame is the first in the stream
@@ -2289,7 +2325,7 @@ clientWorkerThread stream_id  output_mvar input_data_stream = do
     _ <- liftIO . ReT.runResourceT . runConduit $
         input_data_stream
         `fuseBothMaybe`
-        sendDataOfStream check_if_cancelled output_mvar
+        sendDataOfStream check_if_cancelled output_mvar (error "NotProperlyImplementedFix")
     return ()
 
 

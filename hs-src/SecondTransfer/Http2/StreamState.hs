@@ -7,6 +7,7 @@ module SecondTransfer.Http2.StreamState (
                , getStreamLabel
                , relabelStream
                , reserveStream
+               , reportActiveStreams
                , closeStreamLocalAndRemote
 
                , StreamState            (..)
@@ -16,6 +17,7 @@ module SecondTransfer.Http2.StreamState (
 
 import qualified Data.HashTable.IO                      as H
 import           Data.Word
+import           Debug.Trace
 
 import qualified Data.ByteString                        as B
 
@@ -23,6 +25,8 @@ type HashTable k v = H.CuckooHashTable k v
 
 type GlobalStreamId = Int
 
+-- Second member of the value is a possible stream label, used for
+-- diagnostics
 type StreamStateTable = HashTable GlobalStreamId (Word8, Maybe B.ByteString)
 
 
@@ -148,6 +152,17 @@ closeStreamLocalAndRemote statetable stream_id = do
     H.delete statetable stream_id
 
 
+--
 countActiveStreams :: StreamStateTable -> IO Int
 countActiveStreams streamstate =
     H.foldM ( \ c _ -> return (c+1) ) 0 streamstate
+
+
+
+-- | Diagnostics function
+reportActiveStreams :: StreamStateTable -> IO ()
+reportActiveStreams streamstate =
+    H.mapM_ ( \ (state_bits, maybe_label) ->
+                  putStrLn $ (show state_bits) ++ " " ++ show maybe_label
+            )
+            streamstate
