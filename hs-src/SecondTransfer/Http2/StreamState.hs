@@ -118,7 +118,6 @@ relabelStream statetable stream_id  maybe_label = do
 closeStreamRemote :: StreamStateTable -> GlobalStreamId -> IO ()
 closeStreamRemote statetable stream_id = do
     maybe_state <- H.lookup statetable stream_id
-    putStrLn $ "closeStreamRemote " ++ show maybe_state
     let
         new_value = case maybe_state of
             Nothing -> Nothing
@@ -135,7 +134,6 @@ closeStreamRemote statetable stream_id = do
 closeStreamLocal :: StreamStateTable -> GlobalStreamId -> IO ()
 closeStreamLocal statetable stream_id = do
     maybe_state <- H.lookup statetable stream_id
-    putStrLn $ "closeStreamLocal " ++ show maybe_state
     let
         new_value = case maybe_state of
             Nothing -> Nothing
@@ -161,7 +159,7 @@ countActiveStreams streamstate =
 
 
 
--- | Diagnostics function
+-- | Diagnostics function... don't call if not debugging!!
 reportActiveStreams :: StreamStateTable -> IO ()
 reportActiveStreams streamstate =
     H.mapM_ ( \ (state_bits, maybe_label) ->

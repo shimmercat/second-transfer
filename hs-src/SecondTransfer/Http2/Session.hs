@@ -759,7 +759,6 @@ sessionInputThread  = do
         TT.MiddleFrame_SIC frame@(NH2.Frame _ (NH2.RSTStreamFrame _error_code_id)) -> do
             let stream_id = streamIdFromFrame frame
             is_iddle <- streamIsIdle stream_id
-            liftIO $ putStrLn "STREAM-RESET -- "
             if ( stream_id == 0 || (is_iddle && odd stream_id ) )
               then do
                 closeConnectionBecauseIsInvalid NH2.ProtocolError
@@ -1009,7 +1008,6 @@ sessionInputThread  = do
                        -- The spec says clearly what's the minimum size that can come here
                        Just n | n < 16384 || n > 16777215
                                    -> do
-                                      -- liftIO $ putStrLn "Wild max frame size"
                                       closeConnectionBecauseIsInvalid NH2.FrameSizeError
                                       return False
 
@@ -1149,9 +1147,9 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2
                         max_concurrent_streams
 
                     -- DEBUG HACK
-                    liftIO $ putStrLn $  "Limit used: " ++ show max_concurrent_streams
-                    liftIO . withMVar stream_state_table_mvar $
-                        \ stream_state_table -> reportActiveStreams stream_state_table
+                    -- liftIO $ putStrLn $  "Limit used: " ++ show max_concurrent_streams
+                    --liftIO . withMVar stream_state_table_mvar $
+                    --    \ stream_state_table -> reportActiveStreams stream_state_table
                     --
                     closeConnectionBecauseIsInvalid NH2.EnhanceYourCalm
                     return False
