@@ -765,7 +765,11 @@ sessionInputThread  = do
                 return ()
               else do
                 maybe_label <- liftIO . withMVar stream_state_table_mvar  $
-                   \ stream_state_table -> getStreamLabel stream_state_table stream_id
+                   \ stream_state_table -> do
+                         maybe_label <- getStreamLabel stream_state_table stream_id
+                         closeStreamLocalAndRemote stream_state_table stream_id
+                         return maybe_label
+
                 liftIO $ do
                     cancelled_streams <- takeMVar cancelled_streams_mvar
                     putMVar cancelled_streams_mvar $ NS.insert  stream_id cancelled_streams
