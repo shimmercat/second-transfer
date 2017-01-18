@@ -26,10 +26,12 @@ import           Control.Monad                                      (unless)
 import           Control.Monad.IO.Class                             (liftIO)
 
 import           Data.Conduit
+import           Data.Maybe                                         (isJust)
 import qualified Data.Conduit.List                                  as CL
 
 
 import           System.IO.Error                                    (ioeGetErrorString)
+import           System.Environment
 import           Foreign.C.Types                                    (CInt(..))
 
 
@@ -72,6 +74,17 @@ enableFastOpen (NS.MkSocket sock_descr _ _ _ _) =
     iocba_enable_fastopen sock_descr
 
 
+
+-- | Inside containers, we are having troubles with socket options... coudl be related
+--   to all the setSocketOption options there down, worth a try.
+shouldSkipSocketOptions :: IO Bool
+shouldSkipSocketOptions =
+  do
+    -- Use a very cryptic environment variable name
+    maybe_skip <- lookupEnv "IXPGPYAPEC_SKIP_SOCKET_OPTIONS"
+    return $ isJust maybe_skip
+
+
 -- | Creates a listening socket at the provided network address (potentially a local interface)
 --   and the given port number. It returns the socket. This result can be used by the function
 --   tcpServe below
@@ -88,11 +101,15 @@ createAndBindListeningSocket hostname portnumber = do
         }
     host_address <- return $ NS.addrAddress addr_info1
 
+    should_skip <- shouldSkipSocketOptions
+
+    unless should_skip $ do
 #ifndef WIN32
-    NS.setSocketOption the_socket NS.ReusePort 1
+        NS.setSocketOption the_socket NS.ReusePort 1
 #endif
-    NS.setSocketOption the_socket NS.RecvBuffer 32000
-    NS.setSocketOption the_socket NS.SendBuffer 32000
+        NS.setSocketOption the_socket NS.RecvBuffer 32000
+        NS.setSocketOption the_socket NS.SendBuffer 32000
+        NS.setSocketOption the_socket NS.NoDelay 1
 
     --enableFastOpen the_socket
 
@@ -103,7 +120,6 @@ createAndBindListeningSocket hostname portnumber = do
     --
     -- NS.setSocketOption the_socket NS.RecvLowWater 8
     --
-    NS.setSocketOption the_socket NS.NoDelay 1
     NS.bind the_socket host_address
     NS.listen the_socket 20
     -- bound <- NS.isBound the_socket
