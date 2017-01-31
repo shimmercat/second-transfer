@@ -22,7 +22,7 @@ module SecondTransfer.IOCallbacks.SocketServer(
 
 import qualified Control.Exception                                  as E
 import           Control.Concurrent                                 hiding (yield)
-import           Control.Monad                                      (unless)
+import           Control.Monad                                      (unless, when)
 import           Control.Monad.IO.Class                             (liftIO)
 
 import           Data.Conduit
@@ -44,6 +44,7 @@ import           SecondTransfer.IOCallbacks.WrapSocket              (
                                                                      HasSocketPeer(..),
                                                                      AcceptErrorCondition(..)
                                                                      )
+import           SecondTransfer.Exception                           (BadAddressException(..))
 
 #include "instruments.cpphs"
 
@@ -91,7 +92,11 @@ shouldSkipSocketOptions =
 createAndBindListeningSocket :: String -> Int ->  IO NS.Socket
 createAndBindListeningSocket hostname portnumber = do
     the_socket <- NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
-    addr_info0 : _ <- NS.getAddrInfo Nothing (Just hostname) Nothing
+    addr_list <- NS.getAddrInfo Nothing (Just hostname) Nothing
+    when (length addr_list == 0) $
+        E.throw $ BadAddressException hostname
+    let
+        addr_info0 : _ = addr_list
     addr_info1  <- return $ addr_info0 {
         NS.addrFamily = NS.AF_INET
       , NS.addrSocketType = NS.Stream

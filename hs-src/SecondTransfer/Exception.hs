@@ -25,6 +25,7 @@ module SecondTransfer.Exception (
     , StreamCancelledException                    (..)
     , NoMoreDataException                         (..)
     , TLSEncodingIssue                            (..)
+    , BadAddressException                         (..)
 
       -- * Exceptions related to SOCKS5
     , SOCKS5ProtocolException                     (..)
@@ -47,6 +48,7 @@ module SecondTransfer.Exception (
     , ioProblem
     , gatewayAbortedException
     , ioException
+    , badAddressException
     , threadKilled   -- NOTE: Will capture other excepitons :-(
     ) where
 
@@ -267,6 +269,20 @@ instance Exception TLSEncodingIssue where
     fromException x = do
         IOProblem  a <- fromException x
         cast a
+
+
+data BadAddressException = BadAddressException String
+    deriving (Show, Typeable)
+
+instance Exception BadAddressException where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem a <- fromException x
+        cast a
+
+
+badAddressException :: Proxy BadAddressException
+badAddressException = Proxy
 
 
 noMoreDataException :: Proxy NoMoreDataException
