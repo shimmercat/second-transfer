@@ -115,6 +115,9 @@ putInPriorityChannel_AtM
     maybe_callback
   =
   do
+
+    -- Run this slower
+    liftIO $ yield
     gateways_mvar <- view gateways_PCS
 
     let
@@ -125,6 +128,10 @@ putInPriorityChannel_AtM
         let
             f1 = DM.lookup channel_key gateways
 
+        -- Good point to be sure that performance is properly degraded
+        -- of the output vs input side
+        yield
+
         (gw2, channel_mvar) <- case f1 of
             Just chm -> return (gateways, chm)
 
@@ -134,15 +141,24 @@ putInPriorityChannel_AtM
                    gw2' = DM.insert channel_key new_channel gateways
                return (gw2', new_channel )
 
+        -- again
+        yield
+
         return (gw2 , channel_mvar )
 
     -- Signal that there is data
     ready_mvar <- view dataReady_PCS
 
+    -- Make it slower
+    liftIO yield
+
     -- As soon as we succeed on actually putting the data into the channel, notify
     -- of it.
-    liftIO $ A.writeChan channel token
-    _ <- liftIO $ tryPutMVar ready_mvar ()
+    liftIO $ do
+        A.writeChan channel token
+        yield
+        _ <-  tryPutMVar ready_mvar ()
+        yield
 
     return ()
 

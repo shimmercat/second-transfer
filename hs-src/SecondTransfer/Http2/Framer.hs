@@ -18,6 +18,7 @@ module SecondTransfer.Http2.Framer (
 
 
 import           Control.Concurrent                     hiding (yield)
+import qualified Control.Concurrent                     as Cn(yield)
 
 import           Control.Exception
 import qualified Control.Exception                      as E
@@ -1118,6 +1119,11 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
     session_avail_flow_credit_mvar <- view sessionAvailFlowCredit
     now <- liftIO . getTime $ Monotonic
 
+    -- Generally, we want the output system to run a bit slower than
+    -- the input system, so that we can perceive when some Javascript
+    -- request is coming and send it with higher priority
+    liftIO Cn.yield
+
     -- Get a set of packets (that is, their reprs) to send
     let
         -- If we have been waiting too long since the last packet we sent,
@@ -1152,7 +1158,13 @@ sendReordering session_input tray_meter = {-# SCC sndReo  #-} do
     -- let
     --   should_report_latency = False
 
+    -- SLOWER
+    liftIO $ Cn.yield
+
     avail_data_credits <- liftIO  $ readMVar session_avail_flow_credit_mvar
+
+    -- Leave again
+    liftIO $ Cn.yield
 
     -- If latency should be reported, send out a Ping frame.
     -- Also, send it alone.
