@@ -420,9 +420,9 @@ readNextFrame max_acceptable_size pull_action  = do
                 -- Copies 9 bytes of a frame header
                 (frame_type_id, frame_header) = NH2.decodeFrameHeader . LB.toStrict $ frame_header_bs
                 NH2.FrameHeader payload_length _ _ =  frame_header
-            if payload_length + 9 > max_acceptable_size
+            if payload_length  > max_acceptable_size
               then do
-                yield $ Left "ReceivedHTTP/2FrameExceedingLegalSize"
+                yield . Left $ "ReceivedHTTP/2FrameExceedingLegalSize: max_acceptable_size=" ++ show max_acceptable_size ++ " received: " ++ show payload_length
                 return ()
               else do
                 -- Get as many bytes as the payload length identifies
