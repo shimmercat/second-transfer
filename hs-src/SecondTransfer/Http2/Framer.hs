@@ -529,8 +529,6 @@ inputGatherer pull_action session_input = do
 
             Just (Right right_frame) -> do
 
-                liftIO . putStrLn $ "-       ++++++++++++ FRAME +++++++++++" ++ show right_frame
-
                 case right_frame of
 
                     frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do
