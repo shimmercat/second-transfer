@@ -240,10 +240,11 @@ type DataAndConclusion = ConduitM () B.ByteString AwareWorkerStack Footers
 data PriorityEffect =
     NoEffect_PrEf                      -- ^ Leaves on default priorities
   | Uniform_PrEf !Int                  -- ^ Assigns a uniform priority to all data in this stream
-  | PerYield_PrEf Int [(Word, Word)]   -- ^ Starts with the given priority, and as the sender crosses
-                                       --   each byte boundary in the first part of the pair, the calm
+  | PerYield_PrEf Int [(Word,  Word, Int)]   -- ^ Starts with the given priority, and as the sender crosses
+                                       --   each byte boundary in the first part of the tuple, the calm
                                        --   is raised (e.g., the priority is lowered), by the positive
-                                       --   number given as second part of the pair
+                                       --   number given as second member of the tuple. The third member of the tuple can
+                                       --   be used to introduce a concrete pause, in milliseconds.
   deriving Show
 
 
@@ -283,6 +284,7 @@ data InterruptEffect = InterruptConnectionAfter_IEf   -- ^ Close and send GoAway
                        |NoResponseBody_IEf            -- ^ Close the stream after the HEADER/CONTINUATION frames, no data frames
                                                       --   are coming here. This implies that dataAndConclusion at the
                                                       --   PrincipalStream will be ignored.
+    deriving Show
 
 
 -- TODO:  another kind of priority effect would be one here the priorities are

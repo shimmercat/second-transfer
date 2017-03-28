@@ -2,11 +2,11 @@ module SecondTransfer.Http2.Constants where
 
 
 streamInitialFlowControlCredit :: Int
-streamInitialFlowControlCredit = 65536
+streamInitialFlowControlCredit = 65536000
 
 
 connectionInitialFlowControlCredit :: Int
-connectionInitialFlowControlCredit = 65536
+connectionInitialFlowControlCredit = 65536000
 
 
 maxAllowedStreams :: Int
@@ -18,3 +18,12 @@ maxAllowedStreams = 200
 --   PriorityChannel
 sessionFlowControlHighTide :: Int
 sessionFlowControlHighTide = 8448
+
+
+
+default_DYNAMIC_TABLE_FOR_ENCODING :: Int
+default_DYNAMIC_TABLE_FOR_ENCODING = 65536
+
+
+default_DYNAMIC_TABLE_FOR_DECODING :: Int
+default_DYNAMIC_TABLE_FOR_DECODING = 65536

@@ -8,7 +8,6 @@ module SecondTransfer.Socks5.Serializers (
 
 --import           Control.Applicative                                ( (<|>) )
 
---import qualified Data.Binary.Builder                                as U
 import qualified Data.Binary                                        as U
 import qualified Data.Binary.Put                                    as U
 

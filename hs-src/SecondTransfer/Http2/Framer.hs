@@ -529,6 +529,8 @@ inputGatherer pull_action session_input = do
 
             Just (Right right_frame) -> do
 
+                liftIO . putStrLn $ "-       ++++++++++++ FRAME +++++++++++" ++ show right_frame
+
                 case right_frame of
 
                     frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) (NH2.WindowUpdateFrame credit) ) -> do
@@ -569,6 +571,11 @@ inputGatherer pull_action session_input = do
 
                     frame@(NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame _ping_payload) ) | NH2.testAck flags -> do
                         liftIO $ sendPingToSession starting frame
+                        consume_continue
+
+                    frame@(NH2.Frame (NH2.FrameHeader _ flags _) (NH2.PingFrame ping_payload) ) | not (NH2.testAck flags) -> do
+                        -- Captures Ping frames which are not ACK
+                        lift $ sendPingFrame ping_payload
                         consume_continue
 
                     a_frame@(NH2.Frame (NH2.FrameHeader _ _ stream_id) _ )   -> do
@@ -690,7 +697,8 @@ outputGatherer session_output = do
     pushControlFrame
         (NH2.EncodeInfo NH2.defaultFlags 0 Nothing)
         (NH2.SettingsFrame [
-              (NH2.SettingsMaxConcurrentStreams, 100)
+              (NH2.SettingsMaxConcurrentStreams, 100),
+              (NH2.SettingsInitialWindowSize, CONSTANT.streamInitialFlowControlCredit)
                            ])
     -- And then we continue...
     loopPart
@@ -808,6 +816,13 @@ sendGoAwayFrame error_code = do
         (NH2.GoAwayFrame last_stream_id error_code "")
 
 
+sendPingFrame :: B.ByteString -> FramerSession ()
+sendPingFrame ping_payload = do
+    let
+        datum = Bu.toLazyByteString $ answerPingFrame ping_payload
+    withPrioritySend_ pingPriority 0 0 0 datum
+
+
 sendSpecificTerminateGoAway :: GlobalStreamId -> NH2.ErrorCodeId -> FramerSession ()
 sendSpecificTerminateGoAway last_stream error_code =
     pushGoAwayFrame
@@ -820,7 +835,30 @@ sendBytesN :: LB.ByteString -> FramerSession ()
 sendBytesN bs = do
     push_action <- view pushAction
     -- I don't think I need to lock here...
-    liftIO $ push_action bs
+    liftIO $ do
+        -- debugSentData bs
+        push_action bs
+
+
+-- | For debugging: what the hell am I sending to the client?
+debugSentData :: LB.ByteString -> IO ()
+debugSentData fragments =
+     go fragments
+  where
+     go remaining_pieces =
+       let
+          header_bytes = LB.toStrict . LB.take 9 $ remaining_pieces
+          (frame_type_id, frame_header) = NH2.decodeFrameHeader header_bytes
+          payload_length = NH2.payloadLength frame_header
+          frame_payload_bytes = LB.toStrict . LB.take (fromIntegral payload_length) . LB.drop 9 $ remaining_pieces
+          payload = NH2.decodeFramePayload frame_type_id  frame_header frame_payload_bytes
+          the_rest = LB.drop ( 9 + fromIntegral payload_length) remaining_pieces
+       in do
+          putStrLn $ " >>>> out >>>>    " ++ show (frame_header, payload)
+          if LB.length the_rest > 0 then
+              go the_rest
+            else
+              return ()
 
 
 reportSituation :: SituationWithClient -> FramerSession ()
@@ -837,11 +875,14 @@ reportSituation situation = do
 -- | A thread in charge of doing flow control transmission....This
 -- Reads payload data and formats it to DataFrames...
 --
--- There is one of these for each stream.
+-- There is one of these threads for each stream.
 --
 -- This function will read from an MVar (and block on that), and will write to
 -- the output tray (and occassionally also block on that, if the output tray
 -- doesn't have enough space).
+--
+-- Beyond flow control, this function also control the relative priority
+-- at which streams are going out.
 --
 flowControlOutput ::    Int  -- Stream id
                      -> Int  -- Capacity
@@ -889,8 +930,8 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
               -- stream
               finishFlowControlForStream stream_id
           else do
-              -- We have got more data, and we need to send it down the way. Use this space to
-              -- adjust the calm as required
+              -- We have got more data, and we need to send it down the way.
+              -- No need to adjust the calm on this side of the branch.
 
               -- And now, re-invoke
               flowControlOutput
@@ -922,6 +963,8 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
 
             new_calm = advanceCalm calm use_bytes
 
+        -- If we have too little capacity we wait for a WINDOWS_UPDATE frame coming from
+        -- the browser. TO-DO: Be carefull about slowloris attacks here.
         if  use_bytes <= capacity
           then do
             -- Can send, but must format first...
@@ -929,6 +972,7 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                 -- By taking an upper bound above, we know that we have not crossed
                 -- the calm limit yet.
                 priority = getCurrentCalm calm
+                pause_time = getCurrentPause calm
                 formatted =  LB.fromStrict $ NH2.encodeFrame
                     (NH2.EncodeInfo {
                        NH2.encodeFlags     = NH2.defaultFlags
@@ -940,6 +984,16 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                 callback = runReaderT
                     (delivery_notify (ordinal, use_bytes))
                     read_state
+
+            -- We are crossing the bytes boundary for a priority switch if use_bytes == left_before_prio_break,
+            -- Then we can go ahead and do a pause, if we have been asked to do so.
+            when (pause_time > 0 && use_bytes == left_before_prio_break) $
+                  -- We can do this thread delay, this shouldn't pause the server to a halt.
+                  -- Besides, these pauses are part of an undocumented feature that we use
+                  -- to demo and test the coordinated image-loading feature.
+                  --
+                  -- TODO: Add some conditional compilation to this.
+                  liftIO . threadDelay $ (pause_time * 1000)
 
             withNormalPrioritySend callback priority stream_id ordinal formatted
 
@@ -1031,6 +1085,10 @@ withHighPrioritySend  datum = withPrioritySend_ (-1) 0 0 0 datum
 
 goAwayPriority :: Int
 goAwayPriority = -15
+
+
+pingPriority :: Int
+pingPriority = -10
 
 
 -- | Just be sure to send it with some specific, very high priority
@@ -1226,3 +1284,11 @@ pingFrameOut seq_no =
           (NH2.PingFrame seq_no_8)
   where
     seq_no_8 = LB.toStrict . Bu.toLazyByteString . Bu.word64BE $ seq_no
+
+
+answerPingFrame :: B.ByteString -> Bu.Builder
+answerPingFrame s =
+    mconcat . map Bu.byteString $
+        NH2.encodeFrameChunks
+          (NH2.EncodeInfo 1 0 Nothing)
+          (NH2.PingFrame s)

@@ -261,6 +261,7 @@ instance Exception NoMoreDataException where
         IOProblem  a <- fromException x
         cast a
 
+
 data TLSEncodingIssue = TLSEncodingIssue
     deriving (Show, Typeable)
 

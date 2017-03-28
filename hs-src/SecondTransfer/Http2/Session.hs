@@ -423,6 +423,8 @@ http2ClientSession client_state session_id sctx close_action_called_mvar =
        sctx
        close_action_called_mvar
 
+
+
 --                                v- {headers table size comes here!!}
 http2Session ::
     Maybe ConnectionData ->
@@ -450,10 +452,13 @@ http2Session
     stream_request_headers    <- newEmptyMVar
 
     -- Warning: we should find a way of coping with different table sizes.
-    decode_headers_table      <- HP.newDynamicTableForDecoding 4096 8192
+    decode_headers_table      <- HP.newDynamicTableForDecoding
+                                     CONSTANT.default_DYNAMIC_TABLE_FOR_DECODING
+                                     (2* CONSTANT.default_DYNAMIC_TABLE_FOR_DECODING)
     decode_headers_table_mvar <- newMVar decode_headers_table
 
-    encode_headers_table      <- HP.newDynamicTableForEncoding 4096
+    encode_headers_table      <- HP.newDynamicTableForEncoding
+                                     CONSTANT.default_DYNAMIC_TABLE_FOR_ENCODING
     encode_headers_table_mvar <- newMVar encode_headers_table
 
     -- These ones need independent threads taking care of sending stuff
@@ -825,7 +830,7 @@ sessionInputThread  = do
                             )
                           )
                           ]
-                  else
+                  else do
                     when (B.length somebytes > 0) $ do
                         sendOutPriorityTrainMany [
                           (
@@ -1090,6 +1095,7 @@ streamIsIdle stream_id =
     return ( stream_id > last_good_stream )
 
 
+-- | `frame` is a headers-like frame
 serverProcessIncomingHeaders :: NH2.Frame ->  ReaderT SessionData IO ()
 serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2_priority) <- isAboutHeaders frame = do
 
@@ -1315,7 +1321,8 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
     post_data_source <- if not (frameEndsStream frame)
       then do
         mechanism <- createMechanismForStream stream_id
-        let source = postDataSourceFromMechanism mechanism
+        let
+            source = postDataSourceFromMechanism mechanism
         return $ Just source
       else do
         liftIO . withMVar stream_state_table_mvar $
@@ -1332,7 +1339,6 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
         view latencyReports
     latency_report <-
         liftIO . readMVar $ latency_report_mvar
-
     let
         perception = Perception {
             _startedTime_Pr = headers_arrived_time,
@@ -1381,7 +1387,9 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
                     putStrLn $ "ERROR: Aborting session after non-handled exception bubbled up " ++ E.displayException e
                     writeChan session_input TT.InternalAbort_SIC
             io_closed_handle :: E.BlockedIndefinitelyOnMVar -> IO ()
-            io_closed_handle _e = return ()
+            io_closed_handle _e = do
+                putStrLn "MISSHANDLED BLOCKEDINDEFINITELY EXCEPTION"
+                return ()
         thread_id <-
           forkIOExc "s2f7" .
           E.handle general_exc_handler .

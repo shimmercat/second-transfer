@@ -15,7 +15,7 @@ module SecondTransfer.FastCGI.GenericSession (
     ) where
 
 import           Control.Lens
---import qualified Control.Exception                                         as E
+import qualified Control.Exception                                         as E
 --import           Control.Monad                                             (when)
 --import           Control.Concurrent                                        hiding (yield)
 import           Control.Monad.Morph                                       (
@@ -25,6 +25,7 @@ import           Control.Monad.Morph                                       (
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 --import qualified Control.Monad.Trans.Resource                              as ReT
 import           Control.Monad.Catch                                       (MonadCatch)
+import qualified Control.Monad.Catch                                       as CMC
 
 import qualified Data.ByteString                                           as B
 import           Data.Maybe                                                (fromMaybe)
@@ -59,8 +60,8 @@ import           SecondTransfer.Http1.Parse                               (
                                                                           )
 
 --import qualified SecondTransfer.Utils.HTTPHeaders                          as He
-import           SecondTransfer.Exception                                  (resourceForkIOExc)
-import           SecondTransfer.MainLoop.CoherentWorker                    (
+import           SecondTransfer.Exception
+import           SecondTransfer.MainLoop.CoherentWorker                   (
                                                                            AwareWorkerStack
                                                                            )
 import           SecondTransfer.FastCGI.Records
@@ -98,17 +99,15 @@ ioProxyToConnection session_seed  request =
         h3 = request ^. headers_Rq
         method = fromMaybe Get_HtM $  h3 ^. method_Hi
 
-    -- For the time being, we are not going to set a PATH_INFO.
     sendHeadersToApplication session_seed h3
 
-    --
-    http_response <- processOutputAndStdErr
-        request_id
-        method
-        (request ^. body_Rq )
-        ioc
+    http_response <-  processOutputAndStdErr
+       request_id
+       method
+       (request ^. body_Rq )
+       ioc
 
-    return (http_response)
+    return http_response
 
 
 sendHeadersToApplication ::
@@ -198,17 +197,14 @@ framesSource bepa =
                             payload = frame ^. payload_RH
                         if B.length payload > 0
                           then do
-                            --liftIO $ putStrLn $ "Frame received " ++ show payload
                             yield payload
                             frames_interpreter
                           else do
-                            --liftIO $ putStrLn $ "Empty payload signals end"
                             return ()
                     EndRequest_RT -> do
                         -- ATTENTION: THE CODE BELOW IS GOOD!, it is just
                         -- that we need to create an EXCEPTION TYPE HERE
                         -- to raise when there are errors in the backend.
-                        --liftIO $ putStrLn $ "EndREquest_RT received"
                         -- let
                         --     payload = frame ^. payload_RH
                         --     either_parsed_end = ATO.parseOnly
@@ -222,7 +218,7 @@ framesSource bepa =
                         return ()
                     _fr -> do
                         -- Discard frames I can't undestand.
-                        liftIO $ putStrLn $ "Frame doesn't make sense"
+                        liftIO $ putStrLn  "FASTCGI frame doesn't make sense"
                         frames_interpreter
 
                 Nothing -> do
@@ -254,16 +250,20 @@ processOutputAndStdErr request_id method client_input ioc =
     -- Send the input
     if methodHasRequestBody' method
       then do
-        _ <- resourceForkIOExc "fastCGIOutputThread" $
-            (
-                client_input
-                =$=
-                CL.map LB.fromStrict
-                $$
-                (toWrappedStream Stdin_RT request_id) -- Takes care of end-of-stream
-                =$=
-                (CL.mapM_  (liftIO `fmap` push ) )
-                )
+        _ <- resourceForkIOExc "fastCGIOutputThread" $ do
+            CMC.catchAll
+                (
+                    client_input
+                    =$=
+                    CL.map LB.fromStrict
+                    $$
+                    (toWrappedStream Stdin_RT request_id) -- Takes care of end-of-stream
+                    =$=
+                    (CL.mapM_  (liftIO `fmap` push ) )
+                    )
+                -- TO-DO: Find a better way of propagating this exception
+                (\ exc -> liftIO . putStrLn $ "EXCEPTION trasvasing input to backend: " ++ show exc)
+
         return ()
       else do
         -- return ()
@@ -288,7 +288,6 @@ processOutputAndStdErr request_id method client_input ioc =
 
         unwrapped_plain :: Source AwareWorkerStack B.ByteString
         unwrapped_plain = do
-            -- liftIO $ putStrLn "entering plain"
             (
                 source =$=
                 CL.filter (\x -> B.length x > 0) =$=
@@ -297,11 +296,10 @@ processOutputAndStdErr request_id method client_input ioc =
                        return x
                     )
                 )
-            -- liftIO $ putStrLn "exiting plain"
+
             lift finalizer
 
         unwrapped_chunked  = do
-            -- liftIO $ putStrLn "entering chunked"
             source =$= CL.filter (\x -> B.length x > 0) =$= unwrapChunks
             -- liftIO $ putStrLn "exiting chunks"
             lift finalizer

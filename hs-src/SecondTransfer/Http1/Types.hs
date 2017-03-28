@@ -55,7 +55,7 @@ data ResponseBodyHandling =
     -- | There is a chunked transfer encoding. Use unwrapChunks over the
     --   original source
   | Chunked_RBH
-
+    deriving (Show, Ord, Eq)
 
 
 

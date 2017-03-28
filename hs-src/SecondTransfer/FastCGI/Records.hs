@@ -25,11 +25,11 @@ module SecondTransfer.FastCGI.Records (
 
 import           Control.Lens
 
-import           Data.Binary
+import qualified Data.Binary                            as Bin
 --import           Data.Word
 import           Data.Int
 import           Data.Bits
-import           Data.Binary.Put
+import qualified Data.Binary.Put                        as Bin
 
 import qualified Data.ByteString                        as B
 import qualified Data.ByteString.Lazy                   as LB
@@ -80,7 +80,7 @@ data BeginRequest_Rec = BeginRequest_Rec {
 
 data EndRequest_Rec = EndRequest_Rec {
     _appStatus_ER                    :: Int
-  , _protocolStatus_ER               :: Word8
+  , _protocolStatus_ER               :: Bin.Word8
     }
     deriving Show
 
@@ -108,18 +108,18 @@ readEndRequest =
        }
 
 
-putBeginRequest :: BeginRequest_Rec -> Put
+putBeginRequest :: BeginRequest_Rec -> Bin.Put
 putBeginRequest (BeginRequest_Rec { _applicationClosesConnection_BR = p1 }) =
   do
     -- Put responder role
-    put (1 :: Word16 )
+    Bin.put (1 :: Bin.Word16 )
     -- Put if the application closes the connection
     if p1
-      then putWord8 0
-      else putWord8 1
+      then Bin.putWord8 0
+      else Bin.putWord8 1
 
     -- The reserved Bytes ..
-    forM_ [1..5::Integer] (const $ putWord8 0)
+    forM_ [1..5::Integer] (const $ Bin.putWord8 0)
 
 
 readOneOrFourLength :: ATO.Parser Int
@@ -208,31 +208,31 @@ readRecordFrame =
         }
 
 
-wrapRecordFrame :: RecordType -> Int -> LB.ByteString -> Put
+wrapRecordFrame :: RecordType -> Int -> LB.ByteString -> Bin.Put
 wrapRecordFrame record_type request_id payload =
   do
-    putWord8 1 -- The version number
-    putWord8 . fromIntegral . fromEnum $ record_type
+    Bin.putWord8 1 -- The version number
+    Bin.putWord8 . fromIntegral . fromEnum $ record_type
     let
         request_id_b1 = fromIntegral $  request_id `div` 256
         request_id_b0 = fromIntegral $  request_id `mod` 256
-        content_length :: Word16
+        content_length :: Bin.Word16
         content_length = fromIntegral $ LB.length payload
 
         content_length_b1 = fromIntegral $  content_length `div` 256
         content_length_b0 = fromIntegral $ content_length `mod` 256
 
-    putWord8 request_id_b1
-    putWord8 request_id_b0
+    Bin.putWord8 request_id_b1
+    Bin.putWord8 request_id_b0
 
-    putWord8 content_length_b1
-    putWord8 content_length_b0
+    Bin.putWord8 content_length_b1
+    Bin.putWord8 content_length_b0
 
-    putWord8 0 -- Padding length
-    putWord8 0 -- Reserved
+    Bin.putWord8 0 -- Padding length
+    Bin.putWord8 0 -- Reserved
 
     -- Now finally put the data
-    putLazyByteString payload
+    Bin.putLazyByteString payload
 
     -- And we are done
 
@@ -252,13 +252,13 @@ toWrappedStream record_type request_id =
       | LB.length leftovers > maxChunkLength = do
           let
               (send_now, send_later) = LB.splitAt maxChunkLength leftovers
-              wrapped_frame = runPut $
+              wrapped_frame = Bin.runPut $
                   wrapRecordFrame record_type request_id send_now
           yield wrapped_frame
           go send_later
       | LB.length leftovers > 0 = do
           let
-              wrapped_frame = runPut $
+              wrapped_frame = Bin.runPut $
                   wrapRecordFrame record_type request_id leftovers
           yield wrapped_frame
           go ""
@@ -267,7 +267,7 @@ toWrappedStream record_type request_id =
           case maybe_new_data of
               Nothing -> do
                   let
-                      wrapped_frame = runPut $
+                      wrapped_frame = Bin.runPut $
                           wrapRecordFrame record_type request_id ""
                   yield wrapped_frame
                   return ()
@@ -276,7 +276,7 @@ toWrappedStream record_type request_id =
                        go fragment
                  | otherwise -> do  -- End of stream
                        let
-                           wrapped_frame = runPut $
+                           wrapped_frame = Bin.runPut $
                                wrapRecordFrame record_type request_id ""
                        yield wrapped_frame
                        return ()

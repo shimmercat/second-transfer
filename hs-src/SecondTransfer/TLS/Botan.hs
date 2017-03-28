@@ -363,9 +363,11 @@ encryptedToBotan botan_pad   =
     write_lock_mvar = botan_pad ^. writeLock_BP
     avail_data_ioref = botan_pad ^. availableData_BP
 
-    -- Reserve extra
+    -- Reserve extra: we need a big input buffer size for POST
+    -- with multipart/form-data and several files, those can upload
+    -- pretty big TLS segments.
     reserve_extra x | x < 4  = 32000
-                    | otherwise = 4097
+                    | otherwise = 32000
 
     pump_exc_handler :: IOProblem -> IO (Maybe LB.ByteString)
     pump_exc_handler _ = do
