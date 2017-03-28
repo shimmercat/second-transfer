@@ -100,11 +100,13 @@ data ConnectionCloseReason =
     |ProtocolError_CCR        -- ^ Any other reason
     deriving Show
 
+
 -- | Concrete Exception. Used internally to signal that the server broke
 --   the connection. This is a public exception that clients of the library
 --   will see when acting as an HTTP client.
 data ClientSessionAbortedException = ClientSessionAbortedException ConnectionCloseReason
     deriving (Typeable, Show)
+
 
 instance Exception ClientSessionAbortedException where
     toException = convertHTTP2SessionExceptionToException
@@ -114,12 +116,15 @@ instance Exception ClientSessionAbortedException where
 data FramerException = forall e . Exception e => FramerException e
     deriving Typeable
 
+
 instance Show FramerException where
     show (FramerException e) = show e
+
 
 instance Exception FramerException where
     toException = convertHTTP2SessionExceptionToException
     fromException = getHTTP2SessionExceptionFromException
+
 
 convertFramerExceptionToException :: Exception e => e -> SomeException
 convertFramerExceptionToException = toException . FramerException
@@ -135,6 +140,7 @@ getFramerExceptionFromException x = do
 data BadPrefaceException = BadPrefaceException
     deriving (Typeable, Show)
 
+
 instance Exception BadPrefaceException where
     toException   = convertFramerExceptionToException
     fromException = getFramerExceptionFromException
@@ -146,18 +152,23 @@ instance Exception BadPrefaceException where
 data HTTP11Exception = forall e . Exception e => HTTP11Exception e
     deriving Typeable
 
+
 instance Show HTTP11Exception where
     show (HTTP11Exception e) = show e
 
+
 instance Exception HTTP11Exception
+
 
 convertHTTP11ExceptionToException :: Exception e => e -> SomeException
 convertHTTP11ExceptionToException = toException . HTTP11Exception
+
 
 getHTTP11ExceptionFromException :: Exception e => SomeException -> Maybe e
 getHTTP11ExceptionFromException x = do
     HTTP11Exception a <- fromException x
     cast a
+
 
 -- | Abstract exception. It is an error if an exception of this type bubbles
 --   to this library, but we will do our best to handle it gracefully in the
@@ -173,10 +184,12 @@ data HTTP500PrecursorException = forall e . Exception e => HTTP500PrecursorExcep
 instance Show HTTP500PrecursorException where
     show (HTTP500PrecursorException e) = show e
 
+
 -- | Use the traditional idiom if you need to derive from 'HTTP500PrecursorException',
 --   this is one of the helpers
 convertHTTP500PrecursorExceptionToException :: Exception e => e -> SomeException
 convertHTTP500PrecursorExceptionToException = toException . HTTP500PrecursorException
+
 
 -- | Use the traditional idiom if you need to derive from 'HTTP500PrecursorException',
 --   this is one of the helpers
@@ -185,20 +198,24 @@ getHTTP500PrecursorExceptionFromException x = do
     HTTP500PrecursorException a <- fromException x
     cast a
 
+
 -- Here we say how we go with these exceptions....
 instance Exception HTTP500PrecursorException where
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
 
+
 -- | Used by the ReverseProxy to signal an error from the upstream/Gateway
 data GatewayAbortedException = GatewayAbortedException
     deriving (Typeable, Show)
+
 
 instance Exception GatewayAbortedException where
     toException = convertHTTP500PrecursorExceptionToException
     fromException = getHTTP500PrecursorExceptionFromException
 
-gatewayAbortedException :: Proxy GatewayAbortedException
+gate
+wayAbortedException :: Proxy GatewayAbortedException
 gatewayAbortedException = Proxy
 
 -- | Thrown with HTTP/1.1 over HTTP/1.1 sessions when the response body
@@ -206,6 +223,7 @@ gatewayAbortedException = Proxy
 --   given that should have included it
 data ContentLengthMissingException = ContentLengthMissingException
     deriving (Typeable, Show)
+
 
 instance Exception ContentLengthMissingException where
     toException = convertHTTP11ExceptionToException
@@ -216,19 +234,24 @@ instance Exception ContentLengthMissingException where
 data HTTP11SyntaxException = HTTP11SyntaxException String
     deriving (Typeable, Show)
 
+
 instance Exception HTTP11SyntaxException where
     toException = convertHTTP11ExceptionToException
     fromException = getHTTP11ExceptionFromException
+
 
 -- | Throw exceptions derived from this (e.g, `GenericIOProblem` below)
 --   to have the HTTP/2 session to terminate gracefully.
 data IOProblem = forall e . Exception e => IOProblem e
     deriving Typeable
 
+
 instance  Show IOProblem where
     show (IOProblem e) = show e
 
+
 instance Exception IOProblem
+
 
 ioProblem :: Proxy IOProblem
 ioProblem = Proxy
@@ -238,11 +261,13 @@ ioProblem = Proxy
 threadKilled :: Proxy AsyncException
 threadKilled = Proxy
 
+
 -- | A concrete case of the above exception. Throw one of this
 --   if you don't want to implement your own type. Use
 --   `IOProblem` in catch signatures.
 data GenericIOProblem = GenericIOProblem
     deriving (Show, Typeable)
+
 
 instance Exception GenericIOProblem where
     toException = toException . IOProblem
@@ -250,10 +275,12 @@ instance Exception GenericIOProblem where
         IOProblem a <- fromException x
         cast a
 
+
 -- | This is raised by the IOCallbacks when the endpoint
 --   is not willing to return or to accept more data
 data NoMoreDataException = NoMoreDataException
     deriving (Show, Typeable)
+
 
 instance Exception NoMoreDataException where
     toException = toException . IOProblem
