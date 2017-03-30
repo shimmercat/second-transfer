@@ -26,12 +26,15 @@ module SecondTransfer.Exception (
     , NoMoreDataException                         (..)
     , TLSEncodingIssue                            (..)
     , BadAddressException                         (..)
+    , DerivedDataException                        (..)
 
       -- * Exceptions related to SOCKS5
     , SOCKS5ProtocolException                     (..)
 
       -- * Internal exceptions
     , HTTP2ProtocolException                      (..)
+
+    , TLSBufferIsTooSmall                         (..)
 
       -- * Utility functions
     , ignoreException
@@ -214,9 +217,10 @@ instance Exception GatewayAbortedException where
     toException = convertHTTP500PrecursorExceptionToException
     fromException = getHTTP500PrecursorExceptionFromException
 
-gate
-wayAbortedException :: Proxy GatewayAbortedException
+
+gatewayAbortedException :: Proxy GatewayAbortedException
 gatewayAbortedException = Proxy
+
 
 -- | Thrown with HTTP/1.1 over HTTP/1.1 sessions when the response body
 --   or the request body doesn't include a Content-Length header field,
@@ -276,6 +280,18 @@ instance Exception GenericIOProblem where
         cast a
 
 
+-- | When the receive buffer size is not big enough for TLS
+data TLSBufferIsTooSmall = TLSBufferIsTooSmall
+    deriving (Show, Typeable)
+
+
+instance Exception TLSBufferIsTooSmall where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem a <- fromException x
+        cast a
+
+
 -- | This is raised by the IOCallbacks when the endpoint
 --   is not willing to return or to accept more data
 data NoMoreDataException = NoMoreDataException
@@ -286,6 +302,22 @@ instance Exception NoMoreDataException where
     toException = toException . IOProblem
     fromException x = do
         IOProblem  a <- fromException x
+        cast a
+
+
+-- | Represents a chain of IO exceptions that still has access to
+--   the original excetption
+data DerivedDataException = forall e . Exception e => DerivedDataException e
+    deriving (Typeable)
+
+instance Show DerivedDataException where
+    show (DerivedDataException e ) = "DerivedDataException of " ++ show e
+
+
+instance Exception DerivedDataException where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem a <- fromException x
         cast a
 
 

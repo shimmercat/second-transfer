@@ -35,11 +35,13 @@ import           System.IO.Unsafe                                          (unsa
 import           SecondTransfer.IOCallbacks.Types
 import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Exception                                  (
-                                                                             IOProblem
+                                                                             IOProblem(..)
                                                                            , NoMoreDataException(..)
+                                                                           , TLSBufferIsTooSmall(..)
                                                                            , TLSEncodingIssue (..)
                                                                            --, keyedReportExceptions
                                                                            , forkIOExc
+                                                                           , DerivedDataException (..)
                                                                            )
 import           SecondTransfer.TLS.Types                                  (  TLSContext (..) )
 import           SecondTransfer.TLS.SessionStorage
@@ -66,7 +68,7 @@ data BotanPad = BotanPad {
   -- | active_BP : Protects Botan of multiple close attempts
   , _active_BP             :: MVar ()
   , _selectedProtocol_BP   :: MVar HttpProtocolVersion
-  , _problem_BP            :: MVar ()
+  , _problem_BP            :: MVar IOProblem
     }
 
 -- type BotanPadRef = StablePtr BotanPad
@@ -247,10 +249,10 @@ pullAvailableData botan_pad can_wait = do
                 Nothing -> do
                     pullAvailableData botan_pad True
 
-                Just () -> do
+                Just e -> do
                     -- Allow others to wake-up
                     putMVar data_came_mvar ()
-                    E.throwIO NoMoreDataException
+                    E.throwIO .  DerivedDataException $ e
 
         (_, _) -> do
             let
@@ -370,8 +372,8 @@ encryptedToBotan botan_pad   =
                     | otherwise = 32000
 
     pump_exc_handler :: IOProblem -> IO (Maybe LB.ByteString)
-    pump_exc_handler _ = do
-        _ <- tryPutMVar problem_mvar ()
+    pump_exc_handler exc = do
+        _ <- tryPutMVar problem_mvar $ IOProblem (DerivedDataException exc)
         -- Wake-up any readers...
         _ <- tryPutMVar data_came_mvar ()
         return Nothing
@@ -425,7 +427,7 @@ encryptedToBotan botan_pad   =
             if engine_result < 0
               then do
                 -- putStrLn "BadEngineResult"
-                _ <- tryPutMVar problem_mvar ()
+                _ <- tryPutMVar problem_mvar (IOProblem TLSBufferIsTooSmall)
                 -- Just awake any variables
                 _ <- tryPutMVar data_came_mvar ()
                 _ <- tryPutMVar handshake_completed_mvar ()
@@ -455,12 +457,12 @@ encryptedToBotan botan_pad   =
                 peer_closed_transport <- iocba_peer_closed_transport tls_channel_ptr
                 -- Do provisions for tranport closed after this call
                 when (peer_closed_transport /= 0) $
-                    tryPutMVar problem_mvar () >> return ()
+                    tryPutMVar problem_mvar (IOProblem NoMoreDataException) >> return ()
                 return $ Just  (to_send, to_return)
 
 
-    stop_this_channel = do
-         _ <- tryPutMVar problem_mvar ()
+    stop_this_channel exc = do
+         _ <- tryPutMVar problem_mvar exc
          _ <- tryPutMVar data_came_mvar ()
          return ()
 
@@ -501,7 +503,7 @@ encryptedToBotan botan_pad   =
                                         LB.fromStrict $
                                         send_to_peer
                                 case either_problem :: Either IOProblem () of
-                                    Left _ -> stop_this_channel
+                                    Left e -> stop_this_channel e
                                     Right _ -> return ()
                             unless (B.length just_unencrypted == 0 )  $ do
                                 atomicModifyIORef' avail_data_ioref $ \ bu ->
@@ -557,7 +559,7 @@ closeBotan botan_pad =
           case maybe_gotit of
               Just _ -> do
                   -- Let's forbid libbotan for sending more output
-                  _ <- tryPutMVar (botan_pad ^. problem_BP) ()
+                  _ <- tryPutMVar (botan_pad ^. problem_BP) (IOProblem  NoMoreDataException)
                   _ <- tryPutMVar (botan_pad ^. dataCame_BP) ()
 
                   alert_is_fatal <- iocba_alert_is_fatal tls_channel_ptr

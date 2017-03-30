@@ -39,6 +39,7 @@ import           Data.Conduit
 import           Data.Foldable                          (find)
 import           Data.IORef
 import qualified Data.Vector                            as DVec
+import           Data.Typeable                          (cast)
 import           Data.Word                              (Word64)
 --import qualified Data.PQueue.Min                        as PQ
 --import           Data.Maybe                             (fromMaybe)
@@ -409,9 +410,15 @@ readNextFrame max_acceptable_size pull_action  = do
     either_frame_header_bs <- lift $ E.try $ pull_action 9
     case either_frame_header_bs :: Either IOProblem LB.ByteString of
 
-        Left _e -> do
+        Left (IOProblem ee)
+          | Just TLSBufferIsTooSmall <- cast ee  -> do
             -- If coming here, we are done with this connection. Just let it go
             -- yield . Left $ "Connection was closed"
+            -- Not happy about this, report it
+            liftIO . putStrLn $ "Raising TLSBufferIsTooSmall"
+            return ()
+          | otherwise -> do
+            liftIO . putStrLn $ "NormalDecodingFrameProblem?: " ++ show ee
             return ()
 
         Right frame_header_bs -> do
