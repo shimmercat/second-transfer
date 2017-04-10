@@ -53,6 +53,10 @@ data FinishRequest = FinishRequest
 
 -- type ProtocolSelector = [B.ByteString] -> IO (Maybe Int)
 
+-- | WebSockets require exclusively HTTP/1.1 connections. We need a way to tell
+--   the session handling mechanism that upon seeing certain domains, it should
+--   fallback to HTTP/1.1 and *NOT* offer HTTP/2.
+
 
 -- | Class to have different kinds of TLS backends. Included here and enabled through 'enable-botan'
 --   is support for using Botan as a backend. HTTP/2 requires TLS 1.2 and ALPN, so older versions
