@@ -92,6 +92,7 @@ createAndBindListeningSocketNSSockAddr host_addr = do
     the_socket <- case host_addr of
         NS.SockAddrInet _ _ -> NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
         NS.SockAddrUnix _ -> NS.socket NS.AF_UNIX NS.Stream NS.defaultProtocol
+        NS.SockAddrInet6 _ _ _ _ -> NS.socket NS.AF_INET6 NS.Stream NS.defaultProtocol
         _ -> error "NetworkAddressTypeNotHandled"
 #ifndef WIN32
     NS.setSocketOption the_socket NS.ReusePort 1
