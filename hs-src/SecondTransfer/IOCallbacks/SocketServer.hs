@@ -3,7 +3,6 @@ module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
               , TLSServerSocketIOCallbacks                          (..)
               , TLSAcceptResult
-              , createAndBindListeningSocket
               , createAndBindListeningSocketNSSockAddr
               , socketIOCallbacks
 
@@ -86,49 +85,6 @@ shouldSkipSocketOptions =
     return $ isJust maybe_skip
 
 
--- | Creates a listening socket at the provided network address (potentially a local interface)
---   and the given port number. It returns the socket. This result can be used by the function
---   tcpServe below
-createAndBindListeningSocket :: String -> Int ->  IO NS.Socket
-createAndBindListeningSocket hostname portnumber = do
-    the_socket <- NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
-    addr_list <- NS.getAddrInfo Nothing (Just hostname) Nothing
-    when (length addr_list == 0) $
-        E.throw $ BadAddressException hostname
-    let
-        addr_info0 : _ = addr_list
-    addr_info1  <- return $ addr_info0 {
-        NS.addrFamily = NS.AF_INET
-      , NS.addrSocketType = NS.Stream
-      , NS.addrAddress =
-          (\ (NS.SockAddrInet _ a) -> NS.SockAddrInet (fromIntegral portnumber) a)
-              (NS.addrAddress addr_info0)
-        }
-    host_address <- return $ NS.addrAddress addr_info1
-
-    should_skip <- shouldSkipSocketOptions
-
-    unless should_skip $ do
-#ifndef WIN32
-        NS.setSocketOption the_socket NS.ReusePort 1
-#endif
-        NS.setSocketOption the_socket NS.RecvBuffer 32000
-        NS.setSocketOption the_socket NS.SendBuffer 32000
-        NS.setSocketOption the_socket NS.NoDelay 1
-
-    --enableFastOpen the_socket
-
-    -- Linux honors the Low Water thingy below,
-    -- and this setting is OK for HTTP/2 connections, but
-    -- not very needed since the TLS wrapping will inflate the packet well beyond that size.
-    -- See about this option here: http://stackoverflow.com/questions/8245937/whats-the-purpose-of-the-socket-option-so-sndlowat
-    --
-    -- NS.setSocketOption the_socket NS.RecvLowWater 8
-    --
-    NS.bind the_socket host_address
-    NS.listen the_socket 20
-    -- bound <- NS.isBound the_socket
-    return the_socket
 
 -- | Same as above, but it takes a pre-built address
 createAndBindListeningSocketNSSockAddr :: NS.SockAddr ->  IO NS.Socket
