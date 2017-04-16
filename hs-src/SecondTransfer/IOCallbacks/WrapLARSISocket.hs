@@ -69,79 +69,95 @@ makeLenses ''LARSISocketIOCallbacks
 
 
 instance IOChannels LARSISocketIOCallbacks where
-    handshake s =
-        do
-            -- First things first, check if there is a LARSI prefix, by reading
-            -- as many bytes as needed to assert that.
-            (leftovers_bu, parse_result_bs) <- lookup_prefix (ATO.Partial $ ATO.parse larsi) ""
-            let
-                -- parse_result_bs = LB.toStrict . Bu.toLazyByteString $ parse_result_bu
-                leftovers_bs = LB.toStrict . Bu.toLazyByteString $ leftovers_bu
-            writeIORef (s ^. prefixReading_LS) leftovers_bs
-            if (B.length parse_result_bs > 0)
-              then do
-                -- In some circumstances the address may not be
-                -- "resolved" correctly
-                addr : _ <-
-                  E.catch
-                      (do
-                           addr_infos <-  NS.getAddrInfo
-                                (Just $ NS.defaultHints
-                                     { NS.addrFlags=[NS.AI_NUMERICHOST], NS.addrSocketType = NS.Stream} )
-                                (Just . unpack $ parse_result_bs)
-                                Nothing
-                           return . map NS.addrAddress  $ addr_infos
-                      )
-                      ((\ e ->
-                           do
-                               addr <- NS.getPeerName $ s ^. socket_LS
-                               putStrLn "LARSI: parsed address from prefix coulnd't be resolved"
-                               return [addr]
-                      )::E.IOException -> IO [NS.SockAddr])
-                writeIORef (s ^. originalAddress_LS) addr
-              else do
-                addr <- NS.getPeerName $ s ^. socket_LS
-                writeIORef (s ^. originalAddress_LS) addr
-            return ( s ^. callbacks_LS )
-      where
-        lookup_prefix :: ATO.IResult B.ByteString B.ByteString -> Bu.Builder -> IO (Bu.Builder, B.ByteString)
-        lookup_prefix (ATO.Partial cont) consumed = do
-            datum <- read (s ^. socket_LS)
-            case cont datum of
-                ATO.Done leftovers larsi_prefix -> return (Bu.byteString leftovers, larsi_prefix)
-                a@(ATO.Partial cont') -> lookup_prefix a (consumed `mappend` Bu.byteString datum)
-                ATO.Fail _ _ _ -> return (consumed `mappend` Bu.byteString datum, "")
-        read socket = do
-            datum <- E.catch (NSB.recv socket 4096) uhandler
-            if B.length datum == 0
-                then do
-                   -- Pre-emptively close the socket, don't wait for anything else
-                   NS.close (s ^. socket_LS)
-                   E.throwIO NoMoreDataException
-                else do
-                   return  datum
+    handshake s = do
+        pullLARSIAddressIfNotDoneBefore s
+        return (s ^. callbacks_LS)
 
-        uhandler :: E.IOException -> IO a
-        uhandler = ((\ _e -> do
-                               -- Preserve sockets!!
-                               -- We can safely close the socket here because
-                               -- the close action hasn't  been made available to
-                               -- the library's client.
-                               NS.close (s ^. socket_LS)
-                               E.throwIO NoMoreDataException
-                    ) :: E.IOException -> IO a )
 
-        larsi =  do
-            ATO8.string "LARSI"
-            lng <- ATO.anyWord8
-            prefix <- ATO.take (fromIntegral lng)
-            return prefix
+pullLARSIAddressIfNotDoneBefore :: LARSISocketIOCallbacks -> IO ()
+pullLARSIAddressIfNotDoneBefore s =
+    do
+        addr <- readIORef $  s ^. originalAddress_LS
+        case addr of
+            NS.SockAddrUnix "NOTSetYet" -> pullLARSIAddress s
+            _ -> return ()
+
+
+pullLARSIAddress :: LARSISocketIOCallbacks -> IO ()
+pullLARSIAddress s =
+    do
+        -- First things first, check if there is a LARSI prefix, by reading
+        -- as many bytes as needed to assert that.
+        (leftovers_bu, parse_result_bs) <- lookup_prefix (ATO.Partial $ ATO.parse larsi) ""
+        let
+            -- parse_result_bs = LB.toStrict . Bu.toLazyByteString $ parse_result_bu
+            leftovers_bs = LB.toStrict . Bu.toLazyByteString $ leftovers_bu
+        writeIORef (s ^. prefixReading_LS) leftovers_bs
+        if (B.length parse_result_bs > 0)
+          then do
+            -- In some circumstances the address may not be
+            -- "resolved" correctly
+            addr : _ <-
+              E.catch
+                  (do
+                       addr_infos <-  NS.getAddrInfo
+                            (Just $ NS.defaultHints
+                                 { NS.addrFlags=[NS.AI_NUMERICHOST], NS.addrSocketType = NS.Stream} )
+                            (Just . unpack $ parse_result_bs)
+                            Nothing
+                       return . map NS.addrAddress  $ addr_infos
+                  )
+                  ((\ e ->
+                       do
+                           addr <- NS.getPeerName $ s ^. socket_LS
+                           putStrLn "LARSI: parsed address from prefix coulnd't be resolved"
+                           return [addr]
+                  )::E.IOException -> IO [NS.SockAddr])
+            writeIORef (s ^. originalAddress_LS) addr
+          else do
+            addr <- NS.getPeerName $ s ^. socket_LS
+            writeIORef (s ^. originalAddress_LS) addr
+  where
+    lookup_prefix :: ATO.IResult B.ByteString B.ByteString -> Bu.Builder -> IO (Bu.Builder, B.ByteString)
+    lookup_prefix (ATO.Partial cont) consumed = do
+        datum <- read (s ^. socket_LS)
+        case cont datum of
+            ATO.Done leftovers larsi_prefix -> return (Bu.byteString leftovers, larsi_prefix)
+            a@(ATO.Partial cont') -> lookup_prefix a (consumed `mappend` Bu.byteString datum)
+            ATO.Fail _ _ _ -> return (consumed `mappend` Bu.byteString datum, "")
+    read socket = do
+        datum <- E.catch (NSB.recv socket 4096) uhandler
+        if B.length datum == 0
+            then do
+               -- Pre-emptively close the socket, don't wait for anything else
+               NS.close (s ^. socket_LS)
+               E.throwIO NoMoreDataException
+            else do
+               return  datum
+
+    uhandler :: E.IOException -> IO a
+    uhandler = ((\ _e -> do
+                           -- Preserve sockets!!
+                           -- We can safely close the socket here because
+                           -- the close action hasn't  been made available to
+                           -- the library's client.
+                           NS.close (s ^. socket_LS)
+                           E.throwIO NoMoreDataException
+                ) :: E.IOException -> IO a )
+
+    larsi =  do
+        ATO8.string "LARSI"
+        lng <- ATO.anyWord8
+        prefix <- ATO.take (fromIntegral lng)
+        return prefix
 
 
 instance PlainTextIO LARSISocketIOCallbacks
 
 instance HasSocketPeer LARSISocketIOCallbacks where
-    getSocketPeerAddress s =  readIORef $ s ^. originalAddress_LS
+    getSocketPeerAddress s =  do
+        pullLARSIAddressIfNotDoneBefore s
+        readIORef $ s ^. originalAddress_LS
 
 
 -- | This function wraps an active socket (e.g., one where it is possible to send and receive data)
@@ -150,7 +166,8 @@ larsiSocketIOCallbacks :: NS.Socket -> IO LARSISocketIOCallbacks
 larsiSocketIOCallbacks socket = do
     socket_already_closed <- newMVar False
     prefix <- newIORef ""
-    original_address <- newIORef (error "NOTSetYet")
+    -- Earlobbing the current state of the thing...
+    original_address <- newIORef (NS.SockAddrUnix "NOTSetYet")
     let
         uhandler :: E.IOException -> IO a
         uhandler = ((\ _e -> do
