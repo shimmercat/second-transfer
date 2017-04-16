@@ -49,8 +49,6 @@ instance IOChannels SocketIOCallbacks where
     handshake s = return ( s ^. callbacks_SS )
 
 
-class HasSocketPeer a where
-    getSocketPeerAddress :: a -> IO NS.SockAddr
 
 data SomeHasSocketPeer where
     -- = forall a . HasSocketPeer a => SomeHasSocketPeer a

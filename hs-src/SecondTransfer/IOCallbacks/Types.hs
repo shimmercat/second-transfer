@@ -36,6 +36,7 @@ module SecondTransfer.IOCallbacks.Types (
 
                , AcceptErrorCondition (..)
                , AcceptOutcome        (..)
+               , HasSocketPeer        (..)
 
                -- * Utility functions
                , PullActionWrapping
@@ -47,7 +48,7 @@ module SecondTransfer.IOCallbacks.Types (
 
 import           Control.Lens
 import           Control.Concurrent.MVar
-
+import qualified Network.Socket                               as NS
 
 
 import           Data.Int                                     (Int64)
@@ -81,6 +82,12 @@ type PullAction  = Int -> IO LB.ByteString
 -- | Generic implementation of PullAction from BestEffortPullAction, where we keep around
 --   any leftovers data ...
 newtype PullActionWrapping = PullActionWrapping (MVar LB.ByteString, BestEffortPullAction)
+
+
+-- | Return a socket address from something that looks like an IO
+--   callback
+class HasSocketPeer a where
+    getSocketPeerAddress :: a -> IO NS.SockAddr
 
 -- The type above contains stuff already read, its length and the the action
 
