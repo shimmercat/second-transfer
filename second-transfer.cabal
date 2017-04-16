@@ -96,6 +96,7 @@ library
                   , SecondTransfer.IOCallbacks.Types
                   , SecondTransfer.IOCallbacks.SocketServer
                   , SecondTransfer.IOCallbacks.WrapSocket
+                  , SecondTransfer.IOCallbacks.WrapLARSISocket
                   , SecondTransfer.IOCallbacks.Coupling
                   , SecondTransfer.IOCallbacks.SaveFragment
                   , SecondTransfer.IOCallbacks.Throtler

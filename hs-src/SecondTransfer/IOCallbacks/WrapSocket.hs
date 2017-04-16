@@ -49,12 +49,6 @@ instance IOChannels SocketIOCallbacks where
     handshake s = return ( s ^. callbacks_SS )
 
 
-
-data SomeHasSocketPeer where
-    -- = forall a . HasSocketPeer a => SomeHasSocketPeer a
-    SomeHasSocketPeer :: HasSocketPeer a => a -> SomeHasSocketPeer
-
-
 instance PlainTextIO SocketIOCallbacks
 
 instance HasSocketPeer SocketIOCallbacks where
