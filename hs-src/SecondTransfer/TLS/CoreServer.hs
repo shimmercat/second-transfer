@@ -283,7 +283,8 @@ tlsServeWithALPNNSSockAddr_Prepare ::   forall ctx session resumption_store . (T
                  -> B.ByteString              -- ^ String with contents of certificate chain
                  -> B.ByteString              -- ^ String with contents of PKCS #8 key
                  -> NS.SockAddr           -- ^ Address to bind to
-                 -> Maybe resumption_store
+                 -> Maybe resumption_store -- ^ How to resume
+                 -> Bool                  -- ^ Should I sue LARSI?
                  -> IO NamedAttendants    -- ^ Will-be list of attendants and their handlers
                  -> IO NormalTCPHold
 tlsServeWithALPNNSSockAddr_Prepare
@@ -293,6 +294,7 @@ tlsServeWithALPNNSSockAddr_Prepare
                 key_filename
                 sock_addr
                 maybe_resumption_store
+                use_larsi
                 make_attendants
   = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
@@ -317,7 +319,10 @@ tlsServeWithALPNNSSockAddr_Prepare
         let
             x :: NS.Socket -> (AcceptOutcome SocketIOCallbacks TLSServerSocketIOCallbacks  -> IO () ) -> IO ()
             x = (tlsServe' closing)
-        in x
+
+            y :: NS.Socket -> (AcceptOutcome SocketIOCallbacks TLSServerSocketIOCallbacks  -> IO () ) -> IO ()
+            y = (tlsLARSIServe closing)
+        in if use_larsi then y else x
 
     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
         Just clbk -> clbk
