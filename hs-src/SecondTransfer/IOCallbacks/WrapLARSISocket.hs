@@ -23,6 +23,8 @@ include a LARSI prefix.
 
 -}
 module SecondTransfer.IOCallbacks.WrapLARSISocket (
+                 larsiSocketIOCallbacks
+               , LARSISocketIOCallbacks
      ) where
 
 

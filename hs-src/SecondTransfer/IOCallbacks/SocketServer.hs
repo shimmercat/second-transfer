@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving, ForeignFunctionInterface, Rank2Types  #-}
+{-# LANGUAGE TemplateHaskell, OverloadedStrings, GeneralizedNewtypeDeriving, ForeignFunctionInterface, Rank2Types, GADTs  #-}
 module SecondTransfer.IOCallbacks.SocketServer(
                 SocketIOCallbacks
               , TLSServerSocketIOCallbacks                          (..)
@@ -11,6 +11,7 @@ module SecondTransfer.IOCallbacks.SocketServer(
               , tcpServeWithSockAddr
               , tlsServe
               , tlsServe'
+              , tlsLARSIServe
 
               -- ** Socket server with iterators
               , tcpItcli
@@ -37,6 +38,9 @@ import           Foreign.C.Types                                    (CInt(..))
 import qualified Network.Socket                                     as NS
 
 import           SecondTransfer.IOCallbacks.Types
+import           SecondTransfer.IOCallbacks.WrapLARSISocket         (
+                                                                     larsiSocketIOCallbacks
+                                                                    )
 import           SecondTransfer.IOCallbacks.WrapSocket              (
                                                                      socketIOCallbacks,
                                                                      SocketIOCallbacks,
@@ -55,8 +59,13 @@ foreign import ccall unsafe "iocba_enable_fastopen" iocba_enable_fastopen ::
 
 -- | Simple alias to SocketIOCallbacks where we expect
 --   encrypted contents
-newtype TLSServerSocketIOCallbacks = TLSServerSocketIOCallbacks SocketIOCallbacks
-    deriving IOChannels
+data TLSServerSocketIOCallbacks where
+    TLSServerSocketIOCallbacks ::
+         (IOChannels a, HasSocketPeer a) =>  a ->  TLSServerSocketIOCallbacks
+
+instance IOChannels TLSServerSocketIOCallbacks where
+    handshake (TLSServerSocketIOCallbacks x) = handshake x
+
 
 type TLSAcceptResult = Either AcceptErrorCondition TLSServerSocketIOCallbacks
 
@@ -211,7 +220,11 @@ tlsServe closing listen_socket tls_action =
                   Right (TLSServerSocketIOCallbacks socket_io_callbacks)
 
 
-tlsServe' :: forall a . PlainTextIO a => (IO Bool) -> NS.Socket -> ( AcceptOutcome a TLSServerSocketIOCallbacks  -> IO () ) -> IO ()
+tlsServe' :: forall a . PlainTextIO a =>
+           (IO Bool) ->
+           NS.Socket ->
+           ( AcceptOutcome a TLSServerSocketIOCallbacks  -> IO () ) ->
+           IO ()
 tlsServe' closing listen_socket tls_action =
     tcpServe listen_socket closing tcp_action
   where
@@ -227,12 +240,22 @@ tlsServe' closing listen_socket tls_action =
                   ForTLS_AOu (TLSServerSocketIOCallbacks socket_io_callbacks)
 
 
--- tlsItcli :: NS.Socket -> Source IO (TLSServerSocketIOCallbacks, NS.SockAddr)
--- tlsItcli listen_socket =
---     fuse
---         (tcpItcli listen_socket)
---         ( CL.mapM
---             $ \ (active_socket, address) -> do
---                 socket_io_callbacks <- socketIOCallbacks active_socket
---                 return (TLSServerSocketIOCallbacks socket_io_callbacks ,address)
---         )
+-- | Accepts address prefixes.
+tlsLARSIServe :: forall a . PlainTextIO a =>
+           (IO Bool) ->
+           NS.Socket ->
+           ( AcceptOutcome a TLSServerSocketIOCallbacks  -> IO () ) ->
+           IO ()
+tlsLARSIServe closing listen_socket tls_action =
+    tcpServe listen_socket closing tcp_action
+  where
+    tcp_action either_active_socket =
+      case either_active_socket of
+          Left condition ->
+              tls_action $ ErrorCondition_AOu condition
+
+          Right active_socket ->
+            do
+              socket_io_callbacks <- larsiSocketIOCallbacks active_socket
+              tls_action $
+                  ForTLS_AOu (TLSServerSocketIOCallbacks socket_io_callbacks)

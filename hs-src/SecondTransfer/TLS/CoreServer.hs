@@ -234,37 +234,6 @@ flatAction session_handler_state_mvar attendant sio inflight = do
     return ()
 
 
--- -- | Convenience function to open a port and listen there for connections and
--- --   select protocols and so on.
--- tlsServeWithALPN ::   forall ctx session . (TLSContext ctx session)
---                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
---                                           --   of TLS backend to use during the invocation
---                  -> ConnectionCallbacks   -- ^ Control and log connections
---                  -> B.ByteString              -- ^ String with contents of certificate chain
---                  -> B.ByteString              -- ^ String with contents of PKCS #8 key
---                  -> String                -- ^ Name of the network interface
---                  -> NamedAttendants       -- ^ List of attendants and their handlers
---                  -> Int                   -- ^ Port to listen for connections
---                  -> IO ()
--- tlsServeWithALPN proxy  conn_callbacks cert_filename key_filename interface_name attendants interface_port = do
---     -- let
---     --     tls_serve socket
---     listen_socket <- createAndBindListeningSocket interface_name interface_port
---     coreListen
---         proxy
---         conn_callbacks
---         cert_filename
---         key_filename
---         listen_socket
---         (tlsServe closing)
---         (Nothing :: Maybe NoStore)
---         attendants
---   where
---     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
---         Just clbk -> clbk
---         Nothing -> (return False)
-
-
 -- | Use a previously given network address
 tlsServeWithALPNNSSockAddr ::   forall ctx session . (TLSContext ctx session)
                  => (Proxy ctx )          -- ^ This is a simple proxy type from Typeable that is used to select the type
@@ -353,6 +322,7 @@ tlsServeWithALPNNSSockAddr_Prepare
     closing = case conn_callbacks ^. serviceIsClosing_CoCa of
         Just clbk -> clbk
         Nothing -> (return False)
+
 
 -- | Actually listen, possibly at the other side of the fork.
 tlsServeWithALPNNSSockAddr_Do :: NormalTCPHold  -> IO ()
