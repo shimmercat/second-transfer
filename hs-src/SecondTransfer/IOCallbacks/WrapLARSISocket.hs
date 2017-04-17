@@ -28,7 +28,7 @@ module SecondTransfer.IOCallbacks.WrapLARSISocket (
      ) where
 
 
-import           Control.Monad                                      (unless)
+import           Control.Monad                                      (unless, when)
 import           Control.Concurrent
 import qualified Control.Exception                                  as E
 import           Control.Lens                                       (makeLenses, (^.))
@@ -56,8 +56,8 @@ import           SecondTransfer.Exception
 -- | IOCallbacks around an active LARSI socket
 data LARSISocketIOCallbacks = LARSISocketIOCallbacks {
     _socket_LS          :: NS.Socket
-  , _prefixReading_LS   :: IORef B.ByteString
-  , _originalAddress_LS :: IORef NS.SockAddr
+  , _prefixReading_LS   :: MVar B.ByteString
+  , _originalAddress_LS :: MVar NS.SockAddr
   , _callbacks_LS       :: IOCallbacks
     }
 
@@ -77,9 +77,9 @@ instance IOChannels LARSISocketIOCallbacks where
 pullLARSIAddressIfNotDoneBefore :: LARSISocketIOCallbacks -> IO ()
 pullLARSIAddressIfNotDoneBefore s =
     do
-        addr <- readIORef $  s ^. originalAddress_LS
-        case addr of
-            NS.SockAddrUnix "NOTSetYet" -> pullLARSIAddress s
+        maybe_addr <- tryTakeMVar $  s ^. originalAddress_LS
+        case maybe_addr of
+            Nothing -> pullLARSIAddress s
             _ -> return ()
 
 
@@ -92,7 +92,7 @@ pullLARSIAddress s =
         let
             -- parse_result_bs = LB.toStrict . Bu.toLazyByteString $ parse_result_bu
             leftovers_bs = LB.toStrict . Bu.toLazyByteString $ leftovers_bu
-        writeIORef (s ^. prefixReading_LS) leftovers_bs
+        putMVar (s ^. prefixReading_LS) leftovers_bs
         if (B.length parse_result_bs > 0)
           then do
             -- In some circumstances the address may not be
@@ -113,10 +113,10 @@ pullLARSIAddress s =
                            putStrLn "LARSI: parsed address from prefix coulnd't be resolved"
                            return [addr]
                   )::E.IOException -> IO [NS.SockAddr])
-            writeIORef (s ^. originalAddress_LS) addr
+            putMVar (s ^. originalAddress_LS) addr
           else do
             addr <- NS.getPeerName $ s ^. socket_LS
-            writeIORef (s ^. originalAddress_LS) addr
+            putMVar (s ^. originalAddress_LS) addr
   where
     lookup_prefix :: ATO.IResult B.ByteString B.ByteString -> Bu.Builder -> IO (Bu.Builder, B.ByteString)
     lookup_prefix (ATO.Partial cont) consumed = do
@@ -157,7 +157,7 @@ instance PlainTextIO LARSISocketIOCallbacks
 instance HasSocketPeer LARSISocketIOCallbacks where
     getSocketPeerAddress s =  do
         pullLARSIAddressIfNotDoneBefore s
-        readIORef $ s ^. originalAddress_LS
+        readMVar $ s ^. originalAddress_LS
 
 
 -- | This function wraps an active socket (e.g., one where it is possible to send and receive data)
@@ -165,9 +165,9 @@ instance HasSocketPeer LARSISocketIOCallbacks where
 larsiSocketIOCallbacks :: NS.Socket -> IO LARSISocketIOCallbacks
 larsiSocketIOCallbacks socket = do
     socket_already_closed <- newMVar False
-    prefix <- newIORef ""
+    prefix <- newEmptyMVar
     -- Earlobbing the current state of the thing...
-    original_address <- newIORef (NS.SockAddrUnix "NOTSetYet")
+    original_address <- newEmptyMVar
     let
         uhandler :: E.IOException -> IO a
         uhandler = ((\ _e -> do
@@ -189,10 +189,9 @@ larsiSocketIOCallbacks socket = do
                 uhandler
 
         best_effort_pull_action _ = do
-            prefix_s <- readIORef prefix
-            if B.length prefix_s > 0
-              then do
-                writeIORef prefix ""
+            prefix_s <- readMVar prefix
+            if (B.length prefix_s >  0 ) then do
+                modifyMVar_  prefix (\ _ -> return "")
                 return . LB.fromStrict $ prefix_s
               else do
                 datum <- E.catch (NSB.recv socket 4096) uhandler
@@ -202,7 +201,7 @@ larsiSocketIOCallbacks socket = do
                        close_action
                        E.throwIO NoMoreDataException
                     else do
-                       return . LB.fromStrict $ datum
+                       return . LB.fromStrict $ prefix_s `mappend` datum
 
         -- Exceptions on close are possible
         close_action = modifyMVar_ socket_already_closed $ \ already_closed -> do
