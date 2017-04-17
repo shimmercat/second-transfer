@@ -201,7 +201,7 @@ larsiSocketIOCallbacks socket = do
                        close_action
                        E.throwIO NoMoreDataException
                     else do
-                       return . LB.fromStrict $ prefix_s `mappend` datum
+                       return . LB.fromStrict $  datum
 
         -- Exceptions on close are possible
         close_action = modifyMVar_ socket_already_closed $ \ already_closed -> do
