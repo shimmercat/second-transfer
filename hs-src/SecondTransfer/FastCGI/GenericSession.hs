@@ -1,9 +1,15 @@
-{-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies, FlexibleContexts, Rank2Types #-}
-
+{-# LANGUAGE
+     OverloadedStrings,
+     TemplateHaskell,
+     FunctionalDependencies,
+     FlexibleContexts,
+     Rank2Types,
+     PartialTypeSignatures #-}
 module SecondTransfer.FastCGI.GenericSession (
                  ioProxyToConnection
                , SessionConfig                                            (..)
                , documentRoot_cgiSC
+               , errorReporting_cgiSC
 
                , SessionSeed                                              (..)
                , requestId_GeS
@@ -72,10 +78,15 @@ type RawFilePath = B.ByteString
 
 data SessionConfig = SessionConfig {
     _documentRoot_cgiSC     :: Maybe RawFilePath
+  , _errorReporting_cgiSC   :: ! (B.ByteString -> IO ())
     }
-    deriving Show
+
 
 makeLenses ''SessionConfig
+
+instance Show SessionConfig where
+   show sc = "SessionConfig { _documentRoot= " ++
+              show (sc ^. documentRoot_cgiSC) ++ "}"
 
 
 data SessionSeed = SessionSeed {
@@ -98,6 +109,8 @@ ioProxyToConnection session_seed  request =
         ioc = session_seed ^. ioc_GeS
         h3 = request ^. headers_Rq
         method = fromMaybe Get_HtM $  h3 ^. method_Hi
+        error_clbk = \ err_str ->
+            liftIO $ (session_seed ^. config_GeS . errorReporting_cgiSC) err_str
 
     sendHeadersToApplication session_seed h3
 
@@ -106,6 +119,7 @@ ioProxyToConnection session_seed  request =
        method
        (request ^. body_Rq )
        ioc
+       error_clbk
 
     return http_response
 
@@ -165,14 +179,19 @@ framesParser =
     CL.map snd
 
 
--- | It yields the payload of frames with a type Stdout_RT.
+-- | It yields the payload of frames with a type Stdout_RT, and logs
+--   the payload of error frames.
 --   ATTENTION(IMPORTANT): No control for request_id is being made
 --   here.
 framesSource ::
     (MonadIO m, MonadCatch m) =>
     IO LB.ByteString ->
+    (B.ByteString -> m () ) ->
     Source  m B.ByteString
-framesSource bepa =
+framesSource
+    bepa
+    error_clbk
+  =
   let
         conn_source = do
             -- Will throw exceptions
@@ -180,17 +199,14 @@ framesSource bepa =
             CL.sourceList $ LB.toChunks b
             conn_source
 
+        frames_interpreter :: Conduit RecordFrame _ B.ByteString
         frames_interpreter =
           do
             maybe_frame <- await
             case maybe_frame of
                 Just frame -> case frame ^. type_RH of
                     Stderr_RT -> do
-                        -- TODO: Properly propagate to the server logs.
-                        -- See #26
-                        liftIO $
-                             putStrLn $
-                                 "ErrorData FastCGI: " ++ show (frame ^. payload_RH)
+                        lift $ error_clbk (frame ^. payload_RH)
                         frames_interpreter
                     Stdout_RT -> do
                         let
@@ -203,19 +219,18 @@ framesSource bepa =
                             return ()
                     EndRequest_RT -> do
                         -- ATTENTION: THE CODE BELOW IS GOOD!, it is just
-                        -- that we need to create an EXCEPTION TYPE HERE
+                        --  that we need to create an EXCEPTION TYPE HERE
                         -- to raise when there are errors in the backend.
-                        -- let
-                        --     payload = frame ^. payload_RH
-                        --     either_parsed_end = ATO.parseOnly
-                        --        readEndRequest
-                        --        payload
-                        -- liftIO $ case either_parsed_end of
-                        --     Left msg ->
-                        --          putStrLn $ "EndRequestNotParsedCorrectly " ++ msg
-                        --     Right packet ->
-                        --          putStrLn $  "Parsed end request: " ++ show packet
-                        return ()
+                        let
+                            payload = frame ^. payload_RH
+                            either_parsed_end = ATO.parseOnly
+                               readEndRequest
+                               payload
+                        case either_parsed_end of
+                            Left msg ->
+                                 lift $ error_clbk "FastCGI end-request packet was not correctly parsed"
+                            _ ->
+                                 return ()
                     _fr -> do
                         -- Discard frames I can't undestand.
                         liftIO $ putStrLn  "FASTCGI frame doesn't make sense"
@@ -239,8 +254,15 @@ processOutputAndStdErr ::
     HttpMethod ->
     Source AwareWorkerStack B.ByteString ->
     IOCallbacks ->
+    (B.ByteString -> AwareWorkerStack ()) ->
         AwareWorkerStack (HttpResponse AwareWorkerStack)
-processOutputAndStdErr request_id method client_input ioc =
+processOutputAndStdErr
+    request_id
+    method
+    client_input
+    ioc
+    error_clbk
+  =
   do
     let
         push = ioc ^. pushAction_IOC
@@ -278,7 +300,7 @@ processOutputAndStdErr request_id method client_input ioc =
     -- Receive the headers as soon as possible, and prepare to receive
     -- any data to the application and forward it immediately to the inner side.
     (resumable_source, (headers, do_with_body)) <-
-        framesSource  bepa
+        framesSource  bepa error_clbk
         $$+
         processHttp11OutputFromPipe method_str
 
