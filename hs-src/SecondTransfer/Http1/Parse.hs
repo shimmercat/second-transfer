@@ -322,17 +322,22 @@ elaborateHeaders full_text crlf_positions last_headers_position =
 
 
     leftovers = B.drop (last_headers_position + 4) full_headers_text
-    all_headers_ok = all verifyHeaderSyntax headers_1
+    all_headers_ok = and unfailing_definitions
+    unfailing_definitions = map verifyHeaderSyntax headers_1
   in
     if isJust maybe_request_or_response then
-        (if all_headers_ok then
+        (
+        if all_headers_ok then
             if has_body
               then
                 HeadersAndBody_H1PC headers_hq content_stop leftovers
               else
                 OnlyHeaders_H1PC headers_hq leftovers
         else
-            RequestIsMalformed_H1PC "InvalidSyntaxOnHeaders")
+            RequestIsMalformed_H1PC $ "InvalidSyntaxOnHeaders " ++ show full_headers_text ++ ", they were pre-parsed as " ++ show headers_1 ++
+                                      " and yield the boolean validation vector " ++ show unfailing_definitions
+
+        )
     else
         RequestIsMalformed_H1PC "InvalidFirstLineOnRequest"
 
