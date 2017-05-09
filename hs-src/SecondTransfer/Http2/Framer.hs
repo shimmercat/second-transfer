@@ -990,6 +990,8 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                     (delivery_notify (ordinal, use_bytes))
                     read_state
 
+            withNormalPrioritySend callback priority stream_id ordinal formatted
+
             -- We are crossing the bytes boundary for a priority switch if use_bytes == left_before_prio_break,
             -- Then we can go ahead and do a pause, if we have been asked to do so.
             when (pause_time > 0 && use_bytes == left_before_prio_break) $
@@ -999,8 +1001,6 @@ flowControlOutput stream_id !capacity !ordinal !calm !leftovers commands_chan by
                   --
                   -- TODO: Add some conditional compilation to this.
                   liftIO . threadDelay $ (pause_time * 1000)
-
-            withNormalPrioritySend callback priority stream_id ordinal formatted
 
             flowControlOutput
                 stream_id
