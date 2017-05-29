@@ -218,12 +218,13 @@ makeLenses ''SessionCloseTimeouts
 
 defaultSessionCloseTimeouts :: SessionCloseTimeouts
 defaultSessionCloseTimeouts = SessionCloseTimeouts {
-   -- Let's wait a max time of five seconds before
+   -- Let's wait a max time of thirty seconds before
    -- forcibly closing the connection.
-   _maxWait_SCT       = 5*1000*1000*1000
-   -- Let's wait 200ms between checks to detect an
-   -- inactivity moment.
-  ,_smallWait_SCT     = 200   *1000*1000
+   _maxWait_SCT       = 30*1000*1000*1000
+   -- Let's wait 3000ms between checks to detect an
+   -- inactivity moment. Really slow network connections
+   -- will need this much grace.
+  ,_smallWait_SCT     = 3*1000*1000*1000
     }
 
 -- | Configuration information you can provide to the session maker.

@@ -663,6 +663,7 @@ http2Session
     return ( (SessionInput session_input),
              session_output )
 
+
 -- | Takes frames from the Framer and starts streams mini-workers to make sense
 -- of them.
 --

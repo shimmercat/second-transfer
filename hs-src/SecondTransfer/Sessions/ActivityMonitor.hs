@@ -20,6 +20,7 @@ import               Control.Lens
 import               Control.Concurrent
 import               Control.Concurrent.MVar
 
+-- import               Debug.Trace
 
 
 -- | When in the past was the last activity reported.
@@ -34,16 +35,19 @@ data ActivityLog = ActivityLog {
 -- | Moves the values back and insert a new one.
 cycleActivityLog :: ActivityLog -> Int64 -> ActivityLog
 cycleActivityLog
-    (ActivityLog {
+    act_log@(ActivityLog {
         _item0_ms = i0,
         _item1_ms = i1,
-        _item2_ms = i2
+        _item2_ms = _i2
     }) new_time =
-    ActivityLog {
-        _item0_ms = new_time,
-        _item1_ms = i0,
-        _item2_ms = i1
-    }
+    if new_time > i0 then
+        ActivityLog {
+            _item0_ms = new_time,
+            _item1_ms = i0,
+            _item2_ms = i1
+        }
+     else
+        act_log
 
 
 -- | Checks if all the three time-intervals that can be constructed
@@ -55,17 +59,17 @@ isBusyTick :: ActivityLog -> Int64 -> Int64 -> Bool
 isBusyTick
     (ActivityLog {
         _item0_ms = i0,
-        _item1_ms = i1,
-        _item2_ms = i2
+        _item1_ms = _i1,
+        _item2_ms = _i2
     }) new_time
        threshold
   =
   let
     interval0 = new_time - i0
-    interval1 = i0 - i1
-    interval2 = i1 - i2
+    -- interval1 = i0 - i1
+    -- interval2 = i1 - i2
   in
-    and . map ( < threshold ) $ [interval0, interval1, interval2]
+    interval0 < (2 * threshold)
 
 
 -- | The easy-to-use API from the session
@@ -77,7 +81,8 @@ data ActivityMonitor = ActivityMonitor {
 newActivityMonitor :: IO ActivityMonitor
 newActivityMonitor =
   do
-    al <- newMVar $ ActivityLog 0 0 0
+    current_time <- getClock
+    al <- newMVar $ ActivityLog current_time current_time current_time
     return $ ActivityMonitor { _activityLog_AM = al }
 
 
@@ -87,7 +92,7 @@ reportEvent am =
   do
     current_time <- getClock
     modifyMVar_ (_activityLog_AM am) $
-      \ act_log -> pure (cycleActivityLog act_log current_time)
+      \ act_log -> return (cycleActivityLog act_log current_time)
 
 
 -- | Reason the wait ended:

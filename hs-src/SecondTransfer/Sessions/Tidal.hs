@@ -214,7 +214,6 @@ dropConnections conns = foldM  (\ counter entry_mvar -> do
                 -- putStrLn "NOT BLANK"
                 case generic_handle of
                     Whole_SGH a -> do
-                        putStrLn "Cleanly CloseSession"
                         cleanlyCloseSession a
                         counter `seq` (return $ counter + 1)
 
@@ -239,7 +238,6 @@ gentlyDropConnections conns = do
             Just (_sock_addr, generic_handle)  -> do
                 case generic_handle of
                     Whole_SGH a -> do
-                        putStrLn "Cleanly smoothly closeSession"
                         session_terminated <- newEmptyMVar
                         forkFinally
                           (do
