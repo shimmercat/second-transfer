@@ -82,7 +82,7 @@ library
 
                   , SecondTransfer.Sessions
                   , SecondTransfer.Sessions.Config
-                  , SecondTransfer.Sessions.RequesterPool
+                  --, SecondTransfer.Sessions.RequesterPool
                   , SecondTransfer.Sessions.ApplicationPortProbe
 
                   , SecondTransfer.Http1.Parse
@@ -117,6 +117,7 @@ library
                   -- TODO: Most of these should be moved back to "other-modules"
                   , SecondTransfer.Sessions.Internal
                   , SecondTransfer.Sessions.Tidal
+                  , SecondTransfer.Sessions.ActivityMonitor
                   , SecondTransfer.Sessions.HashableSockAddr
                   , SecondTransfer.Http2.Session
                   , SecondTransfer.Http2.Framer

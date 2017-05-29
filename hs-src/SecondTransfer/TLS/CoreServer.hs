@@ -24,6 +24,7 @@ module SecondTransfer.TLS.CoreServer (
 
                , tlsServeWithALPNUnderSOCKS5SockAddr_Prepare
                , tlsServeWithALPNUnderSOCKS5SockAddr_Do
+               , tlsServeWithALPNNSSockAddr_Unlisten
 
                , coreListen
 
@@ -271,7 +272,7 @@ tlsServeWithALPNNSSockAddr proxy conn_callbacks  cert_filename key_filename sock
 
 
 
-data NormalTCPHold   = NormalTCPHold ( IO () )
+data NormalTCPHold   = NormalTCPHold ( IO () ) NS.Socket
 
 -- | The prefork way requires a first step where we create the sockets and then we listen on them...
 --   This function is identical otherwise to the one without _Prepare. The real thing is done by the
@@ -298,18 +299,21 @@ tlsServeWithALPNNSSockAddr_Prepare
                 make_attendants
   = do
     listen_socket <- createAndBindListeningSocketNSSockAddr sock_addr
-    return . NormalTCPHold $ do
-        attendants <- make_attendants
-        coreListen
-            proxy
-            conn_callbacks
-            cert_filename
-            key_filename
-            listen_socket
-            tls_serve
-            maybe_resumption_store
-            attendants
-            flat_attendant
+    return $ NormalTCPHold
+        (do
+            attendants <- make_attendants
+            coreListen
+                proxy
+                conn_callbacks
+                cert_filename
+                key_filename
+                listen_socket
+                tls_serve
+                maybe_resumption_store
+                attendants
+                flat_attendant
+        )
+        listen_socket
   where
     flat_attendant :: Attendant
     flat_attendant _ _ =
@@ -331,7 +335,11 @@ tlsServeWithALPNNSSockAddr_Prepare
 
 -- | Actually listen, possibly at the other side of the fork.
 tlsServeWithALPNNSSockAddr_Do :: NormalTCPHold  -> IO ()
-tlsServeWithALPNNSSockAddr_Do (NormalTCPHold action) = action
+tlsServeWithALPNNSSockAddr_Do (NormalTCPHold action _ ) = action
+
+
+tlsServeWithALPNNSSockAddr_Unlisten :: NormalTCPHold -> IO ()
+tlsServeWithALPNNSSockAddr_Unlisten (NormalTCPHold  _ sck ) = NS.close sck
 
 
 tlsServeWithALPNUnderSOCKS5SockAddr ::   forall ctx session  . (TLSContext ctx session)

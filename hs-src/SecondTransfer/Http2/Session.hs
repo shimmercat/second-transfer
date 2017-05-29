@@ -92,6 +92,7 @@ import           SecondTransfer.MainLoop.Tokens
 import           SecondTransfer.MainLoop.ClientPetitioner
 
 import           SecondTransfer.Sessions.Config
+import           SecondTransfer.Sessions.ActivityMonitor
 import           SecondTransfer.IOCallbacks.Types       (ConnectionData, addr_CnD)
 import           SecondTransfer.Sessions.Internal       (--sessionExceptionHandler,
                                                          SessionsContext,
@@ -133,6 +134,7 @@ data SessionSettings = SessionSettings {
 
 makeLenses ''SessionSettings
 
+type ReportActivity = IO ()
 
 -- Whatever a worker thread is going to need comes here....
 -- this is to make refactoring easier, but not strictly needed.
@@ -158,6 +160,8 @@ data WorkerThreadEnvironment = WorkerThreadEnvironment {
     ,_childResetStreamButton_WTE  :: GlobalStreamId -> IO ()
 
     ,_streamStateTable_WTE        :: MVar StreamStateTable
+
+    ,_reportActivity_WTE          :: ReportActivity
     }
 
 makeLenses ''WorkerThreadEnvironment
@@ -387,6 +391,9 @@ data SessionData = SessionData {
 
     -- | Passed up to the worker
     , _sessionStore              :: MVar SessionStore
+
+    -- | Monitors activity for the session
+    , _activityMonitor           :: ActivityMonitor
     }
 
 
@@ -394,10 +401,21 @@ makeLenses ''SessionData
 
 
 instance ActivityMeteredSession SessionData where
-    sessionLastActivity s = return $ s ^. startTime
+    sessionLastActivity s = getLastActivity $ s ^. activityMonitor
 
 instance CleanlyPrunableSession SessionData where
-    cleanlyCloseSession s = runReaderT (quietlyCloseConnection NH2.NoError) s
+    cleanlyCloseSession s = (flip runReaderT) s $ do
+        -- Start by signaling to new streams that we are not
+        -- doing much more
+        signalSessionIsEnding
+        -- Now let's wait for idle time
+        activity_monitor <- view activityMonitor
+        timeouts <- view (sessionsContext . sessionsConfig . sessionCloseTimeouts)
+        _wait_interrupted_reason <- liftIO $ waitForIdle
+            activity_monitor
+            (timeouts ^. smallWait_SCT)
+            (timeouts ^. maxWait_SCT)
+        (quietlyCloseConnection NH2.NoError)
 
 
 http2ServerSession :: ConnectionData -> AwareWorker -> Int -> SessionsContext -> MVar Bool -> IO Session
@@ -485,6 +503,9 @@ http2Session
     -- What about stream cancellation?
     cancelled_streams_mvar    <- newMVar $ NS.empty :: IO (MVar NS.IntSet)
 
+    -- We need an activity monitor
+    activity_monitor          <- newActivityMonitor
+
     -- Empty initial latency report
     latency_reports           <- newMVar []
     emitted_pings             <- newMVar []
@@ -492,6 +513,10 @@ http2Session
 
     stream_state_table        <- H.newSized CONSTANT.maxAllowedStreams
     stream_state_table_mvar   <- newMVar stream_state_table
+
+    -- A function to report activity
+    let
+       tick = reportEvent activity_monitor
 
     let
         for_worker_thread = WorkerThreadEnvironment {
@@ -504,6 +529,7 @@ http2Session
           ,  _childResetStreamButton_WTE = error "Not initialized"
           ,  _streamBytesSink_WTE = error "Not initialized"
           ,  _streamStateTable_WTE = error "Not initialized"
+          ,  _reportActivity_WTE = tick
         }
 
         maybe_hashable_addr = case maybe_connection_data of
@@ -536,6 +562,7 @@ http2Session
         ,_emittedPings               = emitted_pings
         ,_streamStateTable           = stream_state_table_mvar
         ,_sessionStore               = session_store
+        ,_activityMonitor            = activity_monitor
         }
 
     let
@@ -660,6 +687,7 @@ sessionInputThread  = do
     -- receiving_headers_mvar    <- view receivingHeaders
     -- last_good_stream_mvar     <- view lastGoodStream
     -- current_session_id        <- view sessionIdAtSession
+    tick                      <- view (forWorkerThread . reportActivity_WTE)
 
     stream_state_table_mvar   <- view streamStateTable
 
@@ -800,12 +828,14 @@ sessionInputThread  = do
             -- TODO: Handle end of stream
             let stream_id = nh2_stream_id
 
-            -- The call below will block if there is not space in the mvar which is sending data to the
-            -- stream worker...
+            -- The call below ends up putting the data through a Chan
             was_ok <- streamWorkerSendData stream_id somebytes
 
             if was_ok
               then do
+                -- Let's report some activity
+                liftIO tick
+
                 -- After that data has been received and forwarded downstream, we can issue a windows update
                 --
                 --
@@ -1260,14 +1290,29 @@ serverProcessIncomingHeaders frame | Just (!stream_id, bytes, is_cont, maybe_nh2
                     maybe_good_headers_editor <- validateIncomingHeadersServer headers_editor
 
                     case maybe_good_headers_editor of
-                        Right good_headers ->
-                            doOpenStream
-                                for_worker_thread
-                                headers_arrived_time
-                                stream_id
-                                frame
-                                good_headers
-                                maybe_perceived_priority
+                        Right good_headers -> do
+
+                            session_is_ending_ioref <- view sessionIsEnding
+                            session_is_ending <- liftIO . DIO.readIORef $ session_is_ending_ioref
+                            if session_is_ending
+                              then
+                                 -- If we are closing the session, do not open
+                                 -- any new streams
+                                 sendOutPriorityTrain
+                                    (NH2.EncodeInfo
+                                        NH2.defaultFlags
+                                        stream_id
+                                        Nothing
+                                    )
+                                    (NH2.RSTStreamFrame NH2.RefusedStream)
+                              else
+                                doOpenStream
+                                  for_worker_thread
+                                  headers_arrived_time
+                                  stream_id
+                                  frame
+                                  good_headers
+                                  maybe_perceived_priority
 
                         Left _bad_headers -> do
                             let
@@ -1306,16 +1351,25 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
     session_input             <- view sessionInput
     the_session_store         <- view sessionStore
     coherent_worker           <- view awareWorker
+
+
+    session_is_ending_ioref <- view sessionIsEnding
+
+
     -- Add any extra headers, on demand
     --headers_extra_good      <- addExtraHeaders good_headers
     let
         headers_extra_good = good_headers
         header_list_after = headers_extra_good
         maybe_path =  header_list_after ^. path_Hi
+        tick = for_worker_thread ^. reportActivity_WTE
 
     -- Label the stream as soon as possible
-    liftIO . withMVar stream_state_table_mvar  $
-        \ stream_state_table -> relabelStream stream_state_table stream_id maybe_path
+    liftIO $ do
+        withMVar stream_state_table_mvar  $
+            \ stream_state_table -> relabelStream stream_state_table stream_id maybe_path
+        -- Report activity, after all we have just opened a new stream
+        tick
 
     -- If the headers end the request....
     post_data_source <- if not (frameEndsStream frame)
@@ -1368,7 +1422,6 @@ doOpenStream for_worker_thread headers_arrived_time stream_id frame good_headers
     --
     -- TODO: Log exceptions handled here.
 
-    session_is_ending_ioref <- view sessionIsEnding
     liftIO $ do
         -- The mvar below: avoid starting until the entry has
         -- been properly inserted in the table...
@@ -1644,20 +1697,27 @@ closeConnectionForClient error_code = do
         E.throw $ ClientSessionAbortedException use_reason
 
 
-cancellAllStreams :: ReaderT SessionData IO ()
-cancellAllStreams =
+signalSessionIsEnding :: ReaderT SessionData IO ()
+signalSessionIsEnding =
   do
     session_is_ending_ioref <- view sessionIsEnding
     -- stream2workerthread <- view stream2WorkerThread
 
     liftIO $ do
         DIO.writeIORef session_is_ending_ioref True
-        -- -- Close all active threads for this session
-        -- H.mapM_
-        --     ( \(_stream_id, thread_id) ->
-        --             throwTo thread_id StreamCancelledException
-        --     )
-        --     stream2workerthread
+
+
+cancellAllStreams :: ReaderT SessionData IO ()
+cancellAllStreams =
+  do
+    signalSessionIsEnding
+    -- The lines below just don't work well
+    -- -- Close all active threads for this session
+    -- H.mapM_
+    --     ( \(_stream_id, thread_id) ->
+    --             throwTo thread_id StreamCancelledException
+    --     )
+    --     stream2workerthread
 
 
 requestTermination :: GlobalStreamId -> NH2.ErrorCodeId -> ReaderT SessionData IO ()
@@ -1804,6 +1864,7 @@ workerThread req aware_worker =
         --
         -- TODO: Can we add debug information in a header here?
         stream_state_table_mvar <- view streamStateTable_WTE
+
         principal_stream <-
             liftIO $ {-# SCC wTer1  #-} E.catch
                 (
@@ -1857,6 +1918,7 @@ normallyHandleStream principal_stream = do
     reset_button <- view resetStreamButton_WTE
     this_environment <- ask
     stream_state_table_mvar <- view streamStateTable_WTE
+    tick <- view reportActivity_WTE
 
     -- Pieces of the header
     let
@@ -1945,7 +2007,12 @@ normallyHandleStream principal_stream = do
             _ <- runConduit $
                (data_and_conclusion)
                `fuseBothMaybe`
-               (sendDataOfStream check_if_cancelled data_output closer)
+               (sendDataOfStream
+                   check_if_cancelled
+                   data_output
+                   closer
+                   tick
+               )
             ReT.unprotect resource_key
 
         -- BIG TODO: Send the footers ... likely stream conclusion semantics
@@ -1988,6 +2055,7 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
     headers_output <- view headersOutput_WTE
     pushed_reset_button <- view childResetStreamButton_WTE
     stream_state_table_mvar <- view streamStateTable_WTE
+    tick                    <- view reportActivity_WTE
 
     -- TODO: Handle exceptions here: what happens if the coherent worker
     --       throws an exception signaling that the request is ill-formed
@@ -2026,7 +2094,11 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
             _ <- runConduit $
                  pushed_data_and_conclusion
                 `fuseBothMaybe`
-                sendDataOfStream check_if_cancelled pusher_data_output closer
+                sendDataOfStream
+                   check_if_cancelled
+                   pusher_data_output
+                   closer
+                   tick
             ReT.unprotect k
 
         -- Pushed streams are opened and closed by the server
@@ -2038,8 +2110,13 @@ pusherThread child_stream_id response_headers pushed_data_and_conclusion effects
 
 
 --                                                       v-- comp. monad.
-sendDataOfStream :: MonadIO m => (IO Bool) -> MVar TT.OutputDataFeed -> IO ()  -> Sink B.ByteString m ()
-sendDataOfStream  check_if_cancelled data_output closer =
+sendDataOfStream :: MonadIO m =>
+     (IO Bool) ->
+     MVar TT.OutputDataFeed ->
+     IO ()  ->
+     ReportActivity ->
+     Sink B.ByteString m ()
+sendDataOfStream  check_if_cancelled data_output closer tick =
   do
     consumer
   where
@@ -2060,6 +2137,7 @@ sendDataOfStream  check_if_cancelled data_output closer =
                     | lng <- B.length bytes, lng > 0   -> do
 
                         liftIO $ do
+                            tick
                             putMVar data_output bytes
                         consumer
 
@@ -2342,7 +2420,11 @@ clientWorkerThread stream_id  output_mvar input_data_stream = do
     _ <- liftIO . ReT.runResourceT . runConduit $
         input_data_stream
         `fuseBothMaybe`
-        sendDataOfStream check_if_cancelled output_mvar (error "NotProperlyImplementedFix")
+        sendDataOfStream
+           check_if_cancelled
+           output_mvar
+           (error "NotProperlyImplementedFix")
+           (error "NotProperlyImplementedFix")
     return ()
 
 

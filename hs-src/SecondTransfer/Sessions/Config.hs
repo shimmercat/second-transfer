@@ -23,11 +23,16 @@ module SecondTransfer.Sessions.Config(
                , trayMaxSize
                , collectLatencyData
                , maxConcurrentStreams
+               , sessionCloseTimeouts
+
+               , maxWait_SCT
+               , smallWait_SCT
 
                , SessionComponent                       (..)
                , SessionCoordinates                     (..)
                , SessionsCallbacks                      (..)
                , SessionsEnrichedHeaders                (..)
+               , SessionCloseTimeouts                   (..)
                , SessionsConfig                         (..)
                , SessionGenericHandle                   (..)
                , SituationWithClient                    (..)
@@ -47,6 +52,8 @@ module SecondTransfer.Sessions.Config(
 import           Control.Concurrent.MVar                  (MVar)
 import           Control.Exception                        (SomeException)
 import           Control.Lens                             (makeLenses)
+
+import           Data.Int                                 (Int64)
 
 import qualified Data.ByteString                          as B
 
@@ -92,10 +99,6 @@ data SessionComponent =
     deriving Show
 
 
--- Which protocol a session is using... no need for this right now
--- data UsedProtocol =
---      HTTP11_UsP
---     |HTTP2_UsP
 
 -- | Used by this session engine to report an error at some component, in a particular
 --   session. This callback is/was used mainly during component tests, not on
@@ -201,6 +204,28 @@ defaultSessionsEnrichedHeaders = SessionsEnrichedHeaders {
     }
 
 
+-- | Configuration data about acceptable timeouts
+data SessionCloseTimeouts = SessionCloseTimeouts {
+    -- | Absolute maximum time to wait, in nanoseconds
+    _maxWait_SCT              :: Int64
+    -- | Small time intervals, when we do our checks and so on.
+    --   Also nanoseconds
+   ,_smallWait_SCT            :: Int64
+    }
+    deriving (Show)
+
+makeLenses ''SessionCloseTimeouts
+
+defaultSessionCloseTimeouts :: SessionCloseTimeouts
+defaultSessionCloseTimeouts = SessionCloseTimeouts {
+   -- Let's wait a max time of five seconds before
+   -- forcibly closing the connection.
+   _maxWait_SCT       = 5*1000*1000*1000
+   -- Let's wait 200ms between checks to detect an
+   -- inactivity moment.
+  ,_smallWait_SCT     = 200   *1000*1000
+    }
+
 -- | Configuration information you can provide to the session maker.
 data SessionsConfig = SessionsConfig {
    -- | Session callbacks
@@ -221,9 +246,10 @@ data SessionsConfig = SessionsConfig {
  , _trayMaxSize               :: Int
    -- | Should we collect latency data?
  , _collectLatencyData        :: Bool
-
    -- | The highest stream count
  , _maxConcurrentStreams       :: Int
+    -- | The gentle close-connection timeouts
+ , _sessionCloseTimeouts       :: SessionCloseTimeouts
    }
 
 makeLenses ''SessionsConfig
@@ -258,4 +284,5 @@ defaultSessionsConfig = SessionsConfig {
   , _trayMaxSize = 16
   , _collectLatencyData = False
   , _maxConcurrentStreams = 100
+  , _sessionCloseTimeouts = defaultSessionCloseTimeouts
     }

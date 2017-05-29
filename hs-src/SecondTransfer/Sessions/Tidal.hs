@@ -214,6 +214,7 @@ dropConnections conns = foldM  (\ counter entry_mvar -> do
                 -- putStrLn "NOT BLANK"
                 case generic_handle of
                     Whole_SGH a -> do
+                        putStrLn "Cleanly CloseSession"
                         cleanlyCloseSession a
                         counter `seq` (return $ counter + 1)
 
@@ -223,6 +224,50 @@ dropConnections conns = foldM  (\ counter entry_mvar -> do
     )
     0
     conns
+
+
+-- | Takes extreme care (e.g, waits for it) when dropping the connections, so that the
+--   user doesn't notice. We only use this when closing
+--   ShimmerCat.
+gentlyDropConnections :: ConnectionList -> IO Int
+gentlyDropConnections conns = do
+    waitable_mvars <- mapM  (\ entry_mvar -> do
+        maybesomething <- tryTakeMVar  entry_mvar
+        case maybesomething of
+            Nothing -> do
+                return Nothing
+            Just (_sock_addr, generic_handle)  -> do
+                case generic_handle of
+                    Whole_SGH a -> do
+                        putStrLn "Cleanly smoothly closeSession"
+                        session_terminated <- newEmptyMVar
+                        forkFinally
+                          (do
+                              cleanlyCloseSession a
+                          )
+                          (\ _either_exc_a -> do
+                                 putMVar session_terminated ()
+                                 case _either_exc_a of
+                                     Left _ -> do
+                                         putStrLn "Session-closing microthread at Tidal//gentlyDropConnections had an exception"
+                                     Right _ -> return ()
+                          )
+                        return $ Just session_terminated
+
+                    Partial_SGH _ iocallbacks -> do
+                        (iocallbacks ^. closeAction_IOC)
+                        return Nothing
+
+      )
+      conns
+    let
+      connections_dropped = length waitable_mvars
+      waitable_mvars' = catMaybes waitable_mvars
+    -- Now just wait for the pending ones
+    mapM takeMVar waitable_mvars'
+    return connections_dropped
+
+
 
 
 -- | Drops the oldest connections without activity ....
@@ -253,7 +298,7 @@ pruneOldestConnections how_many_to_drop =
             -- This contains everybody that we can drop ...
             to_drop = DVec.take how_many_to_drop sorted_time_spec
         return . DVec.toList . DVec.map fst $ to_drop
-    _ <- liftIO $ dropConnections to_drop
+    _ <- liftIO $ gentlyDropConnections to_drop
     return ()
 
 
@@ -295,5 +340,5 @@ closeAllConnections :: TidalS -> IO ()
 closeAllConnections
     (TidalS { _context_TdS = _tidal_context, _connections_TdS = connections_mvar }) = do
     withMVar connections_mvar $ \ connections -> do
-        _ <- dropConnections connections
+        _ <- gentlyDropConnections connections
         return ()
