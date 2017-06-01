@@ -890,9 +890,13 @@ sessionInputThread  = do
 
               else do
                 -- For some reason there is no PostInput processing mechanism, therefore,
-                -- we were not expecting data at this point
-                reportSituation (PeerErrored_SWC "DataReceivedOnUnreadyStream")
-                closeConnectionBecauseIsInvalid NH2.ProtocolError
+                -- we were not expecting data at this point.
+                -- One of the only few cases where this could happen is if we are closing
+                -- the session
+                session_is_ending <- checkIfSessionIsEnding
+                unless  session_is_ending $ do
+                    reportSituation (PeerErrored_SWC "DataReceivedOnUnreadyStream")
+                    closeConnectionBecauseIsInvalid NH2.ProtocolError
                 return ()
 
         TT.MiddleFrame_SIC (NH2.Frame frame_header (NH2.PingFrame _)) | not (isStreamZero frame_header)  || frameLength frame_header /= 8  -> do
@@ -1706,6 +1710,15 @@ signalSessionIsEnding =
 
     liftIO $ do
         DIO.writeIORef session_is_ending_ioref True
+
+
+checkIfSessionIsEnding :: ReaderT SessionData IO Bool
+checkIfSessionIsEnding =
+  do
+     session_is_ending_ioref <- view sessionIsEnding
+     -- stream2workerthread <- view stream2WorkerThread
+     liftIO $ do
+        DIO.readIORef session_is_ending_ioref
 
 
 cancellAllStreams :: ReaderT SessionData IO ()
