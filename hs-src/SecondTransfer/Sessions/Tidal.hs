@@ -22,6 +22,7 @@ import           Control.Monad.IO.Class                 (liftIO)
 --                                                        deepseq )
 import           Control.Monad.Trans.Reader
 import           Control.Concurrent
+import qualified Control.Exception                      as E
 import           Control.Monad.ST
 import           Control.Monad                          (
                                                           foldM
@@ -253,7 +254,13 @@ gentlyDropConnections conns = do
                         return $ Just session_terminated
 
                     Partial_SGH _ iocallbacks -> do
-                        (iocallbacks ^. closeAction_IOC)
+                        E.catch
+                            (iocallbacks ^. closeAction_IOC)
+                            ((\ exc ->
+                                  putStrLn $
+                                     "Session-closing microthread at Tidal//gentlyDropConnections had an exception"
+                                     ++ (show exc)
+                            ):: E.SomeException -> IO () )
                         return Nothing
 
       )
