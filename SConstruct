@@ -7,13 +7,13 @@ rpath=[
     ]
 
 env_release = Environment(
-    CXX = 'g++-6.1',
+    CXX = 'g++',
     parse_flags = "-std=c++11 -D_REENTRANT -fstack-protector -O2 -Wl,--no-undefined",
     RPATH=rpath,
     )
 
 env_debug = Environment(
-    CXX = 'g++-6.1',
+    CXX = 'g++',
     parse_flags = "-std=c++11 -D_REENTRANT -fstack-protector -O0 -g3",
     RPATH=rpath,
     )

@@ -211,7 +211,7 @@ library
       ld-options: -g3
       ghc-options: -g
   if os(linux)
-      ghc-options: -pgmPcpphs  -optP--cpp "-pgmc g++-6.1" 
+      ghc-options: -pgmPcpphs  -optP--cpp "-pgmc g++" 
   if os(darwin)
       ghc-options: -pgmPcpphs -optP--cpp
 
