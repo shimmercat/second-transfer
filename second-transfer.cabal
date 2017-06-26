@@ -198,6 +198,7 @@ library
                  vector >= 0.10 && < 0.13,
                  vector-algorithms >= 0.7,
                  http-headers-hq >= 0.1,
+                 monad-control >= 1.0,
                  mmorph >= 1.0,
                  random >= 1.0
 

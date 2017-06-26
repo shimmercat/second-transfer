@@ -95,6 +95,8 @@ data SessionComponent =
     |SessionDataOutputThread_HTTP2SessionComponent
     |SessionClientPollThread_HTTP2SessionComponent
     |Framer_HTTP2SessionComponent
+    |FrontendHTTP1SyntaxError_SWC -- ^ Something when talking to the browser
+    |BackendHTTP1SyntaxError_SWC  -- ^ Somethint when talking to the backend application
     |Session_HTTP11
     deriving Show
 

@@ -10,6 +10,7 @@ import           Control.Exception                       (
                                                           catch,
                                                           try,
                                                           catches,
+                                                          toException,
                                                           Handler      (..),
                                                           AsyncException
                                                          )
@@ -43,7 +44,8 @@ import           SecondTransfer.Http1.Parse
 import           SecondTransfer.Exception                (
                                                          IOProblem,
                                                          NoMoreDataException,
-                                                         -- HTTP11SyntaxException  (..),
+                                                         HTTP11SyntaxException  (..),
+                                                         ForwardedGatewayException,
                                                          forkIOExc
                                                          )
 import           SecondTransfer.Sessions.Config
@@ -93,7 +95,13 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             the_session_store <- newMVar Dm.empty
 
-            go started_time new_session_tag (Just "") 1 the_session_store
+            catches
+                (go started_time new_session_tag (Just "") 1 the_session_store)
+                [
+                  Handler (http1_error_handler new_session_tag),
+                  Handler (http1gw_error_handler new_session_tag)
+                ]
+
         return ()
   where
     maybe_hashable_addr = connection_info ^. addr_CnD
@@ -103,6 +111,30 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     close_action = attendant_callbacks ^. closeAction_IOC
     best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
     close_action_called_mvar = attendant_callbacks ^. closeActionCalled_IOC
+
+    http1_error_handler :: Int ->  HTTP11SyntaxException -> IO ()
+    http1_error_handler session_id exc =
+      let
+        maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
+      in case maybe_error_callback of
+          Nothing ->
+              putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
+          Just err_callback ->
+              err_callback (FrontendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
+
+
+    -- Used when we get invalid HTTP/1.1 from the gateway.
+    http1gw_error_handler :: Int ->  ForwardedGatewayException -> IO ()
+    http1gw_error_handler session_id exc =
+      let
+        maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
+      in case maybe_error_callback of
+          Nothing ->
+              putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
+          Just err_callback ->
+              err_callback (BackendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
+
+
 
     new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
     new_session address generic_handle _weakable_key = case maybe_callback of

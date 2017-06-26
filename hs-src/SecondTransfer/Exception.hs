@@ -18,6 +18,7 @@ module SecondTransfer.Exception (
     , convertHTTP500PrecursorExceptionToException
     , getHTTP500PrecursorExceptionFromException
     , ContentLengthMissingException               (..)
+    , ForwardedGatewayException                   (..)
 
       -- * Exceptions related to the IO layer
     , IOProblem                                   (..)
@@ -338,6 +339,23 @@ instance Exception BadAddressException where
     toException = toException . IOProblem
     fromException x = do
         IOProblem a <- fromException x
+        cast a
+
+
+-- | Happens when we have to forward an exception from the gateway to the
+--   top-level session handler, and it is bad enough that we can't return
+--   a coherent answer 500 to the client (e.g., with chunked encoding
+--   syntax errors)
+data ForwardedGatewayException = ForwardedGatewayException SomeException
+   deriving (Show, Typeable)
+
+
+-- | By definition, any problems with the gateway can be considered an I/O
+--   problem
+instance Exception ForwardedGatewayException where
+    toException = toException . IOProblem
+    fromException x = do
+        IOProblem  a <- fromException x
         cast a
 
 

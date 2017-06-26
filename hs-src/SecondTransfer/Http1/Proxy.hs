@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies, Rank2Types #-}
+{-# LANGUAGE OverloadedStrings, TemplateHaskell, FunctionalDependencies, FlexibleContexts, Rank2Types, ScopedTypeVariables #-}
 module SecondTransfer.Http1.Proxy (
                  ioProxyToConnection
                , processHttp11Output
@@ -12,6 +12,8 @@ import qualified Control.Exception                                         as E
 import           Control.Monad                                             (when)
 --import           Control.Monad.Morph                                       (hoist, lift)
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
+import           Control.Monad.Trans.Control                               (MonadBaseControl)
+import           Control.Monad.Catch                                       (throwM, MonadThrow)
 --import qualified Control.Monad.Trans.Resource                              as ReT
 
 import qualified Data.ByteString                                           as B
@@ -29,6 +31,7 @@ import           Data.Conduit.List                                         as CL
 import           SimpleHttpHeadersHq
 
 import qualified SecondTransfer.Utils.HTTPHeaders                          as He
+
 import           SecondTransfer.Http1.Types
 import           SecondTransfer.Http1.Parse                                (
                                                                               headerListToHTTP1RequestText
@@ -47,6 +50,7 @@ import           SecondTransfer.IOCallbacks.Coupling                       (send
 import           SecondTransfer.Exception                                  (
                                                                               HTTP11SyntaxException(..)
                                                                             , NoMoreDataException
+                                                                            , ForwardedGatewayException(..)
                                                                             , IOProblem (..)
                                                                             , GatewayAbortedException (..)
                                                                             , keyedReportExceptions
@@ -67,7 +71,7 @@ import           SecondTransfer.Exception                                  (
 --   (e.g. removing the Connection header) are left to the upper layers. And this doesn't include
 --   managing any kind of pipelining in the http/1.1 connection, however, close is not done, so
 --   keep-alive (not pipelineing) should be OK.
-ioProxyToConnection :: forall m . MonadIO m => IOCallbacks -> HttpRequest m -> m (HttpResponse m)
+ioProxyToConnection :: forall m . (MonadIO m, MonadBaseControl IO m, MonadThrow m) => IOCallbacks -> HttpRequest m -> m (HttpResponse m)
 ioProxyToConnection ioc request =
   do
     let
@@ -114,7 +118,7 @@ ioProxyToConnection ioc request =
 --   Use the fact that `m` can be any monad to control for resource deallocation
 --   upon exceptions.
 processHttp11Output ::
-  (MonadIO m) =>
+  (MonadIO m, MonadBaseControl IO m, MonadThrow m) =>
   IO LB.ByteString ->
   B.ByteString ->
   m (HttpResponse m)
@@ -186,12 +190,18 @@ processHttp11Output bepa method =
                 Right datum -> return datum
             CL.sourceList . LB.toChunks $ s
 
-        unwrapping_chunked :: MonadIO m => B.ByteString -> Source m B.ByteString
+        unwrapping_chunked :: (MonadThrow m, MonadIO m, MonadBaseControl IO m) => B.ByteString -> Source m B.ByteString
         unwrapping_chunked leftovers =
             (do
                 yield leftovers
                 pump_until_exception ""
-            ) =$= unwrapChunks
+            ) =$=
+            (catchC
+                unwrapChunks
+                ((\ e ->  do
+                      throwM . ForwardedGatewayException . E.toException $ e
+                 ) :: (MonadThrow m, MonadIO m, MonadBaseControl IO m) => HTTP11SyntaxException -> ConduitM B.ByteString B.ByteString m () )
+            )
 
         pump_until_exception fragment = do
 
@@ -256,7 +266,7 @@ processHttp11Output bepa method =
 
         HeadersAndBody_H1PC _headers SemanticAbort_BSC  _leftovers -> do
             --  HEADs must be handled differently!
-            liftIO . E.throwIO $ HTTP11SyntaxException "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
+            liftIO . reportHTTP1Error $ "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
 
 
         HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC leftovers -> do
@@ -280,7 +290,7 @@ processHttp11Output bepa method =
 
         -- TODO: See what happens when this exception passes from place to place.
         RequestIsMalformed_H1PC msg -> do
-            liftIO . E.throwIO $ HTTP11SyntaxException msg
+            liftIO . reportHTTP1Error $ msg
 
 
 -- | Takes something that produces ByteStrings and reads from there an HTTP/1.1
@@ -290,7 +300,7 @@ processHttp11Output bepa method =
 --   Use the fact that `m` can be any monad to control for resource deallocation
 --   upon exceptions.
 processHttp11OutputFromPipe ::
-  (MonadIO m) =>
+  (MonadIO m, MonadThrow m) =>
   B.ByteString ->
   Sink B.ByteString m (HqHeaders, ResponseBodyHandling)
 processHttp11OutputFromPipe  method =
@@ -350,7 +360,7 @@ processHttp11OutputFromPipe  method =
 
         HeadersAndBody_H1PC _headers SemanticAbort_BSC  _leftovers -> do
             --  TODO: Check how this works in practice
-            liftIO . E.throwIO $ HTTP11SyntaxException "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
+            liftIO . reportHTTP1Error $ "SemanticAbort:SomethingAboutHTTP/1.1WasNotRight"
 
         HeadersAndBody_H1PC headers ConnectionClosedByPeer_BSC _leftovers -> do
             -- The parser will assume that most responses have a body in the absence of
@@ -367,4 +377,8 @@ processHttp11OutputFromPipe  method =
 
         -- TODO: See what happens when this exception passes from place to place.
         RequestIsMalformed_H1PC msg -> do
-            liftIO . E.throwIO $ HTTP11SyntaxException msg
+            liftIO . reportHTTP1Error $ msg
+
+
+reportHTTP1Error ::  String -> IO a
+reportHTTP1Error = E.throwIO . ForwardedGatewayException . E.toException . HTTP11SyntaxException
