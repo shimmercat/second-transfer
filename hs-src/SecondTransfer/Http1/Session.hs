@@ -97,17 +97,12 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             the_session_store <- newMVar Dm.empty
 
-            putStrLn "BEFORE-START"
-
             catches
                 (go started_time new_session_tag (Just "") 1 the_session_store)
                 [
-                  Handler ((\ exc -> putStrLn $ "IT GOES DOWN IN FLAMES " ++ show  exc ):: SomeException -> IO ())
-                  -- Handler (http1_error_handler new_session_tag),
-                  -- Handler (http1gw_error_handler new_session_tag)
+                  Handler (http1_error_handler new_session_tag),
+                  Handler (http1gw_error_handler new_session_tag)
                 ]
-
-            putStrLn "SUCCESS"
 
         return ()
   where
@@ -122,7 +117,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     http1_error_handler :: Monoid a => Int ->  HTTP11SyntaxException -> IO a
     http1_error_handler session_id exc =
       do
-        putStrLn "H1 CALLED"
         let
           maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
         case maybe_error_callback of
@@ -138,7 +132,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     http1gw_error_handler :: Monoid a => Int ->  ForwardedGatewayException -> IO a
     http1gw_error_handler session_id exc =
       do
-        putStrLn "H2  CALLED"
         let
           maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
         case maybe_error_callback of
@@ -468,7 +461,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                               headers_text_as_lbs
                 liftIO $ push_action headers_text_as_lbs'
                 -- Will run the conduit. If it fails, the connection will be closed.
-                (_maybe_footers, _did_ok) <- traceIOExc $
+                (_maybe_footers, _did_ok) <-
                     runConduit $
                         data_and_conclusion
                         `fuseBothMaybe`

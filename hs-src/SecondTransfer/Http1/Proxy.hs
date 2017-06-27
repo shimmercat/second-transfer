@@ -203,7 +203,13 @@ processHttp11Output bepa method =
                 unwrapChunks
                 ((\ e ->  do
                       yield . pack $ "ShimmerCat: Parse chunked-encoding from upstream failed. Concrete error: "  ++ show e
+                      -- TO-DO: The exception commented below gets stuck somewhere and
+                      --        we fail on propagating it to the Session. When you have
+                      --        plenty of time, find where it gets stuck. In the mean
+                      --        time, we will make exceptions like this go onto the
+                      --        response stream... UGLG!!
                       lift . throwM . ForwardedGatewayException . E.toException $ e
+                      -- lift . throwM .  E.toException $ e
                  ) :: (MonadThrow m, MonadIO m, MonadBaseControl IO m) => HTTP11SyntaxException -> ConduitM B.ByteString B.ByteString m () )
             )
 

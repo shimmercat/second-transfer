@@ -1,5 +1,5 @@
 {-# LANGUAGE
-    DeriveDataTypeable, FlexibleContexts,
+    DeriveDataTypeable, FlexibleContexts, GADTs,
     ExistentialQuantification, ScopedTypeVariables #-}
 {-|
 Module      : SecondTransfer.Exception
@@ -349,8 +349,18 @@ instance Exception BadAddressException where
 --   top-level session handler, and it is bad enough that we can't return
 --   a coherent answer 500 to the client (e.g., with chunked encoding
 --   syntax errors)
-data ForwardedGatewayException = ForwardedGatewayException SomeException
-   deriving (Show, Typeable)
+data ForwardedGatewayException where
+    ForwardedGatewayException :: forall e . Exception e => e -> ForwardedGatewayException
+  deriving Typeable
+
+instance Show ForwardedGatewayException where
+    show (ForwardedGatewayException e ) = "ForwardedGatewayException of " ++ show e
+
+-- instance Exception DerivedDataException where
+--     toException = toException . IOProblem
+--     fromException x = do
+--         IOProblem a <- fromException x
+--         cast a
 
 
 -- | By definition, any problems with the gateway can be considered an I/O
@@ -358,7 +368,7 @@ data ForwardedGatewayException = ForwardedGatewayException SomeException
 --   and we are interested in reporting some parsing errors in a more
 --   specific way.
 instance Exception ForwardedGatewayException where
-    toException = toException
+    toException e = SomeException e
     fromException x = do
         SomeException  a <- fromException x
         cast a
