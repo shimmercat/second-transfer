@@ -13,13 +13,15 @@ import           Control.Monad                                             (when
 --import           Control.Monad.Morph                                       (hoist, lift)
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 import           Control.Monad.Trans.Control                               (MonadBaseControl)
+import           Control.Monad.Trans.Class                                 (lift)
+
 import           Control.Monad.Catch                                       (throwM, MonadThrow)
 --import qualified Control.Monad.Trans.Resource                              as ReT
 
 import qualified Data.ByteString                                           as B
 --import           Data.List                                                 (foldl')
 import qualified Data.ByteString.Builder                                   as Bu
---import           Data.ByteString.Char8                                     (pack, unpack)
+import           Data.ByteString.Char8                                     (pack, unpack)
 --import qualified Data.ByteString.Char8                                     as Ch8
 import qualified Data.ByteString.Lazy                                      as LB
 --import           Data.Char                                                 (toLower)
@@ -54,6 +56,7 @@ import           SecondTransfer.Exception                                  (
                                                                             , IOProblem (..)
                                                                             , GatewayAbortedException (..)
                                                                             , keyedReportExceptions
+                                                                            , traceIOExc
                                                                             -- , ignoreException
                                                                             -- , ioProblem
                                                                            )
@@ -199,7 +202,10 @@ processHttp11Output bepa method =
             (catchC
                 unwrapChunks
                 ((\ e ->  do
-                      throwM . ForwardedGatewayException . E.toException $ e
+                      liftIO . putStrLn $ "FFFFFFFFFFFFFFFFFFF"
+                      yield . pack $ "ShimmerCat: Parse chunked-encoding from upstream failed. Concrete error: "  ++ show e
+                      lift . throwM . ForwardedGatewayException . E.toException $ e
+                      -- liftIO . E.throwIO . ForwardedGatewayException . E.toException $ e
                  ) :: (MonadThrow m, MonadIO m, MonadBaseControl IO m) => HTTP11SyntaxException -> ConduitM B.ByteString B.ByteString m () )
             )
 

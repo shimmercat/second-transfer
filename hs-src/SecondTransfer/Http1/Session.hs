@@ -12,6 +12,7 @@ import           Control.Exception                       (
                                                           catches,
                                                           toException,
                                                           Handler      (..),
+                                                          SomeException,
                                                           AsyncException
                                                          )
 import           Control.Concurrent                      (newMVar, MVar)
@@ -46,7 +47,8 @@ import           SecondTransfer.Exception                (
                                                          NoMoreDataException,
                                                          HTTP11SyntaxException  (..),
                                                          ForwardedGatewayException,
-                                                         forkIOExc
+                                                         forkIOExc,
+                                                         traceIOExc
                                                          )
 import           SecondTransfer.Sessions.Config
 
@@ -95,12 +97,17 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             the_session_store <- newMVar Dm.empty
 
+            putStrLn "BEFORE-START"
+
             catches
                 (go started_time new_session_tag (Just "") 1 the_session_store)
                 [
-                  Handler (http1_error_handler new_session_tag),
-                  Handler (http1gw_error_handler new_session_tag)
+                  Handler ((\ exc -> putStrLn $ "IT GOES DOWN IN FLAMES " ++ show  exc ):: SomeException -> IO ())
+                  -- Handler (http1_error_handler new_session_tag),
+                  -- Handler (http1gw_error_handler new_session_tag)
                 ]
+
+            putStrLn "SUCCESS"
 
         return ()
   where
@@ -112,28 +119,35 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
     close_action_called_mvar = attendant_callbacks ^. closeActionCalled_IOC
 
-    http1_error_handler :: Int ->  HTTP11SyntaxException -> IO ()
+    http1_error_handler :: Monoid a => Int ->  HTTP11SyntaxException -> IO a
     http1_error_handler session_id exc =
-      let
-        maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
-      in case maybe_error_callback of
-          Nothing ->
+      do
+        putStrLn "H1 CALLED"
+        let
+          maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
+        case maybe_error_callback of
+          Nothing -> do
               putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
-          Just err_callback ->
+              return mempty
+          Just err_callback -> do
               err_callback (FrontendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
+              return mempty
 
 
     -- Used when we get invalid HTTP/1.1 from the gateway.
-    http1gw_error_handler :: Int ->  ForwardedGatewayException -> IO ()
+    http1gw_error_handler :: Monoid a => Int ->  ForwardedGatewayException -> IO a
     http1gw_error_handler session_id exc =
-      let
-        maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
-      in case maybe_error_callback of
-          Nothing ->
+      do
+        putStrLn "H2  CALLED"
+        let
+          maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
+        case maybe_error_callback of
+          Nothing -> do
               putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
-          Just err_callback ->
+              return mempty
+          Just err_callback -> do
               err_callback (BackendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
-
+              return mempty
 
 
     new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
@@ -185,7 +199,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 return Nothing
 
             MustContinue_H1PC new_parser -> do
-                --putStrLn "MustContinue_H1PC"
+                putStrLn "MustContinue_H1PC"
                 catches
                     (do
                         -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
@@ -197,6 +211,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         Handler ( (\ _e -> do
                              -- This is a pretty harmless condition that happens
                              -- often when the remote peer closes the connection
+                             putStrLn "CC-----------------"
                              close_action
                              return Nothing
                          ) :: IOProblem -> IO (Maybe LB.ByteString) ),
@@ -204,6 +219,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         Handler ( (\ _e -> do
                              -- This happens when we kill the processing thread
                              -- because E.G. the transfer is going too slowly
+                             putStrLn "DD-----------------"
                              close_action
                              return Nothing
                          ) :: AsyncException -> IO (Maybe LB.ByteString) )
@@ -403,6 +419,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
       | otherwise =
             return True
 
+    -- Sends the answer to the browser.
     answer_by_principal_stream :: PrincipalStream ->  AwareWorkerStack ()
     answer_by_principal_stream principal_stream  = do
         let
@@ -445,6 +462,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             handle_as_chunked set_transfer_encoding =
               do
+                liftIO $ putStrLn "handle_as_chunked"
                 -- TODO: Take care of footers
                 let
                     headers_text_as_lbs' =
@@ -457,12 +475,14 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                            else
                               headers_text_as_lbs
                 liftIO $ push_action headers_text_as_lbs'
+                liftIO $ putStrLn "handle_as_chunked-2"
                 -- Will run the conduit. If it fails, the connection will be closed.
-                (_maybe_footers, _did_ok) <-
+                (_maybe_footers, _did_ok) <- traceIOExc $
                     runConduit $
                         data_and_conclusion
                         `fuseBothMaybe`
                         (CL.map wrapChunk =$= piecewiseconsume)
+                liftIO $ putStrLn "Failed EXC bubling"
                 -- Don't forget the zero-length terminating chunk...
                 _ <- maybepushtext $ wrapChunk ""
                 -- If I got to this point, I can keep the connection alive for a future request, unless...

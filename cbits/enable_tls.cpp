@@ -75,6 +75,14 @@ enum chosen_protocol_t{
     HTTP2_CHP = 2
 };
 
+enum error_kind_t {
+    BUFFER_OVERRIDE_EK = -1,
+    INAPPROPIATE_FALLBACK_EK = -2,
+    BAD_ALPN_EK = -3,
+    THERE_ARE_ALERTS_EK = -4,
+    GENERIC_EXCEPTION_EK = -5
+};
+
 namespace B=Botan::TLS;
 namespace C=Botan;
 
@@ -566,6 +574,17 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
 {
     //TRACE("Entering iocba_receive_data\n");
     Botan::TLS::Channel* channel = buffers -> channel;
+
+    if ( buffers -> alert_produced )
+    {
+        if ( buffers -> alert_is_fatal || buffers -> peer_closed_transport)
+        {
+            // If I don't get this message we are in trouble...
+            // TRACE("Alert assimilated as part of decryption call\n");
+            return THERE_ARE_ALERTS_EK;
+        }
+    }
+
     //
     buffers -> enc_cursor = out_enc_to_send;
     buffers -> enc_end    = out_enc_to_send + *enc_to_send_length;
@@ -581,25 +600,25 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
     catch (buffer_override_exception_t const& e)
     {
         TRACE("Buffer override at iocba_receive_data!! (received %d bytes for cleartext and %d bytes for encoded)\n", *cleartext_received_length, *enc_to_send_length);
-        return -1;
+        return BUFFER_OVERRIDE_EK;
     }
     catch (Botan::TLS::TLS_Exception const& e)
     {
         if (e.type() == Botan::TLS::Alert::INAPPROPRIATE_FALLBACK)
         {
             TRACE("BotanTLS engine instance likely crashed before: %s \n", e.what());
-            return -1;
+            return INAPPROPIATE_FALLBACK_EK;
         } else
         {
             TRACE("BotanTLS engine instance crashed (normal if ALPN didn't go well): %s \n", e.what());
-            return -1;
+            return BAD_ALPN_EK;
         }
     }
     catch (std::exception const& e)
     {
         // TODO: control messages
         TRACE("BotanTLS engine crashed with generic exception: %s \n", e.what());
-        return -1;
+        return GENERIC_EXCEPTION_EK;
     }
 
     *enc_to_send_length = (uint32_t) (
@@ -619,7 +638,7 @@ extern "C" DLL_PUBLIC int32_t iocba_receive_data(
         {
             // If I don't get this message we are in trouble...
             // TRACE("Alert assimilated as part of decryption call\n");
-            return -1;
+            return THERE_ARE_ALERTS_EK;
         }
     }
 

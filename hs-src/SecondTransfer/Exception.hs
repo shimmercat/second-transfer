@@ -35,13 +35,14 @@ module SecondTransfer.Exception (
       -- * Internal exceptions
     , HTTP2ProtocolException                      (..)
 
-    , TLSBufferIsTooSmall                         (..)
+    , TLSLibraryIssue                             (..)
 
       -- * Utility functions
     , ignoreException
     , reportExceptions
     , keyedReportExceptions
     , forkIOExc
+    , traceIOExc
     , mKeyedReportExceptions
     , resourceForkIOExc
 
@@ -63,7 +64,7 @@ import qualified Control.Monad.Trans.Resource     as ReT
 import qualified Control.Monad.Catch              as CMC
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 
-import           GHC.Stack                        (currentCallStack)
+import           GHC.Stack
 
 -- | Abstract exception. All HTTP/2 exceptions derive from here
 data HTTP2SessionException = forall e . Exception e => HTTP2SessionException e
@@ -281,12 +282,14 @@ instance Exception GenericIOProblem where
         cast a
 
 
--- | When the receive buffer size is not big enough for TLS
-data TLSBufferIsTooSmall = TLSBufferIsTooSmall
+-- | Used for TLS layer issues; this exception is somewhat generic
+--   in case we need to accomodate a different TLS library in the future.
+data TLSLibraryIssue =
+    TLSLibraryIssue String
     deriving (Show, Typeable)
 
 
-instance Exception TLSBufferIsTooSmall where
+instance Exception TLSLibraryIssue where
     toException = toException . IOProblem
     fromException x = do
         IOProblem a <- fromException x
@@ -351,11 +354,13 @@ data ForwardedGatewayException = ForwardedGatewayException SomeException
 
 
 -- | By definition, any problems with the gateway can be considered an I/O
---   problem
+--   problem, however, we have more generic mechanisms to trap I/O issues
+--   and we are interested in reporting some parsing errors in a more
+--   specific way.
 instance Exception ForwardedGatewayException where
-    toException = toException . IOProblem
+    toException = toException
     fromException x = do
-        IOProblem  a <- fromException x
+        SomeException  a <- fromException x
         cast a
 
 
@@ -463,6 +468,21 @@ mKeyedReportExceptions key comp =
 ---  in forked threads
 forkIOExc :: String -> IO () -> IO ThreadId
 forkIOExc msg comp = forkIO $ keyedReportExceptions msg  comp
+
+
+-- | Used to trace bubbling exceptions through an IO interface, without
+--   stopping those exceptions
+traceIOExc ::forall m a .
+  (
+    CMC.MonadCatch m,
+    MonadIO m,
+    HasCallStack
+  )  => m a -> m a
+traceIOExc op = do
+    let
+        key = prettyCallStack callStack
+    mKeyedReportExceptions key op
+
 
 -- resourceForkIO :: MonadBaseControl IO m => ResourceT m () -> ResourceT m ThreadId
 resourceForkIOExc  ::

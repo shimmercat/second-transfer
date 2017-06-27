@@ -37,7 +37,7 @@ import           SecondTransfer.MainLoop.Protocol
 import           SecondTransfer.Exception                                  (
                                                                              IOProblem(..)
                                                                            , NoMoreDataException(..)
-                                                                           , TLSBufferIsTooSmall(..)
+                                                                           , TLSLibraryIssue(..)
                                                                            , TLSEncodingIssue (..)
                                                                            --, keyedReportExceptions
                                                                            , forkIOExc
@@ -350,6 +350,56 @@ unencryptChannelData botan_ctx tls_data  = do
     return $ BotanSession result
 
 
+
+explainTLSException :: BotanTLSChannelPtr -> Int32 -> IO TLSLibraryIssue
+explainTLSException _ (-1) = return . TLSLibraryIssue $ "BufferOverride"
+explainTLSException _ (-2) = return . TLSLibraryIssue $  "InappropiateFallback"
+explainTLSException _ (-3) = return . TLSLibraryIssue $  "BadALPN"
+explainTLSException tls_channel_ptr (-4) =
+  do
+    -- Let' go deeper
+    which_alert <- iocba_alert_produced tls_channel_ptr
+    let
+        alert_str = case which_alert of
+            0 -> "BOTAN_ALERT__CLOSE_NOTIFY"
+            10 -> "BOTAN_ALERT__UNEXPECTED_MESSAGE"
+            20 -> "BOTAN_ALERT__BAD_RECORD_MAC"
+            21 -> "BOTAN_ALERT__DECRYPTION_FAILED"
+            22 -> "BOTAN_ALERT__RECORD_OVERFLOW"
+            30 -> "BOTAN_ALERT__DECOMPRESSION_FAILURE"
+            40 -> "BOTAN_ALERT__HANDSHAKE_FAILURE"
+            41 -> "BOTAN_ALERT__NO_CERTIFICATE"
+            42 -> "BOTAN_ALERT__BAD_CERTIFICATE"
+            43 -> "BOTAN_ALERT__UNSUPPORTED_CERTIFICATE"
+            44 -> "BOTAN_ALERT__CERTIFICATE_REVOKED"
+            45 -> "BOTAN_ALERT__CERTIFICATE_EXPIRED"
+            46 -> "BOTAN_ALERT__CERTIFICATE_UNKNOWN"
+            47 -> "BOTAN_ALERT__ILLEGAL_PARAMETER"
+            48 -> "BOTAN_ALERT__UNKNOWN_CA"
+            49 -> "BOTAN_ALERT__ACCESS_DENIED"
+            50 -> "BOTAN_ALERT__DECODE_ERROR"
+            51 -> "BOTAN_ALERT__DECRYPT_ERROR"
+            60 -> "BOTAN_ALERT__EXPORT_RESTRICTION"
+            70 -> "BOTAN_ALERT__PROTOCOL_VERSION"
+            71 -> "BOTAN_ALERT__INSUFFICIENT_SECURITY"
+            80 -> "BOTAN_ALERT__INTERNAL_ERROR"
+            86 -> "BOTAN_ALERT__INAPPROPRIATE_FALLBACK"
+            90 -> "BOTAN_ALERT__USER_CANCELED"
+            100 -> "BOTAN_ALERT__NO_RENEGOTIATION"
+            110 -> "BOTAN_ALERT__UNSUPPORTED_EXTENSION"
+            111 -> "BOTAN_ALERT__CERTIFICATE_UNOBTAINABLE"
+            112 -> "BOTAN_ALERT__UNRECOGNIZED_NAME"
+            113 -> "BOTAN_ALERT__BAD_CERTIFICATE_STATUS_RESPONSE"
+            114 -> "BOTAN_ALERT__BAD_CERTIFICATE_HASH_VALUE"
+            115 -> "BOTAN_ALERT__UNKNOWN_PSK_IDENTITY"
+            120 -> "BOTAN_ALERT__NO_APPLICATION_PROTOCOL"
+            n -> "BOTAN_ALERT__#" ++ show n
+    return $  TLSLibraryIssue alert_str
+
+
+explainTLSException _ (-5) =  return . TLSLibraryIssue $ "GenericException"
+
+
 encryptedToBotan :: BotanPad -> IO ()
 encryptedToBotan botan_pad   =
     pump 0
@@ -427,13 +477,14 @@ encryptedToBotan botan_pad   =
             if engine_result < 0
               then do
                 -- putStrLn "BadEngineResult"
-                _ <- tryPutMVar problem_mvar (IOProblem TLSBufferIsTooSmall)
+                new_exc <- explainTLSException tls_channel_ptr engine_result
+                _ <- tryPutMVar problem_mvar (IOProblem new_exc)
                 -- Just awake any variables
                 _ <- tryPutMVar data_came_mvar ()
                 _ <- tryPutMVar handshake_completed_mvar ()
                 _ <- tryPutMVar
                     selected_protocol_mvar
-                    (E.throw $ TLSEncodingIssue)
+                    (E.throw $ new_exc)
                 return Nothing
               else do
                 enc_to_send_length <- peek p_enc_to_send_length
