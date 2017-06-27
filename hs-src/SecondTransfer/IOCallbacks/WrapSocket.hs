@@ -75,20 +75,30 @@ socketIOCallbacks socket = do
         -- open sockets.
 
         -- We, of course, want exceptions to bubble from here.
-        push_action lazy_bs = -- keyedReportExceptions "pushAtSocket" $
-            E.catch
-                (NSB.sendMany socket . LB.toChunks $ lazy_bs)
-                uhandler
+        push_action lazy_bs = do
+            already_closed <- readMVar socket_already_closed
+            if already_closed
+              then
+                E.throwIO NoMoreDataException
+              else
+                E.catch
+                    (NSB.sendMany socket . LB.toChunks $ lazy_bs)
+                    uhandler
 
         best_effort_pull_action _ = do
-            datum <- E.catch (NSB.recv socket 4096) uhandler
-            if B.length datum == 0
-                then do
-                   -- Pre-emptively close the socket, don't wait for anything else
-                   close_action
-                   E.throwIO NoMoreDataException
-                else do
-                   return . LB.fromStrict $ datum
+            already_closed <- readMVar socket_already_closed
+            if already_closed
+              then
+                E.throwIO NoMoreDataException
+              else do
+                datum <- E.catch (NSB.recv socket 4096) uhandler
+                if B.length datum == 0
+                    then do
+                       -- Pre-emptively close the socket, don't wait for anything else
+                       close_action
+                       E.throwIO NoMoreDataException
+                    else do
+                       return . LB.fromStrict $ datum
 
         -- Exceptions on close are possible
         close_action = modifyMVar_ socket_already_closed $ \ already_closed -> do

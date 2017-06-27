@@ -34,6 +34,8 @@ import           Control.Lens
 import qualified Control.Lens                           as L
 import           Control.Applicative
 --import           Control.DeepSeq                        (deepseq)
+import           Control.Monad.Catch                    (throwM, MonadThrow)
+
 
 import           GHC.Stack
 
@@ -570,7 +572,7 @@ wrapChunk bs = let
     in Bu.toLazyByteString $ a0 `mappend` "\r\n" `mappend` a1 `mappend` "\r\n"
 
 
-unwrapChunks :: Monad m => Conduit B.ByteString m B.ByteString
+unwrapChunks :: (MonadThrow m , Monad m) => Conduit B.ByteString m B.ByteString
 unwrapChunks  =
     do
       -- Leftovers are fed and they will be read here.
@@ -584,7 +586,7 @@ unwrapChunks  =
   where
     onresult parse_result =
         case parse_result of
-            Ap.Fail  _ _  _ -> throw $ HTTP11SyntaxException "ChunkedParsingFailed"
+            Ap.Fail  a b c -> throwM . HTTP11SyntaxException  $  "ChunkedParsingFailed: " ++ "Not consumed: " ++ unpack a ++ " contexts: " ++ show b ++ " message: " ++ show c
             Ap.Partial fn -> go fn
             Ap.Done leftovers payload -> do
                 payload `seq` yield payload

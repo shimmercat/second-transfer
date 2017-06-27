@@ -411,14 +411,12 @@ readNextFrame max_acceptable_size pull_action  = do
     case either_frame_header_bs :: Either IOProblem LB.ByteString of
 
         Left (IOProblem ee)
-          | Just TLSBufferIsTooSmall <- cast ee  -> do
+          | Just li'@(TLSLibraryIssue _) <- cast ee  -> do
             -- If coming here, we are done with this connection. Just let it go
             -- yield . Left $ "Connection was closed"
             -- Not happy about this, report it
-            liftIO . putStrLn $ "Raising TLSBufferIsTooSmall"
             return ()
           | otherwise -> do
-            liftIO . putStrLn $ "NormalDecodingFrameProblem?: " ++ show ee
             return ()
 
         Right frame_header_bs -> do

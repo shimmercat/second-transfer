@@ -28,9 +28,10 @@ import           Control.Monad.Morph                                       (
                                                                             --hoist,
                                                                             lift
                                                                            )
+import           Control.Monad.Trans.Control                               (MonadBaseControl)
 import           Control.Monad.IO.Class                                    (liftIO, MonadIO)
 --import qualified Control.Monad.Trans.Resource                              as ReT
-import           Control.Monad.Catch                                       (MonadCatch)
+import           Control.Monad.Catch                                       (throwM, MonadThrow, MonadCatch)
 import qualified Control.Monad.Catch                                       as CMC
 
 import qualified Data.ByteString                                           as B
@@ -322,7 +323,15 @@ processOutputAndStdErr
             lift finalizer
 
         unwrapped_chunked  = do
-            source =$= CL.filter (\x -> B.length x > 0) =$= unwrapChunks
+            source =$=
+                   CL.filter (\x -> B.length x > 0)
+                   =$=
+                   (catchC
+                      unwrapChunks
+                      ((\ e ->  do
+                            throwM . ForwardedGatewayException . E.toException $ e
+                       ) :: (MonadThrow m, MonadIO m, MonadBaseControl IO m) => HTTP11SyntaxException -> ConduitM B.ByteString B.ByteString m () )
+                  )
             -- liftIO $ putStrLn "exiting chunks"
             lift finalizer
 

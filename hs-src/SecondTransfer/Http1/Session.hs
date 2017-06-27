@@ -10,7 +10,9 @@ import           Control.Exception                       (
                                                           catch,
                                                           try,
                                                           catches,
+                                                          toException,
                                                           Handler      (..),
+                                                          SomeException,
                                                           AsyncException
                                                          )
 import           Control.Concurrent                      (newMVar, MVar)
@@ -43,8 +45,10 @@ import           SecondTransfer.Http1.Parse
 import           SecondTransfer.Exception                (
                                                          IOProblem,
                                                          NoMoreDataException,
-                                                         -- HTTP11SyntaxException  (..),
-                                                         forkIOExc
+                                                         HTTP11SyntaxException  (..),
+                                                         ForwardedGatewayException,
+                                                         forkIOExc,
+                                                         traceIOExc
                                                          )
 import           SecondTransfer.Sessions.Config
 
@@ -93,7 +97,13 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
             the_session_store <- newMVar Dm.empty
 
-            go started_time new_session_tag (Just "") 1 the_session_store
+            catches
+                (go started_time new_session_tag (Just "") 1 the_session_store)
+                [
+                  Handler (http1_error_handler new_session_tag),
+                  Handler (http1gw_error_handler new_session_tag)
+                ]
+
         return ()
   where
     maybe_hashable_addr = connection_info ^. addr_CnD
@@ -103,6 +113,35 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     close_action = attendant_callbacks ^. closeAction_IOC
     best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
     close_action_called_mvar = attendant_callbacks ^. closeActionCalled_IOC
+
+    http1_error_handler :: Monoid a => Int ->  HTTP11SyntaxException -> IO a
+    http1_error_handler session_id exc =
+      do
+        let
+          maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
+        case maybe_error_callback of
+          Nothing -> do
+              putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
+              return mempty
+          Just err_callback -> do
+              err_callback (FrontendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
+              return mempty
+
+
+    -- Used when we get invalid HTTP/1.1 from the gateway.
+    http1gw_error_handler :: Monoid a => Int ->  ForwardedGatewayException -> IO a
+    http1gw_error_handler session_id exc =
+      do
+        let
+          maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
+        case maybe_error_callback of
+          Nothing -> do
+              putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
+              return mempty
+          Just err_callback -> do
+              err_callback (BackendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
+              return mempty
+
 
     new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
     new_session address generic_handle _weakable_key = case maybe_callback of
@@ -153,7 +192,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 return Nothing
 
             MustContinue_H1PC new_parser -> do
-                --putStrLn "MustContinue_H1PC"
                 catches
                     (do
                         -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
@@ -371,6 +409,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
       | otherwise =
             return True
 
+    -- Sends the answer to the browser.
     answer_by_principal_stream :: PrincipalStream ->  AwareWorkerStack ()
     answer_by_principal_stream principal_stream  = do
         let
@@ -404,10 +443,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
                 liftIO $ do
                     push_action headers_text_as_lbs
-                    -- The line below causes an error which is nice to track in its way
-                    -- up.
-                    --putStrLn "PurpodselyCausingMyhem"
-                    --push_action "\r\n"
                 close_behavior
                 return ()
 
