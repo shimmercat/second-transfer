@@ -202,10 +202,8 @@ processHttp11Output bepa method =
             (catchC
                 unwrapChunks
                 ((\ e ->  do
-                      liftIO . putStrLn $ "FFFFFFFFFFFFFFFFFFF"
                       yield . pack $ "ShimmerCat: Parse chunked-encoding from upstream failed. Concrete error: "  ++ show e
                       lift . throwM . ForwardedGatewayException . E.toException $ e
-                      -- liftIO . E.throwIO . ForwardedGatewayException . E.toException $ e
                  ) :: (MonadThrow m, MonadIO m, MonadBaseControl IO m) => HTTP11SyntaxException -> ConduitM B.ByteString B.ByteString m () )
             )
 

@@ -199,7 +199,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 return Nothing
 
             MustContinue_H1PC new_parser -> do
-                putStrLn "MustContinue_H1PC"
                 catches
                     (do
                         -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
@@ -211,7 +210,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         Handler ( (\ _e -> do
                              -- This is a pretty harmless condition that happens
                              -- often when the remote peer closes the connection
-                             putStrLn "CC-----------------"
                              close_action
                              return Nothing
                          ) :: IOProblem -> IO (Maybe LB.ByteString) ),
@@ -219,7 +217,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         Handler ( (\ _e -> do
                              -- This happens when we kill the processing thread
                              -- because E.G. the transfer is going too slowly
-                             putStrLn "DD-----------------"
                              close_action
                              return Nothing
                          ) :: AsyncException -> IO (Maybe LB.ByteString) )
@@ -453,16 +450,11 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
 
                 liftIO $ do
                     push_action headers_text_as_lbs
-                    -- The line below causes an error which is nice to track in its way
-                    -- up.
-                    --putStrLn "PurpodselyCausingMyhem"
-                    --push_action "\r\n"
                 close_behavior
                 return ()
 
             handle_as_chunked set_transfer_encoding =
               do
-                liftIO $ putStrLn "handle_as_chunked"
                 -- TODO: Take care of footers
                 let
                     headers_text_as_lbs' =
@@ -475,14 +467,12 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                            else
                               headers_text_as_lbs
                 liftIO $ push_action headers_text_as_lbs'
-                liftIO $ putStrLn "handle_as_chunked-2"
                 -- Will run the conduit. If it fails, the connection will be closed.
                 (_maybe_footers, _did_ok) <- traceIOExc $
                     runConduit $
                         data_and_conclusion
                         `fuseBothMaybe`
                         (CL.map wrapChunk =$= piecewiseconsume)
-                liftIO $ putStrLn "Failed EXC bubling"
                 -- Don't forget the zero-length terminating chunk...
                 _ <- maybepushtext $ wrapChunk ""
                 -- If I got to this point, I can keep the connection alive for a future request, unless...

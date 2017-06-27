@@ -415,10 +415,8 @@ readNextFrame max_acceptable_size pull_action  = do
             -- If coming here, we are done with this connection. Just let it go
             -- yield . Left $ "Connection was closed"
             -- Not happy about this, report it
-            liftIO . putStrLn $ "Raising " ++ show li'
             return ()
           | otherwise -> do
-            liftIO . putStrLn $ "NormalDecodingFrameProblem?: " ++ show ee
             return ()
 
         Right frame_header_bs -> do
