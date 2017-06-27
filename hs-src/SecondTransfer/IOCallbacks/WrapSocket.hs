@@ -102,7 +102,6 @@ socketIOCallbacks socket = do
 
         -- Exceptions on close are possible
         close_action = modifyMVar_ socket_already_closed $ \ already_closed -> do
-            putStrLn "SOCKET_IO_CALLBACKS CLOSED"
             unless (already_closed) $ do
                 E.finally
                     (ignoreException ioException () $ NS.shutdown socket NS.ShutdownBoth)
