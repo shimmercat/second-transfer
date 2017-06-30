@@ -21,6 +21,7 @@ module SecondTransfer.Utils.HTTPHeaders (
 
     , combineAuthorityAndHost
     , removeConnectionHeaders
+    , promoteHost
 
     , setIfNeeded
 
@@ -112,6 +113,19 @@ replaceHostByAuthority  headers =
     case maybe_host_header of
         Nothing -> headers
         h@(Just _) -> L.set authority_Hi h no_hosts
+
+
+-- | Converts a 'host' header to an ':authority' header when there
+--   is no authority header
+promoteHost :: HqHeaders -> HqHeaders
+promoteHost editor =
+  let
+      maybe_authority = editor ^. authority_Hi
+  in case maybe_authority of
+      Nothing -> L.set authority_Hi (editor ^. host_Hi) editor
+      Just _ -> editor
+
+
 
 -- | Combines ":authority" and "host", giving priority to the first. This is used when proxying
 --   HTTP/2 to HTTP/1.1. It leaves whichever header of highest priority is present

@@ -58,6 +58,7 @@ import           SecondTransfer.IOCallbacks.Types
 -- The Http1 variation is as useful for this case, as we are not using the
 -- neat features of HTTP/2
 import           SecondTransfer.Http1.Types
+import           SecondTransfer.Utils.HTTPHeaders
 import           SecondTransfer.Http1.Proxy                               (
                                                                            processHttp11OutputFromPipe
                                                                           )
@@ -389,7 +390,8 @@ capitalize o@(hn, hv) =
 requestHeadersToCGI :: Maybe B.ByteString -> HqHeaders -> [Header']
 requestHeadersToCGI maybe_document_root headers =
   let
-    headers_http = headers ^. serialized_HqH
+    headers_http = headers' ^. serialized_HqH
+    headers' = promoteHost headers
     t1 :: Header' -> Header'
     t1 =  over _1 (Ch8.pack . map toLower . Ch8.unpack)
     h0 = map t1 headers_http
