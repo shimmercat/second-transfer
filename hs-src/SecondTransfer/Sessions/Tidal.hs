@@ -218,9 +218,9 @@ dropConnections conns = foldM  (\ counter entry_mvar -> do
                         cleanlyCloseSession a
                         counter `seq` (return $ counter + 1)
 
-                    Partial_SGH _ iocallbacks -> do
-                        (iocallbacks ^. closeAction_IOC)
-                        counter `seq` (return $ counter + 1)
+                    -- Partial_SGH _ iocallbacks -> do
+                    --     (iocallbacks ^. closeAction_IOC)
+                    --     counter `seq` (return $ counter + 1)
     )
     0
     conns
@@ -252,17 +252,6 @@ gentlyDropConnections conns = do
                                      Right _ -> return ()
                           )
                         return $ Just session_terminated
-
-                    Partial_SGH _ iocallbacks -> do
-                        E.catch
-                            (iocallbacks ^. closeAction_IOC)
-                            ((\ exc ->
-                                  putStrLn $
-                                     "Session-closing microthread at Tidal//gentlyDropConnections had an exception"
-                                     ++ (show exc)
-                            ):: E.SomeException -> IO () )
-                        return Nothing
-
       )
       conns
     let
@@ -271,8 +260,6 @@ gentlyDropConnections conns = do
     -- Now just wait for the pending ones
     mapM takeMVar waitable_mvars'
     return connections_dropped
-
-
 
 
 -- | Drops the oldest connections without activity ....

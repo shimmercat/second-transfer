@@ -150,12 +150,12 @@ type DataFrameDeliveryCallback =  Int -> Int -> Int -> TimeSpec ->  IO ()
 -- | An object that allows access to a new session
 data SessionGenericHandle where
     Whole_SGH :: (ActivityMeteredSession a, CleanlyPrunableSession a) => a -> SessionGenericHandle
-    Partial_SGH :: (ActivityMeteredSession a) => a -> IOCallbacks -> SessionGenericHandle
+    -- Partial_SGH :: (ActivityMeteredSession a) => a -> IOCallbacks -> SessionGenericHandle
 
 
 instance ActivityMeteredSession SessionGenericHandle where
     sessionLastActivity (Whole_SGH a) = sessionLastActivity a
-    sessionLastActivity (Partial_SGH a _) = sessionLastActivity a
+    -- sessionLastActivity (Partial_SGH a _) = sessionLastActivity a
 
 
 -- | Callback to be invoked when a  client establishes a new session. The first parameter
