@@ -45,6 +45,7 @@ module SecondTransfer.Sessions.Config(
 
                , ActivityMeteredSession                 (..)
                , CleanlyPrunableSession                 (..)
+               , HasSessionId                           (..)
 
        ) where
 
@@ -141,6 +142,11 @@ class CleanlyPrunableSession a where
     cleanlyCloseSession :: a -> IO ()
 
 
+-- | Allows us to get a unique, ever-increasing id for the session
+class HasSessionId a where
+    getSessionId :: a -> Int
+
+
 -- | Used by the session engine to report delivery of each data frame. Keep this callback very
 --   light, it runs in the main sending thread. It is called as
 --   f session_id stream_id ordinal when_delivered
@@ -149,7 +155,7 @@ type DataFrameDeliveryCallback =  Int -> Int -> Int -> TimeSpec ->  IO ()
 
 -- | An object that allows access to a new session
 data SessionGenericHandle where
-    Whole_SGH :: (ActivityMeteredSession a, CleanlyPrunableSession a) => a -> SessionGenericHandle
+    Whole_SGH :: (ActivityMeteredSession a, CleanlyPrunableSession a, HasSessionId a) => a -> SessionGenericHandle
     -- Partial_SGH :: (ActivityMeteredSession a) => a -> IOCallbacks -> SessionGenericHandle
 
 

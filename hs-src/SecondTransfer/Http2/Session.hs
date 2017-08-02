@@ -403,6 +403,9 @@ makeLenses ''SessionData
 instance ActivityMeteredSession SessionData where
     sessionLastActivity s = getLastActivity $ s ^. activityMonitor
 
+instance HasSessionId SessionData where
+    getSessionId s = s ^. sessionIdAtSession
+
 instance CleanlyPrunableSession SessionData where
     cleanlyCloseSession s = (flip runReaderT) s $ do
         -- Start by signaling to new streams that we are not

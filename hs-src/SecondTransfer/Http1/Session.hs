@@ -86,6 +86,10 @@ instance ActivityMeteredSession SimpleSessionMetrics where
     sessionLastActivity ssm  = getLastActivity (ssm ^. activityMonitor_SSM)
 
 
+instance HasSessionId SimpleSessionMetrics where
+    getSessionId ssm = ssm ^. sessionTag_SSM
+
+
 instance CleanlyPrunableSession SimpleSessionMetrics where
     cleanlyCloseSession s = (flip runReaderT) s $ do
         -- Start by signaling that we are not
