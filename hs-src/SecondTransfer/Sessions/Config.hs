@@ -147,12 +147,11 @@ class CleanlyPrunableSession a where
 type DataFrameDeliveryCallback =  Int -> Int -> Int -> TimeSpec ->  IO ()
 
 
--- | An object with information about a new session, wrapped in a weak pointer. At the time the
---   newSessionCallback_SC is invoked, the reference inside the weak pointer is guranteed to be alive.
---   It may die later though.
+-- | An object that allows access to a new session
 data SessionGenericHandle where
     Whole_SGH :: (ActivityMeteredSession a, CleanlyPrunableSession a) => a -> SessionGenericHandle
     Partial_SGH :: (ActivityMeteredSession a) => a -> IOCallbacks -> SessionGenericHandle
+
 
 instance ActivityMeteredSession SessionGenericHandle where
     sessionLastActivity (Whole_SGH a) = sessionLastActivity a
