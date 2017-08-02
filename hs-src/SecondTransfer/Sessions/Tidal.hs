@@ -88,20 +88,26 @@ defaultTidalContext = TidalContext {
   }
 
 
+-- | Contains information about each connection, and the eagerness we should
+--   apply when deciding if we should close it.
 data ConnectionEntry = ConnectionEntry {
   _hashableSockAddr_CE :: HashableSockAddr ,
   _handle_CE :: SessionGenericHandle
   }
 
+
 makeLenses ''ConnectionEntry
 
+
 type ConnectionList =  [MVar ConnectionEntry]
+
 
 -- | State structure. Will live for the entire server lifetime
 data TidalS = TidalS {
     _context_TdS      ::  TidalContext
   , _connections_TdS  ::  MVar ConnectionList
     }
+
 
 makeLenses ''TidalS
 
