@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, RankNTypes #-}
+{-# LANGUAGE OverloadedStrings, RankNTypes, TemplateHaskell #-}
 {-# OPTIONS_HADDOCK hide #-}
 module SecondTransfer.Http1.Session(
     http11Attendant
@@ -15,11 +15,12 @@ import           Control.Exception                       (
                                                           SomeException,
                                                           AsyncException
                                                          )
-import           Control.Concurrent                      (newMVar, MVar)
+import           Control.Concurrent                      (newMVar, MVar, readMVar, modifyMVar_)
 import           Control.Monad.IO.Class                  (liftIO, MonadIO)
 import           Control.Monad                           (when)
 import qualified Control.Monad.Trans.Resource            as ReT
 import           Control.Monad.Morph                     (hoist, lift)
+import           Control.Monad.Trans.Reader
 
 import qualified Data.ByteString                         as B
 import qualified Data.ByteString.Lazy                    as LB
@@ -50,17 +51,57 @@ import           SecondTransfer.Exception                (
                                                          forkIOExc,
                                                          traceIOExc
                                                          )
+import           SecondTransfer.Sessions.ActivityMonitor
 import           SecondTransfer.Sessions.Config
 
 
 -- import           Debug.Trace                             (traceShow)
 
--- | Used to report metrics of the session for Http/1.1
-newtype SimpleSessionMetrics  = SimpleSessionMetrics TimeSpec
+-- | Used to control an HTTP/1.1 session. Mostly contains data about session
+--   activity
+data SimpleSessionMetrics  = SimpleSessionMetrics {
+  -- | The activity monitor
+    _activityMonitor_SSM :: ActivityMonitor
+  -- | The shared sessions context, that we use to among other
+  --   things assign labels to sessions and get other read-only configuration
+  --   bits.
+  , _sessionsContext_SSM :: SessionsContext
+  -- | To be called when closing the connection
+  , _closeAction_SSM     :: IO ()
+  -- | To signal that a session is ending and that no more reads should be made
+  , _sessionIsEnding_SSM :: MVar Bool
+  -- | The concrete session number we assigned to this session
+  , _sessionTag_SSM      :: !Int
+  -- | And the session store
+  , _sessionStore_SSM    :: MVar SessionStore
+  }
+
+makeLenses ''SimpleSessionMetrics
+
+
+type Http1Session = ReaderT SimpleSessionMetrics IO
 
 
 instance ActivityMeteredSession SimpleSessionMetrics where
-    sessionLastActivity (SimpleSessionMetrics t) = return t
+    sessionLastActivity ssm  = getLastActivity (ssm ^. activityMonitor_SSM)
+
+
+instance CleanlyPrunableSession SimpleSessionMetrics where
+    cleanlyCloseSession s = (flip runReaderT) s $ do
+        -- Start by signaling that we are not
+        -- doing much more
+        session_is_ending_mvar <- view sessionIsEnding_SSM
+        liftIO $ modifyMVar_ session_is_ending_mvar $ \ _ -> return True
+        -- Now let's wait for idle time
+        activity_monitor <- view activityMonitor_SSM
+        timeouts <- view (sessionsContext_SSM . sessionsConfig . sessionCloseTimeouts)
+        close_action <- view closeAction_SSM
+        _wait_interrupted_reason <- liftIO $ waitForIdle
+            activity_monitor
+            (timeouts ^. smallWait_SCT)
+            (timeouts ^. maxWait_SCT)
+        liftIO $ close_action
+
 
 
 -- | Session attendant that speaks HTTP/1.1
@@ -79,26 +120,39 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     =
     do
         new_session_tag <- acquireNewSessionTag sessions_context
-        started_time <- getTime Monotonic
-        -- infoM "Session.Session_HTTP11" $ "Starting new session with tag: " ++(show new_session_tag)
+        -- started_time <- getTime Monotonic
+        activity_monitor <- newActivityMonitor
+        not_ending <- newMVar False
         _ <- forkIOExc "Http1Go" $ do
+
+            -- A session store needs to be passed to the coherent worker. For HTTP/2, it makes sense
+            -- to have some server-set data shared by all streams in the same connection. For HTTP/1.1,
+            -- a connection is quite an isolated thing, and the session stored is mostly useless.
+            -- Nevertheless, one is still required for the CoherentWorker.
+            the_session_store <- newMVar Dm.empty
+
             let
-               handle = SimpleSessionMetrics started_time
+               handle = SimpleSessionMetrics {
+                  _activityMonitor_SSM = activity_monitor,
+                  _sessionsContext_SSM = sessions_context,
+                  _closeAction_SSM     = close_action,
+                  _sessionIsEnding_SSM = not_ending,
+                  _sessionTag_SSM      = new_session_tag,
+                  _sessionStore_SSM    = the_session_store
+                 }
             case maybe_hashable_addr of
                  Just hashable_addr ->
                      new_session
                         hashable_addr
-                        (Partial_SGH handle attendant_callbacks)
+                        (Whole_SGH handle)
                         push_action
 
                  Nothing ->
                      -- putStrLn "Warning, created session without registering it"
                      return ()
 
-            the_session_store <- newMVar Dm.empty
-
             catches
-                (go started_time new_session_tag (Just "") 1 the_session_store)
+                (runReaderT (go (Just "") 1) handle)
                 [
                   Handler (http1_error_handler new_session_tag),
                   Handler (http1gw_error_handler new_session_tag)
@@ -157,47 +211,63 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                  (sessionsConfig . sessionsCallbacks . newSessionCallback_SC)
             )
 
-    go :: TimeSpec -> Int -> Maybe LB.ByteString -> Int -> MVar SessionStore -> IO ()
-    go started_time session_tag (Just leftovers) reuse_no the_session_store = do
+    -- Manages a full request-response cycle.
+    go ::  Maybe LB.ByteString -> Int -> Http1Session ()
+    go (Just leftovers) reuse_no  = do
+        session_tag <- view sessionTag_SSM
+        the_session_store <- view sessionStore_SSM
         maybe_leftovers <-
             add_data
                 newIncrementalHttp1Parser
-                leftovers session_tag
+                leftovers
                 reuse_no
-                the_session_store
-        go started_time session_tag maybe_leftovers (reuse_no + 1) the_session_store
+        session_is_ending_mvar <- view sessionIsEnding_SSM
+        session_is_ending <- liftIO $ readMVar session_is_ending_mvar
+        if not session_is_ending
+          then
+            go  maybe_leftovers (reuse_no + 1)
+          else
+            -- If session has been marked as ending, do not receive any more data here, but just let the
+            -- connection be closed by the upper layer.
+            return ()
 
-    go _ _ Nothing _  _ =
+    go Nothing _ =
         return ()
 
     -- This function will invoke itself as long as data is coming for the currently-being-parsed
-    -- request/response.
+    -- request/response. When done, it will return Nothing to close the current session (and connection)
+    -- or Just "" to continue handling requests and responses in the current connection.
     add_data ::
         IncrementalHttp1Parser  ->
         LB.ByteString ->
         Int ->
-        Int ->
-        MVar SessionStore -> IO (Maybe LB.ByteString)
-    add_data parser bytes session_tag reuse_no the_session_store = do
+        Http1Session (Maybe LB.ByteString)
+    add_data parser bytes reuse_no = do
+        session_tag <- view sessionTag_SSM
+        the_session_store <- view sessionStore_SSM
+        sessions_context <- view sessionsContext_SSM
+        activity_monitor <- view activityMonitor_SSM
         let
             completion = addBytes parser bytes
-            -- completion = addBytes parser $ traceShow ("At session " ++ (show session_tag) ++ " Received: " ++ (unpack bytes) ) bytes
+
+        -- We received a few bytes, in one direction or another. Report such an event.
+        liftIO $ reportEvent activity_monitor
         case completion of
 
             RequestIsMalformed_H1PC _msg -> do
                 --putStrLn $ "Syntax Error: " ++ msg
                 -- This is a syntactic error..., so just close the connection
-                close_action
+                liftIO $ close_action
                 -- We exit by returning nothing
                 return Nothing
 
             MustContinue_H1PC new_parser -> do
-                catches
+                maybe_new_bytes <- liftIO $ catches
                     (do
                         -- Try to get at least 16 bytes. For HTTP/1 requests, that may not be always
                         -- possible
                         new_bytes <- best_effort_pull_action True
-                        add_data new_parser new_bytes session_tag reuse_no the_session_store
+                        return $ Just new_bytes
                     )
                     [
                         Handler ( (\ _e -> do
@@ -215,6 +285,13 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                          ) :: AsyncException -> IO (Maybe LB.ByteString) )
 
                     ]
+                case maybe_new_bytes of
+                    Just new_bytes ->
+                        add_data
+                            new_parser
+                            new_bytes
+                            reuse_no
+                    Nothing -> return Nothing
 
             OnlyHeaders_H1PC headers _leftovers -> do
                 -- putStrLn $ "OnlyHeaders_H1PC " ++ (show _leftovers)
@@ -224,67 +301,77 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 -- anyway.
                 let
                     modified_headers = addExtraHeaders sessions_context headers
-                started_time <- getTime Monotonic
-                --(response_headers, _, data_and_conclusion)
-                principal_stream <- coherent_worker Request {
-                        _headers_RQ = modified_headers,
-                        _inputData_RQ = Nothing,
-                        _perception_RQ = Perception {
-                          _startedTime_Pr            = started_time,
-                          _streamId_Pr               = reuse_no,
-                          _sessionId_Pr              = session_tag,
-                          _protocol_Pr               = Http11_HPV,
-                          _anouncedProtocols_Pr      = Nothing,
-                          _peerAddress_Pr            = maybe_hashable_addr,
-                          _pushIsEnabled_Pr          = False,
-                          _sessionLatencyRegister_Pr = [],
-                          _sessionStore_Pr           = the_session_store,
-                          _perceivedPriority_Pr      = Nothing
+                liftIO $ do
+                    started_time <-  getTime Monotonic
+                    --(response_headers, _, data_and_conclusion)
+                    principal_stream <- coherent_worker Request {
+                            _headers_RQ = modified_headers,
+                            _inputData_RQ = Nothing,
+                            _perception_RQ = Perception {
+                              _startedTime_Pr            = started_time,
+                              _streamId_Pr               = reuse_no,
+                              _sessionId_Pr              = session_tag,
+                              _protocol_Pr               = Http11_HPV,
+                              _anouncedProtocols_Pr      = Nothing,
+                              _peerAddress_Pr            = maybe_hashable_addr,
+                              _pushIsEnabled_Pr          = False,
+                              _sessionLatencyRegister_Pr = [],
+                              _sessionStore_Pr           = the_session_store,
+                              _perceivedPriority_Pr      = Nothing
+                            }
                         }
-                    }
-                ReT.runResourceT $ answer_by_principal_stream principal_stream
-                -- Will discard leftovers, but can continue
-                return $ Just ""
+                    ReT.runResourceT $
+                        answer_by_principal_stream
+                            principal_stream
+                            activity_monitor
+                    -- Will discard leftovers, but can continue
+                    return $ Just ""
 
             -- We close the connection if any of the delimiting headers could not be parsed.
             HeadersAndBody_H1PC _headers SemanticAbort_BSC _recv_leftovers -> do
-                close_action
+                liftIO $ close_action
                 return Nothing
 
             HeadersAndBody_H1PC headers stopcondition recv_leftovers -> do
                 let
                     modified_headers = addExtraHeaders sessions_context headers
-                started_time <- getTime Monotonic
-                set_leftovers <- newIORef ""
+                liftIO $ do
+                    started_time <- getTime Monotonic
+                    set_leftovers <- newIORef ""
 
-                -- putStrLn $ "STOP condition: " ++ (show stopcondition)
+                    -- putStrLn $ "STOP condition: " ++ (show stopcondition)
 
-                let
-                    source :: Source AwareWorkerStack B.ByteString
-                    source = hoist  lift $ case stopcondition of
-                        UseBodyLength_BSC n -> counting_read (LB.fromStrict recv_leftovers) n set_leftovers
-                        ConnectionClosedByPeer_BSC -> readforever (LB.fromStrict recv_leftovers)
-                        Chunked_BSC -> readchunks (LB.fromStrict recv_leftovers)
-                        _ -> error "HeadersAndBodyImplementMe"
+                    let
+                        source :: Source AwareWorkerStack B.ByteString
+                        source = hoist  lift $ case stopcondition of
+                            UseBodyLength_BSC n -> counting_read (LB.fromStrict recv_leftovers) n set_leftovers
+                            ConnectionClosedByPeer_BSC -> readforever (LB.fromStrict recv_leftovers)
+                            Chunked_BSC -> readchunks (LB.fromStrict recv_leftovers)
+                            _ -> error "HeadersAndBodyImplementMe"
 
-                principal_stream <- coherent_worker Request {
-                        _headers_RQ = modified_headers,
-                        _inputData_RQ = Just source,
-                        _perception_RQ = Perception {
-                          _startedTime_Pr            = started_time,
-                          _streamId_Pr               = reuse_no,
-                          _sessionId_Pr              = session_tag,
-                          _protocol_Pr               = Http11_HPV,
-                          _anouncedProtocols_Pr      = Nothing,
-                          _peerAddress_Pr            = maybe_hashable_addr,
-                          _pushIsEnabled_Pr          = False,
-                          _sessionLatencyRegister_Pr = [],
-                          _sessionStore_Pr           = the_session_store,
-                          _perceivedPriority_Pr      = Nothing
+                    principal_stream <- coherent_worker Request {
+                            _headers_RQ = modified_headers,
+                            _inputData_RQ = Just source,
+                            _perception_RQ = Perception {
+                              _startedTime_Pr            = started_time,
+                              _streamId_Pr               = reuse_no,
+                              _sessionId_Pr              = session_tag,
+                              _protocol_Pr               = Http11_HPV,
+                              _anouncedProtocols_Pr      = Nothing,
+                              _peerAddress_Pr            = maybe_hashable_addr,
+                              _pushIsEnabled_Pr          = False,
+                              _sessionLatencyRegister_Pr = [],
+                              _sessionStore_Pr           = the_session_store,
+                              _perceivedPriority_Pr      = Nothing
+                            }
                         }
-                    }
-                ReT.runResourceT $ answer_by_principal_stream principal_stream
-                return $ Just ""
+                    ReT.runResourceT $
+                        answer_by_principal_stream
+                           principal_stream
+                           activity_monitor
+                    -- Will discard left-overs, but can continue handling requests and responses in the current
+                    -- connection.
+                    return $ Just ""
 
     counting_read :: LB.ByteString -> Int -> IORef LB.ByteString -> Source IO B.ByteString
     counting_read leftovers n set_leftovers = do
@@ -409,9 +496,10 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
       | otherwise =
             return True
 
-    -- Sends the answer to the browser.
-    answer_by_principal_stream :: PrincipalStream ->  AwareWorkerStack ()
-    answer_by_principal_stream principal_stream  = do
+    -- Sends the response to the browser, while ticking the activity monitor to detect stalled
+    -- connections.
+    answer_by_principal_stream :: PrincipalStream -> ActivityMonitor ->  AwareWorkerStack ()
+    answer_by_principal_stream principal_stream activity_monitor = do
         let
             data_and_conclusion = principal_stream ^. dataAndConclusion_PS
             response_headers    = principal_stream ^. headers_PS
@@ -446,6 +534,16 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 close_behavior
                 return ()
 
+            activity_reporter = do
+                y <- await
+                liftIO $ reportEvent activity_monitor
+                case y of
+                    Just yy -> do
+                       yield yy
+                       activity_reporter
+
+                    Nothing -> return ()
+
             handle_as_chunked set_transfer_encoding =
               do
                 -- TODO: Take care of footers
@@ -459,13 +557,22 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                                   ) `mappend` "\r\n"
                            else
                               headers_text_as_lbs
-                liftIO $ push_action headers_text_as_lbs'
+                liftIO $ do
+                    reportEvent activity_monitor
+                    push_action headers_text_as_lbs'
+                    reportEvent activity_monitor
                 -- Will run the conduit. If it fails, the connection will be closed.
                 (_maybe_footers, _did_ok) <-
                     runConduit $
                         data_and_conclusion
                         `fuseBothMaybe`
-                        (CL.map wrapChunk =$= piecewiseconsume)
+                        (
+                          CL.map wrapChunk
+                          =$=
+                          activity_reporter
+                          =$=
+                          piecewiseconsume
+                        )
                 -- Don't forget the zero-length terminating chunk...
                 _ <- maybepushtext $ wrapChunk ""
                 -- If I got to this point, I can keep the connection alive for a future request, unless...
@@ -484,9 +591,12 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                       runConduit $
                           data_and_conclusion
                           `fuseBothMaybe`
-                          (CL.map LB.fromStrict
-                               =$=
-                               piecewiseconsumecounting content_length
+                          (
+                            CL.map LB.fromStrict
+                            =$=
+                            activity_reporter
+                            =$=
+                            piecewiseconsumecounting content_length
                           )
                 -- Got here, keep the connection open if possible
                 close_behavior
