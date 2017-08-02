@@ -87,7 +87,13 @@ defaultTidalContext = TidalContext {
   , _maybeTidalReporter_TiC = Nothing
   }
 
-type ConnectionEntry = (HashableSockAddr , SessionGenericHandle)
+
+data ConnectionEntry = ConnectionEntry {
+  _hashableSockAddr_CE :: HashableSockAddr ,
+  _handle_CE :: SessionGenericHandle
+  }
+
+makeLenses ''ConnectionEntry
 
 type ConnectionList =  [MVar ConnectionEntry]
 
@@ -108,7 +114,11 @@ justRegisterNewConnection sock_addr weakkey sgh =
   do
     connection_vector_mvar <- view connections_TdS
     liftIO $ do
-        new_entry <- newMVar (sock_addr, sgh)
+        new_entry <- newMVar $
+            ConnectionEntry {
+               _hashableSockAddr_CE = sock_addr,
+               _handle_CE = sgh
+            }
         let
             free_action = do
                 _ <- takeMVar new_entry
@@ -152,8 +162,8 @@ pruneSameHost =
                 maybe_entry <- tryReadMVar entry
                 case maybe_entry of
                     Nothing -> return drop_connections
-                    Just  (addr, _gsh)  -> do
-                        keep <- countAndAdvance  h addr
+                    Just  ce  -> do
+                        keep <- countAndAdvance  h (ce ^. hashableSockAddr_CE)
                         if keep
                             then return drop_connections
                             else return ( entry :drop_connections )
@@ -211,16 +221,12 @@ dropConnections conns = foldM  (\ counter entry_mvar -> do
             Nothing -> do
                 --putStrLn "deRef went blank"
                 return counter
-            (Just (_sock_addr, generic_handle) ) -> do
+            Just ce  -> do
                 -- putStrLn "NOT BLANK"
-                case generic_handle of
+                case ce ^. handle_CE  of
                     Whole_SGH a -> do
                         cleanlyCloseSession a
                         counter `seq` (return $ counter + 1)
-
-                    -- Partial_SGH _ iocallbacks -> do
-                    --     (iocallbacks ^. closeAction_IOC)
-                    --     counter `seq` (return $ counter + 1)
     )
     0
     conns
@@ -232,12 +238,12 @@ dropConnections conns = foldM  (\ counter entry_mvar -> do
 gentlyDropConnections :: ConnectionList -> IO Int
 gentlyDropConnections conns = do
     waitable_mvars <- mapM  (\ entry_mvar -> do
-        maybesomething <- tryTakeMVar  entry_mvar
+        maybesomething <- tryTakeMVar  entry_mvar :: IO (Maybe ConnectionEntry)
         case maybesomething of
             Nothing -> do
                 return Nothing
-            Just (_sock_addr, generic_handle)  -> do
-                case generic_handle of
+            Just ce  -> do
+                case ce ^. handle_CE of
                     Whole_SGH a -> do
                         session_terminated <- newEmptyMVar
                         forkFinally
@@ -272,7 +278,7 @@ pruneOldestConnections how_many_to_drop =
         sortable_conns_list <- catMaybes <$> mapM (\ entry_mvar ->  do
                                                      w <- tryReadMVar entry_mvar
                                                      case w of
-                                                         Just (addr, gsh) -> return . Just $  (addr, entry_mvar, gsh)
+                                                         Just ce -> return . Just $  (ce ^. hashableSockAddr_CE, entry_mvar, ce ^. handle_CE)
                                                          Nothing -> return Nothing
                                                ) current_connections
         let
