@@ -34,8 +34,8 @@ import qualified Data.Map.Strict                         as Dm
 import           SimpleHttpHeadersHq
 
 import           SecondTransfer.MainLoop.CoherentWorker
--- import           SecondTransfer.MainLoop.Protocol
-import           SecondTransfer.Sessions.Internal        (SessionsContext, acquireNewSessionTag, sessionsConfig)
+import           SecondTransfer.Sessions.Internal        (SessionsContext,
+                                                          sessionsConfig)
 
 import           SecondTransfer.IOCallbacks.Types
 
@@ -71,7 +71,7 @@ data SimpleSessionMetrics  = SimpleSessionMetrics {
   -- | To signal that a session is ending and that no more reads should be made
   , _sessionIsEnding_SSM :: MVar Bool
   -- | The concrete session number we assigned to this session
-  , _sessionTag_SSM      :: !Int
+  , _sessionTag_SSM      :: !ConnectionId
   -- | And the session store
   , _sessionStore_SSM    :: MVar SessionStore
   }
@@ -86,8 +86,8 @@ instance ActivityMeteredSession SimpleSessionMetrics where
     sessionLastActivity ssm  = getLastActivity (ssm ^. activityMonitor_SSM)
 
 
-instance HasSessionId SimpleSessionMetrics where
-    getSessionId ssm = ssm ^. sessionTag_SSM
+instance HasConnectionId SimpleSessionMetrics where
+    getConnectionId ssm = ssm ^. sessionTag_SSM
 
 
 instance CleanlyPrunableSession SimpleSessionMetrics where
@@ -123,10 +123,9 @@ http11Attendant :: SessionsContext -> AwareWorker -> Attendant
 http11Attendant sessions_context coherent_worker connection_info attendant_callbacks
     =
     do
-        new_session_tag <- acquireNewSessionTag sessions_context
+        not_ending <- newMVar False
         -- started_time <- getTime Monotonic
         activity_monitor <- newActivityMonitor
-        not_ending <- newMVar False
         _ <- forkIOExc "Http1Go" $ do
 
             -- A session store needs to be passed to the coherent worker. For HTTP/2, it makes sense
@@ -136,12 +135,13 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
             the_session_store <- newMVar Dm.empty
 
             let
+               connection_id = connection_info ^. connId_CnD
                handle = SimpleSessionMetrics {
                   _activityMonitor_SSM = activity_monitor,
                   _sessionsContext_SSM = sessions_context,
                   _closeAction_SSM     = close_action,
                   _sessionIsEnding_SSM = not_ending,
-                  _sessionTag_SSM      = new_session_tag,
+                  _sessionTag_SSM      = connection_id,
                   _sessionStore_SSM    = the_session_store
                  }
             case maybe_hashable_addr of
@@ -158,8 +158,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
             catches
                 (runReaderT (go (Just "") 1) handle)
                 [
-                  Handler (http1_error_handler new_session_tag),
-                  Handler (http1gw_error_handler new_session_tag)
+                  Handler (http1_error_handler connection_id),
+                  Handler (http1gw_error_handler connection_id)
                 ]
 
         return ()
@@ -172,8 +172,8 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
     best_effort_pull_action = attendant_callbacks ^. bestEffortPullAction_IOC
     close_action_called_mvar = attendant_callbacks ^. closeActionCalled_IOC
 
-    http1_error_handler :: Monoid a => Int ->  HTTP11SyntaxException -> IO a
-    http1_error_handler session_id exc =
+    http1_error_handler :: Monoid a => ConnectionId ->  HTTP11SyntaxException -> IO a
+    http1_error_handler conn_id exc =
       do
         let
           maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
@@ -182,13 +182,13 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
               putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
               return mempty
           Just err_callback -> do
-              err_callback (FrontendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
+              err_callback (FrontendHTTP1SyntaxError_SWC, SessionCoordinates conn_id, toException exc)
               return mempty
 
 
     -- Used when we get invalid HTTP/1.1 from the gateway.
-    http1gw_error_handler :: Monoid a => Int ->  ForwardedGatewayException -> IO a
-    http1gw_error_handler session_id exc =
+    http1gw_error_handler :: Monoid a => ConnectionId ->  ForwardedGatewayException -> IO a
+    http1gw_error_handler conn_id exc =
       do
         let
           maybe_error_callback = sessions_context ^. sessionsConfig . sessionsCallbacks .  reportErrorCallback_SC
@@ -197,7 +197,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
               putStrLn $ "There was an HTTP11 error, but no report callback was specified: " ++ show exc
               return mempty
           Just err_callback -> do
-              err_callback (BackendHTTP1SyntaxError_SWC, SessionCoordinates session_id, toException exc)
+              err_callback (BackendHTTP1SyntaxError_SWC, SessionCoordinates conn_id, toException exc)
               return mempty
 
 
@@ -305,6 +305,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                 -- anyway.
                 let
                     modified_headers = addExtraHeaders sessions_context headers
+                    (ConnectionId conn_id_int) = session_tag
                 liftIO $ do
                     started_time <-  getTime Monotonic
                     --(response_headers, _, data_and_conclusion)
@@ -314,7 +315,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                             _perception_RQ = Perception {
                               _startedTime_Pr            = started_time,
                               _streamId_Pr               = reuse_no,
-                              _sessionId_Pr              = session_tag,
+                              _sessionId_Pr              = fromIntegral conn_id_int,
                               _protocol_Pr               = Http11_HPV,
                               _anouncedProtocols_Pr      = Nothing,
                               _peerAddress_Pr            = maybe_hashable_addr,
@@ -339,6 +340,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
             HeadersAndBody_H1PC headers stopcondition recv_leftovers -> do
                 let
                     modified_headers = addExtraHeaders sessions_context headers
+                    (ConnectionId conn_id_int) = session_tag
                 liftIO $ do
                     started_time <- getTime Monotonic
                     set_leftovers <- newIORef ""
@@ -359,7 +361,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                             _perception_RQ = Perception {
                               _startedTime_Pr            = started_time,
                               _streamId_Pr               = reuse_no,
-                              _sessionId_Pr              = session_tag,
+                              _sessionId_Pr              = fromIntegral conn_id_int,
                               _protocol_Pr               = Http11_HPV,
                               _anouncedProtocols_Pr      = Nothing,
                               _peerAddress_Pr            = maybe_hashable_addr,

@@ -57,7 +57,6 @@ import           System.Clock                           (
 
 import           SecondTransfer.Sessions.Internal       (
                                                          sessionExceptionHandler,
-                                                         -- nextSessionId,
                                                          sessionsConfig,
                                                          SessionsContext)
 import           SecondTransfer.Sessions.Config
@@ -144,7 +143,7 @@ data FramerSessionData = FramerSessionData {
     , _closeAction           :: CloseAction
 
     -- Global id of the session, used for e.g. error reporting.
-    , _sessionIdAtFramer     :: !Int
+    , _sessionIdAtFramer     :: !ConnectionId
 
     -- Sessions context, used for thing like e.g. error reporting
     , _sessionsContext       :: SessionsContext
@@ -199,30 +198,26 @@ wrapSession :: SessionPayload -> SessionsContext -> Attendant
 wrapSession session_payload sessions_context connection_info io_callbacks = do
 
     let
-        -- session_id_mvar = view nextSessionId sessions_context
         push_action = io_callbacks ^. pushAction_IOC
         pull_action = io_callbacks ^. pullAction_IOC
         close_action = io_callbacks ^. closeAction_IOC
         close_action_called_mvar = io_callbacks ^. closeActionCalled_IOC
-        (ConnectionId new_session_id') = connection_info ^. connId_CnD
-        new_session_id = fromIntegral new_session_id'
+        conn_id = connection_info ^. connId_CnD
 
     -- new_session_id <- modifyMVarMasked
     --     session_id_mvar $
     --     \ session_id -> return $ session_id `seq` (session_id + 1, session_id)
 
-
-
     (session_input, session_output) <- case session_payload of
         AwareWorker_SP aware_worker ->  http2ServerSession
                                             connection_info
                                             aware_worker
-                                            new_session_id
+                                            conn_id
                                             sessions_context
                                             close_action_called_mvar
         ClientState_SP client_state -> http2ClientSession
                                             client_state
-                                            new_session_id
+                                            conn_id
                                             sessions_context
                                             close_action_called_mvar
 
@@ -257,7 +252,7 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         ,_maxRecvSize         = max_recv_frame_size
         ,_pushAction          = push_action
         ,_closeAction         = close_action
-        ,_sessionIdAtFramer   = new_session_id
+        ,_sessionIdAtFramer   = conn_id
         ,_sessionsContext     = sessions_context
         ,_lastInputStream     = last_stream_id
         --,_lastOutputStream    = last_output_stream_id
@@ -270,16 +265,16 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
 
     let
 
-        close_on_error :: Int -> SessionsContext -> IO () -> IO ()
-        close_on_error session_id session_context comp =
+        close_on_error :: ConnectionId -> SessionsContext -> IO () -> IO ()
+        close_on_error conn_id session_context comp =
             E.finally (
                 E.catch
                     (
                         E.catch
                             comp
-                            (exc_handler session_id session_context)
+                            (exc_handler conn_id session_context)
                     )
-                    (io_exc_handler session_id session_context)
+                    (io_exc_handler conn_id session_context)
                 )
                 close_action
 
@@ -298,24 +293,24 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
 
         -- Invokes the specialized error callbacks configured in the session.
         -- TODO:  I don't think much is being done here
-        exc_handler :: Int -> SessionsContext -> FramerException -> IO ()
+        exc_handler :: ConnectionId -> SessionsContext -> FramerException -> IO ()
         exc_handler x y e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True)
             sessionExceptionHandler Framer_HTTP2SessionComponent x y e
 
-        io_exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
+        io_exc_handler :: ConnectionId -> SessionsContext -> IOProblem -> IO ()
         io_exc_handler _x _y _e = do
             modifyMVar_ output_is_forbidden (\ _ -> return True)
 
     now <- getTime Monotonic
 
     _ <- forkIOExc "inputGathererHttp2"
-        $ close_on_error new_session_id sessions_context
+        $ close_on_error conn_id sessions_context
         $ ignoreException blockedIndefinitelyOnSTM  ()
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (inputGatherer pull_action session_input ) framer_session_data
     _ <- forkIOExc "outputGathererHttp2"
-        $ close_on_error new_session_id sessions_context
+        $ close_on_error conn_id sessions_context
         $ ignoreException blockedIndefinitelyOnSTM  ()
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ runReaderT (outputGatherer session_output ) framer_session_data
@@ -324,7 +319,7 @@ wrapSession session_payload sessions_context connection_info io_callbacks = do
         $ ensure_close
         $ ignoreException blockedIndefinitelyOnMVar ()
         $ ignoreException blockedIndefinitelyOnSTM  ()
-        $ close_on_error new_session_id sessions_context
+        $ close_on_error conn_id sessions_context
         $ runReaderT (sendReordering session_input $ startTrayMeter now) framer_session_data
 
     return ()
@@ -765,7 +760,7 @@ startStreamOutputQueue effect stream_bytes_mvar stream_id delivery_notify  = do
                     (exc_handler session_id session_context)
                 )
 
-        exc_handler :: Int -> SessionsContext -> IOProblem -> IO ()
+        exc_handler :: ConnectionId -> SessionsContext -> IOProblem -> IO ()
         exc_handler x y e = do
             -- Let's also decree that other streams don't even try
             modifyMVar_ output_is_forbidden_mvar ( \ _ -> return True)

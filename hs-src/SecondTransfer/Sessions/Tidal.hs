@@ -43,12 +43,20 @@ import qualified Data.Vector                            as DVec
 import qualified Data.HashTable.ST.Cuckoo               as Ht
 import           Data.Maybe                             (catMaybes, isJust)
 import           Data.Vector.Algorithms.Merge           (sortBy)
+import qualified Data.IntSet                            as IntSet
 
 import           System.Mem.Weak
---import           System.Clock                           (TimeSpec)
+import           System.Clock
 
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.IOCallbacks.Types
+
+
+-- | Eagerness to drop a connection
+data EagernessToDrop =
+    LetItBe_ETD   -- ^ Connection can remain open for as long as it wishes.
+  | DropIt_ETD    -- ^ Drop it as soon as it becomes inactive
+  | DropItNow_ETD -- ^ Drop it urgently
 
 
 -- | Tell about tidal interventions using these
@@ -104,8 +112,16 @@ type ConnectionList =  [MVar ConnectionEntry]
 
 -- | State structure. Will live for the entire server lifetime
 data TidalS = TidalS {
-    _context_TdS      ::  TidalContext
-  , _connections_TdS  ::  MVar ConnectionList
+    _context_TdS        ::  TidalContext
+  , _connections_TdS    ::  MVar ConnectionList
+  -- | If a connection is added to this set, we drop it as soon as it
+  --   becomes inactive, meaning it is inactive for five seconds or more.
+  --   Notice that we have related timeouts in Config, but those
+  --   apply to the situation when the server actively wants to close a
+  --   connection that may be alive.
+  , _dropOnInactive_TdS :: MVar IntSet.IntSet
+  -- | If a connection is added to this set, we drop it urgently.
+  , _dropNow_TdS        :: MVar IntSet.IntSet
     }
 
 
@@ -225,10 +241,8 @@ dropConnections conns = foldM  (\ counter entry_mvar -> do
         maybesomething <- tryTakeMVar  entry_mvar
         case maybesomething of
             Nothing -> do
-                --putStrLn "deRef went blank"
                 return counter
             Just ce  -> do
-                -- putStrLn "NOT BLANK"
                 case ce ^. handle_CE  of
                     Whole_SGH a -> do
                         cleanlyCloseSession a
@@ -272,6 +286,80 @@ gentlyDropConnections conns = do
     -- Now just wait for the pending ones
     mapM takeMVar waitable_mvars'
     return connections_dropped
+
+
+-- | Thread. Keeps closing any connections that land in _dropOnInactive_TdS and _dropNow_TDS
+dropUndesirableConnections :: TidalM ()
+dropUndesirableConnections =
+  do
+    connection_list_mvar <- view connections_TdS
+    drop_on_inactive_mvar <- view dropOnInactive_TdS
+    drop_on_inactive <- liftIO . readMVar $ drop_on_inactive_mvar
+    drop_now_mvar <- view dropNow_TdS
+    now <- liftIO . getTime $ Monotonic
+    drop_now <- liftIO . readMVar $ drop_now_mvar
+    waitable_mvars <- liftIO . withMVar connection_list_mvar $ \ conns ->  mapM  (\ entry_mvar -> do
+        maybesomething <- tryTakeMVar  entry_mvar :: IO (Maybe ConnectionEntry)
+        case maybesomething of
+            Nothing -> do
+                return Nothing
+            Just ce  -> do
+                case ce ^. handle_CE of
+                    Whole_SGH a -> do
+                        -- Get the connection id
+                        let
+                           (ConnectionId connection_id_int) = getConnectionId a
+                           conn_id = fromIntegral connection_id_int
+                        -- TO-DO: Make the drop_now a bit more violent
+                        if (conn_id `IntSet.member` drop_now)
+                          then
+                            drop_connection a
+                          else if (conn_id `IntSet.member` drop_on_inactive)
+                            then do
+                              -- Check if the connection is active or inactive.
+                              session_last_activity <- liftIO . sessionLastActivity $ a
+                              let
+                                  time_inactive =
+                                     toNanoSecs (now - session_last_activity) `div` 1000000000 :: Integer
+                              if time_inactive > 5 -- <- Inactivity time right there!! MAKE A configuratble CONSTANT!!!
+                                then
+                                  drop_connection a
+                                else do
+                                  -- Restore the connection to the list
+                                  liftIO $ putMVar entry_mvar ce
+                                  return Nothing
+                          else do
+                            -- Restore the connection to the list
+                            liftIO $ putMVar entry_mvar ce
+                            return Nothing
+      )
+      conns
+    let
+      connections_dropped = length waitable_mvars
+      waitable_mvars' = catMaybes waitable_mvars
+    -- Now just wait for the pending ones
+    liftIO $ do
+        mapM takeMVar waitable_mvars'
+        -- Wait five seconds more to invoke recursively
+        threadDelay $ 5 * 1000 * 1000
+    -- and call recursively
+    dropUndesirableConnections
+  where
+    drop_connection a = do
+      session_terminated <- newEmptyMVar
+      forkFinally
+        (do
+            cleanlyCloseSession a
+        )
+        (\ _either_exc_a -> do
+               putMVar session_terminated ()
+               case _either_exc_a of
+                   Left _ -> do
+                       putStrLn "Session-closing microthread at Tidal//gentlyDropConnections had an exception"
+                   Right _ -> return ()
+        )
+      return $ Just session_terminated
+
 
 
 -- | Drops the oldest connections without activity ....
@@ -332,7 +420,14 @@ whenAddingConnection sock_addr handle already_closed_mvar =
 newTidalSession :: TidalContext -> IO TidalS
 newTidalSession tidal_context = do
     connections <- newMVar []
-    return TidalS { _context_TdS = tidal_context, _connections_TdS = connections }
+    drop_on_inactive <- newMVar IntSet.empty
+    drop_now <- newMVar IntSet.empty
+    return TidalS {
+      _context_TdS = tidal_context,
+      _connections_TdS = connections,
+      _dropOnInactive_TdS = drop_on_inactive,
+      _dropNow_TdS = drop_now
+      }
 
 
 tidalConnectionManager :: TidalS -> NewSessionCallback
@@ -346,3 +441,13 @@ closeAllConnections
     withMVar connections_mvar $ \ connections -> do
         _ <- gentlyDropConnections connections
         return ()
+
+
+signalConnectionForClose :: TidalS -> ConnectionId -> EagernessToDrop -> IO ()
+signalConnectionForClose tidals (ConnectionId connection_id_int) DropItNow_ETD = do
+    modifyMVar_ (tidals ^. dropNow_TdS) $ \ old_set ->
+        return $ IntSet.insert  (fromIntegral connection_id_int) old_set
+signalConnectionForClose tidals (ConnectionId connection_id_int) DropIt_ETD = do
+    modifyMVar_ (tidals ^. dropOnInactive_TdS) $ \ old_set ->
+        return $ IntSet.insert  (fromIntegral connection_id_int) old_set
+signalConnectionForClose tidals (ConnectionId connection_id_int) _ = return ()

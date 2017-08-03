@@ -93,7 +93,10 @@ import           SecondTransfer.MainLoop.ClientPetitioner
 
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.Sessions.ActivityMonitor
-import           SecondTransfer.IOCallbacks.Types       (ConnectionData, addr_CnD)
+import           SecondTransfer.IOCallbacks.Types       (ConnectionData,
+                                                         addr_CnD,
+                                                         ConnectionId (..),
+                                                         connId_CnD)
 import           SecondTransfer.Sessions.Internal       (--sessionExceptionHandler,
                                                          SessionsContext,
                                                          sessionsConfig)
@@ -403,8 +406,8 @@ makeLenses ''SessionData
 instance ActivityMeteredSession SessionData where
     sessionLastActivity s = getLastActivity $ s ^. activityMonitor
 
-instance HasSessionId SessionData where
-    getSessionId s = s ^. sessionIdAtSession
+instance HasConnectionId SessionData where
+    getConnectionId s = ConnectionId . fromIntegral $ (s ^. sessionIdAtSession)
 
 instance CleanlyPrunableSession SessionData where
     cleanlyCloseSession s = (flip runReaderT) s $ do
@@ -421,26 +424,29 @@ instance CleanlyPrunableSession SessionData where
         (quietlyCloseConnection NH2.NoError)
 
 
-http2ServerSession :: ConnectionData -> AwareWorker -> Int -> SessionsContext -> MVar Bool -> IO Session
-http2ServerSession conn_data a i sctx close_action_called_mvar =
+-- | Creates a new HTTP/2 server session.
+-- NOTE: the connection_id comes all the way from SecondTransfer.TLS.CoreServer,
+--       and flows through all the layers, including the tidal manager.
+http2ServerSession :: ConnectionData -> AwareWorker -> ConnectionId -> SessionsContext -> MVar Bool -> IO Session
+http2ServerSession conn_data a (ConnectionId connection_id_int64) sctx close_action_called_mvar =
   http2Session
      (Just conn_data)
      Server_SR
      a
      (error "NotAClient")
-     i
+     (fromIntegral connection_id_int64)
      sctx
      close_action_called_mvar
 
 
-http2ClientSession :: ClientState -> Int -> SessionsContext -> MVar Bool -> IO Session
-http2ClientSession client_state session_id sctx close_action_called_mvar =
+http2ClientSession :: ClientState -> ConnectionId -> SessionsContext -> MVar Bool -> IO Session
+http2ClientSession client_state (ConnectionId connection_id_int64) sctx close_action_called_mvar =
     http2Session
        Nothing
        Client_SR
        (error "NotAServer")
        client_state
-       session_id
+       (fromIntegral connection_id_int64)
        sctx
        close_action_called_mvar
 
@@ -1122,7 +1128,7 @@ reportSituation situation =
         (sessionsContext . sessionsConfig . sessionsCallbacks . situationCallback_SC)
     case maybe_situation_callback of
         Nothing -> return ()
-        Just callback -> liftIO $ callback session_id situation
+        Just callback -> liftIO $ callback (ConnectionId . fromIntegral $ session_id) situation
 
 
 streamIsIdle :: GlobalStreamId -> ReaderT SessionData IO Bool

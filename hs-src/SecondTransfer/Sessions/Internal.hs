@@ -2,15 +2,12 @@
 module SecondTransfer.Sessions.Internal where
 
 import SecondTransfer.Sessions.Config
+import SecondTransfer.IOCallbacks.Types  (ConnectionId)
 
 
 import           Control.Concurrent.MVar (MVar, newMVar,modifyMVar)
--- import           Control.Exception       (SomeException)
 import qualified Control.Exception       as E
 import           Control.Lens            ((^.), makeLenses, Lens' )
-
-
---import           System.Log.Logger
 
 
 
@@ -21,8 +18,6 @@ import           Control.Lens            ((^.), makeLenses, Lens' )
 data SessionsContext = SessionsContext {
     -- | Read-only configuration information passed-in at construction time
      _sessionsConfig  :: SessionsConfig
-    -- | MVar with enumerator for sessions
-    ,_nextSessionId   :: MVar Int
     }
 
 
@@ -33,25 +28,12 @@ sessionsConfig_Sctx :: Lens' SessionsContext SessionsConfig
 sessionsConfig_Sctx = sessionsConfig
 
 
-nextSessionId_Sctx ::  Lens' SessionsContext (MVar Int)
-nextSessionId_Sctx = nextSessionId
-
-
--- Session tags are simple session identifiers
-acquireNewSessionTag :: SessionsContext -> IO Int
-acquireNewSessionTag sessions_context =
-    modifyMVar
-        (sessions_context ^. nextSessionId )
-        (\ next_id -> return (next_id+1, next_id))
-
-
 -- Adds runtime data to a context, and let it work....
 makeSessionsContext :: SessionsConfig -> IO SessionsContext
 makeSessionsContext sessions_config = do
     next_session_id_mvar <- newMVar 1
     return  SessionsContext {
-        _sessionsConfig = sessions_config,
-        _nextSessionId = next_session_id_mvar
+        _sessionsConfig = sessions_config
         }
 
 
@@ -59,7 +41,7 @@ makeDefaultSessionsContext :: IO SessionsContext
 makeDefaultSessionsContext = makeSessionsContext defaultSessionsConfig
 
 sessionExceptionHandler ::
-    E.Exception e => SessionComponent -> Int -> SessionsContext -> e -> IO ()
+    E.Exception e => SessionComponent -> ConnectionId -> SessionsContext -> e -> IO ()
 sessionExceptionHandler session_component session_id sessions_context e =
     let
 

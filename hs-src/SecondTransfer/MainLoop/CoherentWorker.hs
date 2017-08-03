@@ -196,7 +196,7 @@ defaultPerception = Perception {
 -- which will normally be empty, except for POST and PUT requests. But
 -- this library enforces none of that.
 data Request = Request {
-     _headers_RQ    ::  HqHeaders,
+     _headers_RQ    :: HqHeaders,
      _inputData_RQ  :: Maybe InputDataStream,
      _perception_RQ :: ! Perception
   }

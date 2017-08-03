@@ -45,7 +45,7 @@ module SecondTransfer.Sessions.Config(
 
                , ActivityMeteredSession                 (..)
                , CleanlyPrunableSession                 (..)
-               , HasSessionId                           (..)
+               , HasConnectionId                        (..)
 
        ) where
 
@@ -64,25 +64,25 @@ import qualified Data.ByteString                          as B
 --import           System.Mem.Weak                          (Weak)
 import           System.Clock                             (TimeSpec)
 
-import           SecondTransfer.IOCallbacks.Types         (IOCallbacks)
+import           SecondTransfer.IOCallbacks.Types         (IOCallbacks, ConnectionId(..))
 import           SecondTransfer.Sessions.HashableSockAddr (HashableSockAddr (..))
 import           SecondTransfer.MainLoop.CoherentWorker   (Http2PerceivedPriority)
 
 -- | Information used to identify a particular session.
-newtype SessionCoordinates = SessionCoordinates  Int
+newtype SessionCoordinates = SessionCoordinates ConnectionId
     deriving Show
 
 instance Eq SessionCoordinates where
     (SessionCoordinates a) == (SessionCoordinates b) =  a == b
 
--- | Get/set a numeric Id from a `SessionCoordinates`. For example, to
+-- | Get/set a ConnectionId from a `SessionCoordinates`. For example, to
 --   get the session id with this, import `Control.Lens.(^.)` and then do
 --
 -- @
 --      session_id = session_coordinates ^. sessionId
 -- @
 --
-sessionId :: Functor f => (Int -> f Int) -> SessionCoordinates -> f SessionCoordinates
+sessionId :: Functor f => (ConnectionId -> f ConnectionId) -> SessionCoordinates -> f SessionCoordinates
 sessionId f (SessionCoordinates session_id) =
     fmap SessionCoordinates (f session_id)
 
@@ -129,7 +129,7 @@ data SituationWithClient =
 -- | This is the reporting callback used in actual production use.
 --   First argument is the SessionId of the session where the
 --   issue is being reported
-type SituationCallback = Int -> SituationWithClient -> IO ()
+type SituationCallback = ConnectionId -> SituationWithClient -> IO ()
 
 
 -- | Sessions follow this class, so that they can be rescinded on inactivity
@@ -143,25 +143,23 @@ class CleanlyPrunableSession a where
 
 
 -- | Allows us to get a unique, ever-increasing id for the session
-class HasSessionId a where
-    getSessionId :: a -> Int
+class HasConnectionId a where
+    getConnectionId :: a -> ConnectionId
 
 
 -- | Used by the session engine to report delivery of each data frame. Keep this callback very
 --   light, it runs in the main sending thread. It is called as
 --   f session_id stream_id ordinal when_delivered
-type DataFrameDeliveryCallback =  Int -> Int -> Int -> TimeSpec ->  IO ()
+type DataFrameDeliveryCallback =  ConnectionId -> GlobalStreamId -> Int -> TimeSpec ->  IO ()
 
 
 -- | An object that allows access to a new session
 data SessionGenericHandle where
-    Whole_SGH :: (ActivityMeteredSession a, CleanlyPrunableSession a, HasSessionId a) => a -> SessionGenericHandle
-    -- Partial_SGH :: (ActivityMeteredSession a) => a -> IOCallbacks -> SessionGenericHandle
+    Whole_SGH :: (ActivityMeteredSession a, CleanlyPrunableSession a, HasConnectionId a) => a -> SessionGenericHandle
 
 
 instance ActivityMeteredSession SessionGenericHandle where
     sessionLastActivity (Whole_SGH a) = sessionLastActivity a
-    -- sessionLastActivity (Partial_SGH a _) = sessionLastActivity a
 
 
 -- | Callback to be invoked when a  client establishes a new session. The first parameter
