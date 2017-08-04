@@ -15,6 +15,7 @@ module SecondTransfer.Sessions.Config(
                , dataDeliveryCallback_SC
                , newSessionCallback_SC
                , situationCallback_SC
+               , setSoftHardClose_SC
 
                , dataFrameSize
                , addUsedProtocol
@@ -46,7 +47,7 @@ module SecondTransfer.Sessions.Config(
                , ActivityMeteredSession                 (..)
                , CleanlyPrunableSession                 (..)
                , HasConnectionId                        (..)
-
+               , EagernessToDrop                        (..)
        ) where
 
 
@@ -67,6 +68,17 @@ import           System.Clock                             (TimeSpec)
 import           SecondTransfer.IOCallbacks.Types         (IOCallbacks, ConnectionId(..))
 import           SecondTransfer.Sessions.HashableSockAddr (HashableSockAddr (..))
 import           SecondTransfer.MainLoop.CoherentWorker   (Http2PerceivedPriority)
+
+
+-- | Eagerness to drop a connection
+data EagernessToDrop =
+    LetItBe_ETD   -- ^ Connection can remain open for as long as it wishes.
+  | DropIt_ETD    -- ^ Drop it as soon as it becomes inactive
+  | DropItNow_ETD -- ^ Drop it urgently
+
+
+type SetSoftHardCloseCallback = ConnectionId -> EagernessToDrop -> IO ()
+
 
 -- | Information used to identify a particular session.
 newtype SessionCoordinates = SessionCoordinates ConnectionId
@@ -181,7 +193,8 @@ data SessionsCallbacks = SessionsCallbacks {
     --   that the session manager registers them (in a weak map)
     --   if need comes
   , _newSessionCallback_SC  :: Maybe NewSessionCallback
-    -- | Used for soft finalization
+    -- | Used to ask for  soft/hard finalization
+  , _setSoftHardClose_SC :: Maybe SetSoftHardCloseCallback
   }
 
 makeLenses ''SessionsCallbacks
@@ -276,7 +289,8 @@ defaultSessionsConfig = SessionsConfig {
             _reportErrorCallback_SC = Nothing,
             _dataDeliveryCallback_SC = Nothing,
             _situationCallback_SC = Nothing,
-            _newSessionCallback_SC = Nothing
+            _newSessionCallback_SC = Nothing,
+            _setSoftHardClose_SC = Nothing
         }
   , _sessionsEnrichedHeaders = defaultSessionsEnrichedHeaders
   , _dataFrameSize = 16*1024

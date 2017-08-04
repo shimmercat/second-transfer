@@ -5,6 +5,7 @@ module SecondTransfer.Sessions.Tidal (
        TidalContext                                     (..)
      , TidalCtxAction                                   (..)
      , TidalReporterCallback
+     , TidalS
      , maxConnectionPerPeer_TiC
      , highWaterMark_TiC
      , maybeTidalReporter_TiC
@@ -12,6 +13,7 @@ module SecondTransfer.Sessions.Tidal (
      , defaultTidalContext
      , tidalConnectionManager
      , closeAllConnections
+     , signalConnectionForClose
        ) where
 
 
@@ -51,12 +53,6 @@ import           System.Clock
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.IOCallbacks.Types
 
-
--- | Eagerness to drop a connection
-data EagernessToDrop =
-    LetItBe_ETD   -- ^ Connection can remain open for as long as it wishes.
-  | DropIt_ETD    -- ^ Drop it as soon as it becomes inactive
-  | DropItNow_ETD -- ^ Drop it urgently
 
 
 -- | Tell about tidal interventions using these
