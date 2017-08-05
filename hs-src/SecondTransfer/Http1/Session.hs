@@ -105,6 +105,12 @@ instance CleanlyPrunableSession SimpleSessionMetrics where
             (timeouts ^. smallWait_SCT)
             (timeouts ^. maxWait_SCT)
         liftIO $ close_action
+        maybe_situation_callback <- view ( sessionsContext_SSM . sessionsConfig . sessionsCallbacks .  situationCallback_SC)
+        conn_id <- view sessionTag_SSM
+        case maybe_situation_callback of
+            Just sc -> liftIO $ sc conn_id PreemptingConnection_SWC
+            Nothing -> return ()
+        return ()
 
 
 
@@ -150,6 +156,7 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
                         hashable_addr
                         (Whole_SGH handle)
                         push_action
+                        connection_id
 
                  Nothing ->
                      -- putStrLn "Warning, created session without registering it"
@@ -185,7 +192,6 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
               err_callback (FrontendHTTP1SyntaxError_SWC, SessionCoordinates conn_id, toException exc)
               return mempty
 
-
     -- Used when we get invalid HTTP/1.1 from the gateway.
     http1gw_error_handler :: Monoid a => ConnectionId ->  ForwardedGatewayException -> IO a
     http1gw_error_handler conn_id exc =
@@ -200,19 +206,31 @@ http11Attendant sessions_context coherent_worker connection_info attendant_callb
               err_callback (BackendHTTP1SyntaxError_SWC, SessionCoordinates conn_id, toException exc)
               return mempty
 
-
-    new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> IO ()
-    new_session address generic_handle _weakable_key = case maybe_callback of
-        Just (NewSessionCallback callback) ->
-            callback
-                address
-                generic_handle
-                close_action_called_mvar
-        Nothing -> return ()
+    -- Registers the new session with the upper layer, via a callback, if that
+    -- callback exists.
+    -- At the moment, it also set a short time-to-live for the connection.
+    new_session :: HashableSockAddr -> SessionGenericHandle -> forall a . a -> ConnectionId ->  IO ()
+    new_session address generic_handle _weakable_key conn_id =
+      do
+        case maybe_callback of
+          Just (NewSessionCallback callback) ->
+              callback
+                  address
+                  generic_handle
+                  close_action_called_mvar
+          Nothing -> return ()
+        case maybe_set_soft_hard_close of
+          Just callback -> do
+              callback conn_id DropIt_ETD
+          Nothing -> return ()
       where
         maybe_callback =
             (sessions_context ^.
                  (sessionsConfig . sessionsCallbacks . newSessionCallback_SC)
+            )
+        maybe_set_soft_hard_close =
+            (sessions_context ^.
+                 (sessionsConfig . sessionsCallbacks . setSoftHardClose_SC)
             )
 
     -- Manages a full request-response cycle.

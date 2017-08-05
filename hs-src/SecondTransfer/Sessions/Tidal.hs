@@ -52,6 +52,7 @@ import           System.Clock
 
 import           SecondTransfer.Sessions.Config
 import           SecondTransfer.IOCallbacks.Types
+import           SecondTransfer.Exception
 
 
 
@@ -418,12 +419,16 @@ newTidalSession tidal_context = do
     connections <- newMVar []
     drop_on_inactive <- newMVar IntSet.empty
     drop_now <- newMVar IntSet.empty
-    return TidalS {
-      _context_TdS = tidal_context,
-      _connections_TdS = connections,
-      _dropOnInactive_TdS = drop_on_inactive,
-      _dropNow_TdS = drop_now
-      }
+    let
+       tidals = TidalS {
+          _context_TdS = tidal_context,
+          _connections_TdS = connections,
+          _dropOnInactive_TdS = drop_on_inactive,
+          _dropNow_TdS = drop_now
+          }
+    forkIOExc "newTidalSession::dropUndesirableConnections" $
+       runReaderT dropUndesirableConnections tidals
+    return tidals
 
 
 tidalConnectionManager :: TidalS -> NewSessionCallback

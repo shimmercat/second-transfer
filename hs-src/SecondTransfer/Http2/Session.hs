@@ -422,6 +422,12 @@ instance CleanlyPrunableSession SessionData where
             (timeouts ^. smallWait_SCT)
             (timeouts ^. maxWait_SCT)
         (quietlyCloseConnection NH2.NoError)
+        maybe_situation_callback <- view ( sessionsContext . sessionsConfig . sessionsCallbacks .  situationCallback_SC)
+        conn_id <- view sessionIdAtSession
+        case maybe_situation_callback of
+            Just sc -> liftIO $ sc (ConnectionId . fromIntegral $ conn_id) PreemptingConnection_SWC
+            Nothing -> return ()
+        return ()
 
 
 -- | Creates a new HTTP/2 server session.

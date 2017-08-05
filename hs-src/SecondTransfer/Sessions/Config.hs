@@ -134,6 +134,7 @@ data SituationWithClient =
    |PriorityFrameReceived_SWC (GlobalStreamId, Http2PerceivedPriority) -- ^ A PRIORITY frame was received. First argument is the
                                                                        --   stream id of the receiving frame
    |PauseDueToHTTP2FlowControl_SWC
+   |PreemptingConnection_SWC -- ^ Due to some internal policty, we decided to close this connection
    |UnknownFrame_SWC -- Not an error
     deriving (Show, Eq)
 
@@ -196,6 +197,7 @@ data SessionsCallbacks = SessionsCallbacks {
     -- | Used to ask for  soft/hard finalization
   , _setSoftHardClose_SC :: Maybe SetSoftHardCloseCallback
   }
+
 
 makeLenses ''SessionsCallbacks
 
